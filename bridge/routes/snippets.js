@@ -19,7 +19,7 @@ const { NEXT, readJson, send } = require('../http');
 const { PERMISSION_MODES } = require('../runner');
 const {
     INSERT_STYLES, MAX_BODY, MAX_GROUPS, MAX_PARAMS, MAX_PROJECTS, MAX_SNIPPETS,
-    MAX_TITLE, isAccent, isParamName, scanPlaceholders,
+    MAX_TITLE, isAccent, isParamName, scanPlaceholders, triggerProblem,
 } = require('../snippets');
 
 // Handed over by server.js — see the note above ROUTES there.
@@ -111,7 +111,7 @@ function snippetMode(v) {
  *
  * @returns {{fields: object} | {error: string, status: number, remote?: boolean}}
  */
-function snippetFields(body, who, { partial }) {
+function snippetFields(body, who, { partial, id = null }) {
     const fields = {};
 
     if (!partial || body.title !== undefined) {
@@ -211,6 +211,23 @@ function snippetFields(body, who, { partial }) {
             return { error: 'order must be an integer or null', status: 400 };
         }
         fields.order = body.order === undefined ? null : body.order;
+    }
+
+    if (!partial || body.trigger !== undefined) {
+        const problem = triggerProblem(body.trigger);
+        if (problem) return { error: problem, status: 400 };
+        const trigger = typeof body.trigger === 'string' && body.trigger.trim()
+            ? body.trigger.trim() : null;
+        // A 409 rather than a 400: the word is well-formed, it is just taken. The
+        // message names the snippet holding it, so the answer is one edit away.
+        const owner = trigger ? snippetStore.triggerOwner(trigger, id) : null;
+        if (owner) {
+            return {
+                error: `"${trigger}" is already the trigger for "${owner.title}"`,
+                status: 409,
+            };
+        }
+        fields.trigger = trigger;
     }
 
     // The rest mean "no" when absent rather than being invalid.
@@ -328,7 +345,7 @@ async function handle(req, res, url, pathname, seg, who) {
             // 403 whether or not the id exists — the order the drafts PATCH uses,
             // and the reason is the same: the refusal is about what this caller
             // may ask for, not about what it aimed at.
-            const v = snippetFields(body, who, { partial: true });
+            const v = snippetFields(body, who, { partial: true, id: seg[2] });
             if (v.error) {
                 return send(res, v.status,
                     v.remote ? { error: v.error, remote: true } : { error: v.error });

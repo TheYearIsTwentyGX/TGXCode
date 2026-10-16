@@ -119,7 +119,7 @@ function showCard(a) {
         )),
         el('div', { class: 'pr-pop-foot' }, many ? 'Click to choose a chat' : 'Click to open chat'),
     );
-    present(pop, true, { kind: 'pop' });
+    present(pop, true, { as: 'menu' });
 
     // Under the mention, flipped above when there is no room, kept on screen.
     const r = a.getBoundingClientRect();
@@ -132,7 +132,7 @@ function showCard(a) {
 
 export function hideCard() {
     clearTimeout(hoverTimer);
-    if (dom.prPop) present(dom.prPop, false, { kind: 'pop' });
+    if (dom.prPop) present(dom.prPop, false, { as: 'menu' });
 }
 
 // ── the click ─────────────────────────────────────────────────────────────

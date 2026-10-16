@@ -140,6 +140,29 @@ add WSL2 with `networkingMode=mirrored`, and PowerShell for the build.
 
 ## Install
 
+### A new machine, in one go
+
+`scripts/setup.sh` does everything below, on WSL or plain Linux, skipping
+whatever is already done — so it is also safe to rerun when something failed
+half-way. Before there is a checkout:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheYearIsTwentyGX/TGXCode/main/scripts/setup.sh | bash
+```
+
+or `bash scripts/setup.sh` from inside one. `--dry-run` prints what it would do,
+`--cron` and `--statusline` add the extras under [After installing](#after-installing),
+and `--no-build` stops short of packaging. It clones to `~/TGXCode` unless `--dir`
+says otherwise.
+
+It finishes with what it cannot do for you: logging in to Claude Code, and, if
+it touched `.wslconfig`, `wsl --shutdown` — which ends every WSL process,
+including this one. Two choices it makes that the manual steps leave open:
+Windows gets the plain Node package from `winget`, since nobody switches Node
+versions on the side that only runs the packager — `--windows-node=nvm` installs
+nvm-windows and a Node LTS through it instead; and if TGXCode is already
+running it asks before building, because the installer closes it.
+
 ### Linux
 
 ```bash
@@ -153,7 +176,7 @@ Or skip the shell entirely — `npm run bridge`, then open
 <http://127.0.0.1:45888>. The UI is identical; what you give up is the window
 raising itself when you click a notification.
 
-### Windows (WSL2), from scratch
+### Windows (WSL2), by hand
 
 The bridge runs inside WSL and the window is a Windows Electron app, so there
 are two machines' worth of setup. Starting from nothing but an Ubuntu distro
@@ -279,7 +302,7 @@ three places — copy them across before the first launch:
 | **Composer** | Sends to the session, resuming it in place. `@` mentions another running session. |
 | **Snippets** | Canned messages with `{{placeholders}}`, pinnable to buttons of their own. |
 
-Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+8` switch panes, `Ctrl+F` find, `Ctrl+K`
+Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+9` switch panes, `Ctrl+F` find, `Ctrl+K`
 filter, `Ctrl+N` new session, ``Ctrl+` `` terminal, `Ctrl+P` / `Ctrl+M` cycle
 permission mode and model, `Esc` back out. Nearly all are rebindable.
 
@@ -307,7 +330,7 @@ are easier to read than to infer.
 | `npm run bridge` | The bridge in the foreground on 45888. |
 | `npm test` | Starts a bridge on a free port, runs everything, stops it. `npm test -- 45901` uses one you already have. |
 | `npm run restart` | Restart the everyday bridge to pick up new code. Turns in the session host survive it; refuses only while a turn is running outside the host. |
-| `npm run land` | From a worktree: merge its pull request, fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
+| `npm run land` | From a worktree: merge its pull request, delete the remote branch (not `main`/`staging`; `-- --keep-branch` to keep it), fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
 | `npm run build` | Package the app — electron-builder on Linux, `install.ps1` from WSL. |
 
 Two rules worth knowing before you send a patch:
@@ -333,28 +356,36 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/bridge.js` | The process itself: health, shutdown, restart, the installed Claude Code and updating it, `/api/pairing` |
 | `bridge/routes/settings.js` | `/api/prefs`, `/api/keymap`, `/api/spinner/groups`, and Claude Code's own settings and memory files |
 | `bridge/routes/notifications.js` | The notification history, marking it read, clearing it |
+| `bridge/routes/digest.js` | `GET /api/digest` — gathers the inputs for bridge/digest.js |
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
-| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox and Resume, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` |
+| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume and the answers to its brief's decisions, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
+| `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
+| `bridge/routes/analytics.js` | `/api/analytics` and `/api/analytics/sessions/:id` |
+| `bridge/routes/search.js` | `/api/search` — full text across every transcript, with the same test/temp filtering as the list |
 | `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
+| `bridge/routes/worktrees.js` | `/api/worktrees*`: the worktree janitor's listing, and the removal refused to remote callers |
+| `bridge/routes/pr-reviews.js` | `/api/pr-review` (the nightly review's findings) and `/api/pr-review/fix` (a session on the PR's branch to fix them) |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
-| `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal |
+| `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal, and the code reviews it ran |
 | `bridge/routes/commands.js` | A project's commands, their runs, and the editor's view of the files that declare them |
 | `bridge/routes/terminals.js` | A terminal pane's stream, input, size and close — all refused remotely |
 | `bridge/routes/machine.js` | Dev servers, DevBrowser and Wispr Flow — the machine outside the app |
 | `bridge/routes/files.js` | `/api/fs`, `mkdir`, `open`, `/api/attachments`, and the attachment helpers the session routes share |
 | `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
+| `bridge/viewers.js` | A polling client's viewer lease (`X-TGXCode-Viewer`), so dropping the stream for polling does not auto-deny its asks |
 | `bridge/pairing.js` | `/pair` and `/pair/forget` — a pasted link becoming a cookie |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
-| `bridge/worktree.js` | Making `.claude/worktrees/<name>` on `worktree-<name>` for a session about to start in it — under the main checkout, never nested, never reused, never removed |
+| `bridge/worktree.js` | Making `.claude/worktrees/<name>` on `worktree-<name>` for a session about to start in it — under the main checkout, never nested, never reused, never removed here (the janitor, below, is the exception) — and finding or checking out a worktree on an existing branch, for fixing a PR |
+| `bridge/worktrees.js` | The worktree janitor: every worktree of a project with its PR, status and sessions, and the user-initiated removal of the ones that are clean, pushed, merged or closed, and unused, judged again at the moment of removal |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/scratchpad.js` | A session's scratchpad directories under `/tmp/claude-<uid>/` (one per worktree it entered), listed and read with containment |
@@ -362,12 +393,18 @@ Two rules worth knowing before you send a patch:
 | `bridge/github.js` | Publishing a directory to GitHub: who gh is logged in as, `git init`, starter files, a first commit, `gh repo create --source --push` and `gh repo edit` |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
+| `bridge/pr-reviews.js` | The nightly review read back: from the gate session's transcript, else the PR comment off the refresher's clock, parsed into findings |
+| `bridge/code-reviews.js` | The code reviews a session ran: the skill runs whose skill is a configured review type, with target, verdict and findings (a fork's ReportFindings, a JSON block, or the review's text) |
 | `bridge/pr-owners.js` | The way back: which conversation raised each PR, keyed `owner/name#N` — `GET /api/pr-owners` |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
+| `bridge/skill-runs.js` | Per-session index of every skill, slash command and subagent run — start, end, result text — that the Reviews pane is filtered from |
+| `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached |
+| `bridge/pricing.js` | API list prices per model, and the cost of one message's usage |
+| `bridge/search-index.js` | Per-session full-text index of what you and Claude said (and, clipped, tool calls), built incrementally like the turn index and in the background a slice at a time; the query and its snippets |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
@@ -385,12 +422,15 @@ Two rules worth knowing before you send a patch:
 | `bridge/wispr.js` | Presses a Wispr Flow transform's chord on the Windows desktop through PowerShell's SendInput, and the chord grammar `wispr.transforms` is written in |
 | `bridge/platform.js` | Whether there is a Windows on the other side of this bridge, and the env var that lets a test pretend otherwise |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
+| `bridge/digest.js` | "While you were away": what happened since a time the client names, assembled from stores the bridge already keeps (pure) |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
 | `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
 | `bridge/claude-version.js` | Installed Claude Code against the registry, and which live sessions are on an older binary |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
 | `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
+| `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |
+| `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
@@ -399,11 +439,12 @@ Two rules worth knowing before you send a patch:
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
 | `bridge/standing.js` | The one-line "where this session stands" on a rail card: written after a turn ends, by a short haiku call or from the last reply, cached per reply in `standing.json` |
-| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, and the inbox between them — the store, and the pure rules for inbox order, nudging and the usage cutoff |
-| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, and the usage cutoff |
-| `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest, the last few turns, or the whole thing a page at a time |
+| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them and the brief each keeps for the user (goal, open decisions, merge order) — the store, and the pure rules for inbox order, nudging and the usage cutoff |
+| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, and re-broadcasting one when a worker's PR moves |
+| `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest (as text, and as fields for the orchestrator page's drawer), the last few turns, or the whole thing a page at a time |
 | `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
+| `bridge/templates.js` | Session templates: a create call kept for reuse, with `{{placeholders}}`, global or scoped to a project |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
@@ -419,6 +460,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/legacy-dirs.js` | Moves `…/claude-sessions` state and cache directories to `…/tgxcode`, leaving a symlink behind |
 | `scripts/dev.js` | `npm run dev` — a development bridge and window that refuse the everyday port |
 | `scripts/start.js` | `npm start` — finds the built app and launches it, on WSL or Linux |
+| `scripts/setup.sh` | A new machine from bare Ubuntu to a built app — packages, Node on both sides, Claude Code, `.wslconfig`, the build |
 | `scripts/build.js` | `npm run build` — `install.ps1` from WSL, electron-builder on Linux |
 | `scripts/win.js` | Helpers for reaching the Windows side from WSL |
 | `scripts/restart-bridge.sh` | `npm run restart` — restart the everyday bridge onto new code, and the nightly cron's entry point |
@@ -432,9 +474,10 @@ Two rules worth knowing before you send a patch:
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
-| `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (fade or pop, then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`. Web Animations, durations read from `--t-fast`/`--t-med`, which reduced motion sets to 0 |
+| `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`, `pose`. Every call names a preset from `PRESETS` (`menu`, `dialog`, `toast`, `dock`…); durations and curves are read from `--dur-*`/`--ease-*` in base.css, and reduced motion keeps a short fade without the movement. See docs/plans/22-ui-overhaul.md |
 | `web/format.js` | Timestamps, durations, paths and model ids as short text. Pure, so the Node tests import it directly |
 | `web/icons.js` | `ICON`, the SVG glyphs every surface draws, `PR_ICON`, and `icon()` to make one |
+| `web/digest.js` | The while-you-were-away card — deciding when you were away, and drawing what `/api/digest` says happened |
 | `web/notifications.js` | Desktop notifications and the chime for a turn that finished or is waiting on you, and the page side of `sw.js` — registering it, and opening the session a notification's button was about |
 | `web/quota.js` | The quota pill and the Claude Code version pill, and their popovers. `loadQuota`/`loadCv` are what a reconnect calls |
 | `web/restart.js` | Pull and restart — the quota popover's button that fast-forwards the checkout and hands over to `scripts/restart-bridge.sh`, and the dialog for a refusal |
@@ -443,24 +486,31 @@ Two rules worth knowing before you send a patch:
 | `web/boards/parts.js` | What the live board and the task board share, as vnodes — status words, the task bar, the queued badge, the ticking turn clock, the Stop button — and `paint()`, which clears a container's static markup before its first render |
 | `web/boards/live.js` | The live board's cards. Each is a component that skips its render while the bridge's `sig` for it is unchanged; sending, answering an ask and opening a dev-server chip are its state |
 | `web/boards/dashboard.js` | Work in flight — fetching it, the badge, and the projects, workspaces and session chips |
+| `web/boards/analytics.js` | Analytics — API-equivalent cost and tokens by day, project, model and session; the conversation header's running total |
 | `web/boards/history.js` | The notification history list. Its read state stays in app.js, which openSession and the stream reach into |
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
+| `web/search.js` | Search transcripts — the full-text panel (Ctrl+Shift+F, or Enter in the bar's filter), results grouped by session, and the jump that opens a session at a hit's turn |
 | `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit and Delete on a card |
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
 | `web/snippets/index.js` | The list — loading it, the `snippets-changed` push that repaints every surface — the rules they share (project scoping, filling placeholders), and `wireSnippets` |
-| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides), and the fill-in dialog |
+| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides, a trigger then Tab), and the fill-in dialog |
 | `web/snippets/pins.js` | The pinned buttons beside the composer's snippets icon |
 | `web/snippets/settings.js` | The Snippets group in Settings — groups, rows, drag and arrow reordering held in `state.snippets.order` — and the arm-then-confirm delete button other Settings groups borrow |
 | `web/snippets/editor.js` | One snippet in the editor dialog, as a component whose state is the form |
+| `web/snippets/trigger.js` | Which snippet the word before the caret names, for Tab-to-expand — pure, no imports, so `test/snippet-trigger.test.js` loads it under node |
 | `web/settings/` | The Settings panel, one module per group. Drawn with Preact on web/rail.js's pattern, except the editor groups (Claude Code, hooks, Memory, Project commands) and the groups written out in index.html, which are still built with `el()` and hung in the tree as foreign DOM. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
 | `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents, and `Foreign` — how a hand-built group sits in the Preact body |
 | `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control (Preact vnodes; typed-into boxes are uncontrolled and keyed on the stored value) |
-| `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON |
-| `web/settings/hooks.js` | The hooks editor inside the Claude Code group |
+| `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON; its Hooks row links to the Hooks page |
+| `web/hooks/page.js` | The Hooks page — project and scope, the rail of events, and the hooks from plugins, skills and agents |
+| `web/hooks/editor.js` | The hooks editor on that page — a draft of one file's `hooks` block, its review and the save |
+| `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
+| `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
-| `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over) |
+| `web/settings/review-types.js` | The Code reviews group — which skills count as reviews, edited as a list and saved whole |
+| `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over). `fitBar()` fits the bar to the window: labels go first, then buttons move into More from the end, and back when there is room |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |
 | `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js`, as a component (no longer markup in index.html) |
 | `web/settings/fold.js` | Folding the long rows — permission lists, hooks, plugins, verb groups, shortcuts. Shut once a list is long, open while short; an explicit choice is kept per browser in localStorage |
@@ -468,11 +518,13 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
 | `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |
 | `web/transcript/tools.js` | Tool calls: the one-line summary, the block, and the body built on first expand (`fillTool`) |
+| `web/transcript/image-viewer.js` | The full-size preview behind a tool result's image, with Copy and Save |
 | `web/transcript/approvals.js` | A blocked turn — the permission card, the plan pane and the question dock — and answering it |
 | `web/transcript/review.js` | Reviewing a plan or a question after the fact |
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |
 | `web/transcript/suggestions.js` | Suggested follow-ups — the panel, the dialog that shows one at a readable width, and starting or dismissing one |
 | `web/transcript/changes.js` | What this session changed, its scratchpad, and the diff viewer (diff2html, read as `window.Diff2Html`, never imported), which also shows a scratchpad file |
+| `web/transcript/reviews.js` | The Reviews pane beside the transcript, the dialog with one review's findings (Fix in chat, open the file), and the Run menu |
 | `web/transcript/checklist.js` | The session's own task list, the column left of the transcript |
 | `web/transcript/layout.js` | The width the log lays itself out at, the composer's insets, and sliding a side column in and out |
 | `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |
@@ -484,6 +536,7 @@ Two rules worth knowing before you send a patch:
 | `web/composer/` | The message boxes — the one under a conversation and the Start-a-session dialog's — and everything that sends from them. Like `transcript/`, none may read an imported binding at top level; load-time listeners are in a `wire*()` that app.js calls |
 | `web/composer/slash.js` | `makeComposer`, the live composer (`live`), the popover machinery `/` and `@` share — selection, paging, the capture-phase keyboard map — and `/` completion |
 | `web/composer/mentions.js` | `@` completion over the other running sessions, and inserting a mention |
+| `web/composer/caret.js` | Scrolling a composer to its caret after an insertion from code — a mirror measures the line, `revealTop` (pure, `test/caret.test.js`) decides the scroll |
 | `web/composer/send.js` | Sizing the box, enabling the send controls, the optimistic chip a message shows until the transcript has it, and whether Enter sends |
 | `web/composer/branch.js` | Doing an earlier turn over: Edit and resend, and Edit and branch — `state.branchFrom`, the banner above the box, and the turn-1 case that starts a new session instead |
 | `web/composer/queue.js` | The send queue's chips — messages typed while a turn runs — reordered, edited back or dropped |
@@ -494,20 +547,28 @@ Two rules worth knowing before you send a patch:
 | `web/new-session/dialog.js` | Opening and closing it, the working-directory box, the values Start and Save send, and its first-message box (`newC`) |
 | `web/new-session/picker.js` | The Recent and Browse tabs over one directory, and the New-folder row |
 | `web/github/publish.js` | The Publish to GitHub dialog, opened from the project ⋮ menu and from Start-a-session |
+| `web/worktrees.js` | The worktree janitor dialog, opened from the project ⋮ menu and a dashboard project heading. Removing one safe row takes one click; Remove all safe asks first, in the dialog |
+| `web/new-session/templates.js` | The template picker, its placeholder boxes, Save as…, and the dialog's edit-a-template mode |
 | `web/new-session/recent.js` | The recent-directories menu on the New button's split half |
 | `web/new-session/trigger.js` | The schedule picker that composes cron, the gate fields, and the Start, Save-draft and Schedule buttons |
 | `web/commands.js` | The header's project-command buttons — `.tgxcode/commands.json` for the session's directory — and the runs they start |
 | `web/term-pane.js` | The app's side of the terminal pane: the one `TerminalPane`, open per session, its height and head, and the shell/run tabs |
 | `web/markdown.js` | The transcript's markdown renderer |
 | `web/pr-refs.js` | A `#151` in a message: whose PR it is (hover card) and the chat that raised it (click) |
+| `web/pr-review.js` | The nightly review's verdict chip beside a PR, its findings, and the Fix this / Fix all buttons — on the board and under the conversation header |
 | `web/highlight.js` | The syntax highlighter behind it |
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
 | `web/link-policy.js` | Which chat links open in the browser preview — the `preview.list` pattern matcher, pure so a test can import it |
+| `web/bar-fit.js` | What the top bar gives up in a narrow window — labels, then buttons from the end, never the quota pill — with a band of slack so it does not flicker at the edge. Pure, so a test can import it; `fitBar()` measures and moves |
 | `web/startup.js` | What a new window opens to — turns Settings › On startup into the address a launch restores, and stays out of the way on a refresh. Pure, so a test can import it |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
-| `web/orchestrator.js` | An orchestrator's dock above the composer — inbox, workers, settings and its pinned summary — and a worker's line back to it; the header's orchestrator toggle |
+| `web/orchestrator.js` | An orchestrator's plumbing: loading its payload, the header's role toggle, the one line above the composer (the plain conversation's strip back to the page, or a worker's line up to its orchestrator), and the inbox list and settings form the page reuses |
+| `web/palette.js` | The command palette (Ctrl+K), in Preact on web/rail.js's pattern: sessions, views and actions in one fuzzy-matched list, keyboard first. Answers Escape itself, from a capture listener, so the panel behind it stays up |
+| `web/palette/` | The palette's parts: `score.js` the fuzzy scorer (pure, tested by `palette-score`), `registry.js` the list any module can add an action to with `registerAction()`, `builtin.js` the entries that ship — each calls the function, or presses the button, that already does the thing |
+| `web/orchestrator-page.js` | The orchestrator page, what an orchestrator opens onto: goal, progress and usage; what needs you (its open decisions, answerable there); a stage matrix of the workers; the merge order; a drawer per worker with its ask, steps and progress; and a resizable split with the real conversation beside it |
+| `web/orchestrator-model.js` | What the page says, worked out from the payload — each worker's stage and what it is doing, the progress strip, Needs you, the merge order, the usage meters: pure, and tested by `test/orchestrator-view.test.js` and `test/orchestrator-page.test.js` |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
 | `web/css/` | The stylesheets, by area — once one `styles.css`, split along its section headers so a surface can be worked on without loading the rest. `index.html` links them in the order below, which *is* the cascade: in that order they concatenate back to the old file section for section, so moving a rule between files moves it in the cascade too |
 | `web/css/base.css` | The `:root` tokens (palette, radii, fonts, timings), the resets, the top bar and its menus, and the quota pill. First, because every other file reads its variables |
@@ -518,12 +579,20 @@ Two rules worth knowing before you send a patch:
 | `web/css/composer.css` | The message box, the send queue, slash completion, the unclippable popover, snippets |
 | `web/css/dashboard.css` | The empty state, the dashboard, and the live board wherever it docks |
 | `web/css/dialogs.css` | Scrims, modals and the fields, pickers and buttons in them; notification history, the delete and restart confirmations, toasts |
+| `web/css/worktrees.css` | The worktree janitor dialog. Linked after `dialogs.css` |
 | `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
+| `web/css/analytics.css` | The analytics board and the header's cost |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
+| `web/css/hooks.css` | The Hooks page and its editor. Right after `settings.css`, whose controls the editor is built from and overrides |
 | `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
 | `web/css/preview.css` | The browser preview pane |
+| `web/css/search.css` | The Search transcripts panel. Last in the cascade and self-contained, reading only the shared tokens |
+| `web/css/digest.css` | The while-you-were-away card (web/digest.js), from existing tokens only |
+| `web/css/templates.css` | The template rows in the Start-a-session dialog. Layout only, pending the dialog restyle |
+| `web/css/reviews.css` | The Reviews pane, the code-review findings dialog and Settings › Code reviews, from existing tokens only. After pr-review.css, whose finding rows it reuses |
+| `web/css/palette.css` | The command palette |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |

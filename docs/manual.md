@@ -14,7 +14,7 @@ it, and how the pieces fit together. Start there if you have not already.
 |---|---|
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. Sessions a schedule started fold into a **Scheduled** section inside their project's card, shut until you open it — they are the same work in the same directory, but a fortnight of nightly reviews between you and the conversation you want is what the rail exists to prevent. Each is named after the schedule and the day it ran. A green dot means the transcript changed in the last 90 seconds — something is working. |
 | **Ordering** | Sessions within a project go by when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. The project cards themselves are ordered by the button beside *Hide finished*: most recent and then held still (the default), most recent and moving up when something happens, alphabetical, or custom — drag a project's heading. See *The rail is sorted on load*. |
-| **Hide finished** | The filter at the head of the rail hides sessions whose pull requests are all merged or closed, with a count of how many it is hiding — the rail's standing question is what is still going on. Remembered per browser. |
+| **Hide finished** | The filter at the head of the rail hides sessions whose pull requests are all merged or closed, with a count of how many it is hiding — the rail's standing question is what is still going on. Orchestrators are never hidden: a merged PR is a batch of their work landing, not the orchestrator finishing, and their workers stay nested under them. Remembered per browser. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
@@ -33,9 +33,11 @@ it, and how the pieces fit together. Start there if you have not already.
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
-two), `Ctrl+1`–`Ctrl+8` the eight things the main pane can show, `Ctrl+F` find
+two), `Ctrl+1`–`Ctrl+9` the nine things the main pane can show, `Ctrl+F` find
 in the conversation with `F3`/`Shift+F3` for the next and previous match,
-`Ctrl+K` filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
+`Ctrl+K` the command palette (sessions, views and every header button in one
+searchable list; press it again with words typed to hand them to the rail's
+filter), `Ctrl+Shift+K` the rail filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
 snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model
 (`Shift` for backwards), `Esc` leave a subagent or close whatever is on top,
 `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
@@ -709,8 +711,8 @@ in the rail for the same reason — the groups enabled by default are all short.
 **Settings** in the bar (or the ⋯ menu, if you moved it there), or `Ctrl+8`.
 Every key in `~/.tgxcode/settings.json` with a control in front of it — the
 reading settings above, the live board, the browser preview and DevBrowser,
-project colours, the spinner, the quota beacon, the keyboard, the toolbar and
-Wispr Flow — alongside editors for Claude Code's own settings and memory and for
+project colours, the spinner, the quota beacon, the keyboard, the toolbar,
+Wispr Flow and the while-you-were-away card — alongside editors for Claude Code's own settings and memory and for
 the project's commands, plus two
 groups that are not in that file: **Notifications**, which is per-browser, and
 **Connect a phone**, which is a task rather than a setting. Both used to be
@@ -1258,6 +1260,27 @@ In a browser, the first tick of *Show a desktop notification* is what asks
 permission — the click is the gesture browsers require, and a prompt nobody
 invited is the one people press Block on. The packaged app grants it already.
 
+### While you were away
+
+Come back to a window after twenty minutes or more — it was hidden, or nobody
+touched it — and a card appears in the top-right corner saying what happened in
+the meantime: sessions **waiting on you** first, each one click from its
+conversation, then turns that failed or stalled, turns that finished (with each
+session's standing line), pull requests opened, merged or closed, schedules that
+ran, worker reports to an orchestrator, and follow-ups filed. Rows past five in a
+group fold behind *+N more*.
+
+It does not block anything. Clicking a row opens it and leaves the card up, so you
+can work down it; ✕ or Esc dismisses it. Going away again before you dismiss it
+widens the same card rather than stacking a second one. An ask answered while the
+card is up — here, in another window, or from a phone — leaves the card at once.
+
+"Away" is one rule: the time since the last pointer, key or wheel event, or since
+the window was hidden. The moment is kept in the browser, so a window opened in
+the morning shows the night before. **Settings → While you were away** has the
+threshold and an off switch. A merged PR's time is GitHub's when the bridge has
+it; otherwise it is when the bridge noticed, and the card marks that with ≈.
+
 ### How dev servers are found
 
 A long session mentions dozens of ports, most of them history. The bridge scans
@@ -1525,10 +1548,11 @@ which mirrored networking makes the same socket. Either way the bridge stays
 where it is. That matters on any network you do not control.
 
 **What a phone will not let you do.** It can watch, send, answer permissions, plans
-and questions, and start an ordinary session. It cannot open a terminal, shut the
-bridge down, stop a dev server, attach a file, or start anything in
-`bypassPermissions` — the bridge refuses those with a 403 rather than the UI merely
-omitting a button, so the rule holds for any client that holds a valid token. The
+and questions, attach a file of up to 10MB, and start an ordinary session. It cannot
+open a terminal, shut the bridge down, stop a dev server, open an attachment on the
+desktop, or start anything in `bypassPermissions` — the bridge refuses those with a
+403 rather than the UI merely omitting a button, so the rule holds for any client that
+holds a valid token. The
 reasoning is in `plans/14-bridge-security.md` §C and the table in
 `remote.md`.
 
@@ -1709,7 +1733,8 @@ several agents are committing to main.
 When the work is finished, `npm run land` from the worktree merges its PR and
 fast-forwards this checkout, which is otherwise a step agents cannot take: a
 worktree-isolated session is refused `git -C` against a directory outside its own
-tree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
+tree. It deletes the branch on origin once merged — never `main` or `staging`,
+and not with `--keep-branch`; the local branch stays with its worktree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
 new code is what is running. Turns in the session host survive that; if any turn
 would not, the restart is refused and land says so rather than forcing it.
 `--no-restart` stops after the pull. Run from the **Land** button, the pane closes

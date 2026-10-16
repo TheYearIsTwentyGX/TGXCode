@@ -11,12 +11,19 @@ import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
+import { togglePalette, wirePalette } from './palette.js';
+import { registerBuiltins } from './palette/builtin.js';
 import { liveStrip, renderLive } from './boards/live.js';
 import { html } from './vendor/preact.js';
 import { paint, tickCardClocks } from './boards/parts.js';
 import { loadDash, paintDashBadge, renderDash } from './boards/dashboard.js';
+import { applySessionSpend, loadAnalytics, loadSessionSpend, renderAnalytics } from './boards/analytics.js';
+import { loadHooks, renderHooks } from './hooks/page.js';
+import { closeHeaderReview, forgetReviews } from './pr-review.js';
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
+import { jumpToHit, openSearch, showSearch, wireSearch } from './search.js';
+import { applyTemplates, loadTemplates, wireTemplates } from './new-session/templates.js';
 import { applySched, loadSched, showSched } from './schedules.js';
 import { applySnippets, loadSnippets, wireSnippets } from './snippets/index.js';
 import { paintPinTitles } from './snippets/pins.js';
@@ -79,6 +86,10 @@ import {
 } from './transcript/find.js';
 import { watchPaneInsets } from './transcript/layout.js';
 import { closeReview } from './transcript/review.js';
+import {
+    closeCodeReview, collapseReviews, fixAllInChat, jumpFromCodeReview, openRunMenu,
+    refreshReviews, renderReviews, resetReviews, showReviews,
+} from './transcript/reviews.js';
 import { warmPeers } from './transcript/rows.js';
 import {
     agentRows, closeAgent, leaveAgent, loadAgents, openAgent,
@@ -94,6 +105,8 @@ import {
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
+import { orchPageTick } from './orchestrator-page.js';
+import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
 import { applyLater, closeLater, loadLater, wireLater } from './composer/later.js';
 import { updateMentionMenu } from './composer/mentions.js';
@@ -112,6 +125,7 @@ import {
 } from './new-session/dialog.js';
 import { showNewMenu, wireNewMenu } from './new-session/recent.js';
 import { openPublish, wirePublish } from './github/publish.js';
+import { openWorktrees, wireWorktrees } from './worktrees.js';
 import {
     drSave, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
 } from './new-session/trigger.js';
@@ -808,6 +822,8 @@ function clearCurrent() {
     state.busyTimer = null;
     resetChanges();
     renderChanges();        // hides the drawer: there is no session to be about
+    resetReviews();
+    renderReviews();
     resetChecklist();
     renderChecklist();      // and the same for the task list on the other side
     resetWindow();
@@ -1090,7 +1106,7 @@ function showLive(on) {
     if (on && !liveKeptOver()) {
         state.dash.open = false; state.notes.open = false;
         state.taskboard.open = false; state.drafts.open = false;
-        state.sched.open = false;
+        state.sched.open = false; state.sx.open = false;
     }
     paintPanels();
     syncBoardWatch();
@@ -1120,7 +1136,7 @@ function showLive(on) {
  * a column: fewer of them fit across, but many more fit down, which is the
  * arrangement for an afternoon spent watching rather than reading.
  */
-function setDockSide(side) {
+export function setDockSide(side) {
     state.live.dock = side ? 'side' : 'bottom';
     localStorage.setItem('liveDock', state.live.dock);
     paintDockButton();
@@ -1164,7 +1180,7 @@ function paintDockButton() {
  * would get by opening the address the button leaves behind, and that address
  * can be copied into a browser on the other screen.
  */
-function setFocus(on) {
+export function setFocus(on) {
     state.focus = on;
     if (on) dom.app.dataset.focus = '1';
     else delete dom.app.dataset.focus;
@@ -1232,6 +1248,15 @@ export function rememberView() {
         if (state.live.open) q.set('live', '1');
     } else if (state.settings.open) {
         q.set('view', 'settings');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.analytics.open) {
+        q.set('view', 'analytics');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.hooks.open) {
+        q.set('view', 'hooks');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.sx.open) {
+        q.set('view', 'search');
         if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
         q.set('view', 'live');
@@ -1353,12 +1378,19 @@ const DASH_STALE_MS = 45_000;
 // assignments repeated inside five functions, which is exactly the shape that
 // goes wrong when a sixth arrives: adding Settings would have meant editing
 // five other functions, none of which would have complained about being missed.
-const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings'];
+const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings', 'analytics', 'hooks', 'sx'];
 
 // Which `live.*` key says whether the board stays up over each panel.
 const LIVE_OVER_KEY = {
     taskboard: 'overTasks', dash: 'overDashboard', notes: 'overHistory',
     drafts: 'overDrafts', sched: 'overSchedules', settings: 'overSettings',
+    // No setting of its own: the board is covered by it, like Settings by default.
+    analytics: null,
+    // Nor this: hooks are configuration, read and written like Settings.
+    hooks: null,
+    // No setting of its own: a search is a short errand, and nothing keeps the
+    // board up over it.
+    sx: null,
 };
 
 /**
@@ -1389,6 +1421,7 @@ export function closePanels() {
     const close = {
         taskboard: showTaskboard, dash: showDash, notes: showNotes,
         drafts: showDrafts, sched: showSched, settings: showSettings,
+        analytics: showAnalytics, hooks: showHooks, sx: showSearch,
     };
     for (const p of PANELS) if (state[p].open) close[p](false);
 }
@@ -1475,7 +1508,8 @@ export function paintPanels() {
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
         [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
         [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open],
-        [dom.btnSettings, state.settings.open]]) {
+        [dom.btnSettings, state.settings.open], [dom.btnAnalytics, state.analytics.open],
+        [dom.btnHooks, state.hooks.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -1485,7 +1519,7 @@ export function paintPanels() {
     if (kept && drawnFor !== `${dom.live.hidden}/${dom.live.dataset.mode}/${dom.main.dataset.dock}`) {
         renderLive();
     }
-    surfaces.forEach((n, i) => { if (before[i] && !n.hidden) enter(n, { kind: 'rise', speed: 'med' }); });
+    surfaces.forEach((n, i) => { if (before[i] && !n.hidden) enter(n, { as: 'arrive' }); });
 }
 
 export function showDash(on) {
@@ -1509,6 +1543,59 @@ export function showDash(on) {
     } else if (state.current) {
         // The terminal was display:none while the board was up, and xterm sizes
         // itself to a box it could not measure then.
+        termPane.refit();
+    }
+    rememberView();
+}
+
+// ── analytics ────────────────────────────────────────────────────────────
+//
+// Tokens and API-equivalent cost (web/boards/analytics.js draws it). Kept
+// beside showDash because it is the same kind of panel: a screen you go and
+// read, which covers the live board rather than closing it.
+
+const ANALYTICS_STALE_MS = 60_000;
+
+export function showAnalytics(on) {
+    state.analytics.open = on;
+    if (on) closeOtherPanels('analytics');
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+    if (on) {
+        if (Date.now() - state.analytics.at > ANALYTICS_STALE_MS) loadAnalytics();
+        else renderAnalytics();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+// ── hooks ───────────────────────────────────────────────────────────────
+//
+// Every hook that can run in a project, and the editor for the settings files'
+// own (web/hooks/page.js). A panel like Analytics, with one difference: its
+// draft is kept in state.hooks while the panel is closed, so closing is never a
+// question — the page asks only when the *file* a draft belongs to changes.
+
+export function showHooks(on) {
+    state.hooks.open = on;
+    if (on) closeOtherPanels('hooks');
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+    if (on) {
+        // Always re-read on the way in: `claude` writes these files itself, and a
+        // page opened on what was true an hour ago is a draft waiting to conflict.
+        if (!state.hooks.hooksDirty) loadHooks();
+        else renderHooks();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
         termPane.refit();
     }
     rememberView();
@@ -1744,10 +1831,22 @@ export function openFromNote(n) {
     openSession(n.sessionId);
 }
 
+/**
+ * Open a session at a search hit — web/search.js. Through the same pending jump
+ * as a history row, so it lands once the first window is drawn whichever way
+ * openSession gets there. A null hit just opens the session.
+ */
+export function openAtHit(sessionId, hit) {
+    pendingJump = hit ? { hit } : null;
+    showSearch(false);
+    openSession(sessionId);
+}
+
 export function takePendingJump() {
     const id = pendingJump;
     pendingJump = null;
     if (!id) return;
+    if (typeof id === 'object') { jumpToHit(id.hit); return; }
     const entry = state.tools.get(id);
     // Gone from the transcript, or never in it: the session is open and scrolled
     // to the end, which is the honest fallback rather than a guess.
@@ -2069,7 +2168,7 @@ function paintPcolorDialog() {
  */
 export function showProjMenu(project, btn) {
     state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
-    present(dom.projMenu, true, { kind: 'pop' });
+    present(dom.projMenu, true, { as: 'menu' });
     renderRail();   // the ⋮ draws itself expanded
     const row = (label, act, disabled) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', disabled: disabled || null,
@@ -2089,6 +2188,7 @@ export function showProjMenu(project, btn) {
         row('Set project colour', () => openPcolor(project)),
         origin,
         publish,
+        row('Worktrees…', () => openWorktrees(project)),
         ...(at < 0 ? [] : [
             el('div', { class: 'sep' }),
             row('Move to top', () => moveRailCard(project.cwd, 'top'), at === 0),
@@ -2148,7 +2248,7 @@ function originRow(cwd, row, publish) {
  */
 export function showStripMenu(s, btn) {
     state.projMenu = { sessionId: s.sessionId };
-    present(dom.projMenu, true, { kind: 'pop' });
+    present(dom.projMenu, true, { as: 'menu' });
     renderRail();   // the ⋮ draws itself expanded
     const now = () => state.sessions.find(x => x.sessionId === s.sessionId) || s;
     const row = (label, act, cls) => el('button', {
@@ -2171,7 +2271,7 @@ export function showStripMenu(s, btn) {
 export function closeProjMenu() {
     if (!state.projMenu) return;
     state.projMenu = null;
-    present(dom.projMenu, false, { kind: 'pop' });
+    present(dom.projMenu, false, { as: 'menu' });
     renderRail();
 }
 
@@ -2372,7 +2472,7 @@ export function paintRailSort() {
 function openSortMenu() {
     state.sortMenu = true;
     const current = BOOT_PREFS.projects.sort;
-    present(dom.sortMenu, true, { kind: 'pop' });
+    present(dom.sortMenu, true, { as: 'menu' });
     dom.sortMenu.replaceChildren(
         el('div', { class: 'menu-note' }, 'Order projects by'),
         el('div', { class: 'sep' }),
@@ -2406,7 +2506,7 @@ function openSortMenu() {
 function closeSortMenu() {
     if (!state.sortMenu) return;
     state.sortMenu = false;
-    present(dom.sortMenu, false, { kind: 'pop' });
+    present(dom.sortMenu, false, { as: 'menu' });
     paintRailSort();
 }
 
@@ -2430,6 +2530,9 @@ paintRailSort();
 // (Notifications had a third; its controls carry their own handlers now.)
 wireToolbar();
 wireShortcuts();
+// The command palette: its own entries, then the Escape and click-outside it answers.
+registerBuiltins();
+wirePalette();
 
 // ── streaming ────────────────────────────────────────────────────────────
 
@@ -2467,6 +2570,8 @@ function connect() {
         // watching flag to reset here — the push is unconditional, so a
         // reconnected window starts receiving them again with no subscribe.
         loadDrafts();
+        // And the session templates, for the drafts' reason.
+        loadTemplates();
         // And the snippets, which matter here a little more than the drafts do:
         // the pinned buttons are on screen whether or not any panel is open, so a
         // missed push leaves a wrong button sitting in the composer rather than a
@@ -2475,6 +2580,9 @@ function connect() {
         // And the messages waiting on a clock, on the drafts' terms and for its
         // reasons — the chips are on screen whenever the session is.
         loadLater();
+        // And the open conversation's spend, whose `session-spend` pushes were
+        // missed the same way.
+        if (state.current) loadSessionSpend(state.current.sessionId);
         // And the schedules, on the same terms. It matters a little more here:
         // the stream is most often down because the bridge restarted, and a
         // restart is exactly when the catch-up pass runs — so the changes this
@@ -2493,6 +2601,7 @@ function connect() {
         // appeared while the stream was down would otherwise stay invisible until
         // something else about that repository changed. Reads the store; no gh.
         loadRailPrs();
+        forgetReviews();
         if (state.current) loadPrStatus();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
@@ -2507,6 +2616,9 @@ function connect() {
         state.offset = d.offset;
         const stick = state.pinned;
         appendEvents(d.events, SESSION_VIEW, { live: true });
+        // A session this bridge is not running (a terminal, another window) has
+        // no turn end to hear, so its reviews are noticed as its file grows.
+        refreshReviews({ tail: true });
         // A plan belonging to a session running elsewhere is read out of these
         // events, so it arrives — and goes away once answered over there — with
         // the transcript rather than with a status tick.
@@ -2571,6 +2683,7 @@ function connect() {
     // is also how a draft saved or started in another window disappears from
     // this one.
     es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
+    es.addEventListener('templates-changed', (e) => applyTemplates(JSON.parse(e.data)));
     es.addEventListener('snippets-changed', (e) => applySnippets(JSON.parse(e.data)));
     es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
     // Fires without anybody having done anything, exactly as `schedules-changed`
@@ -2592,10 +2705,20 @@ function connect() {
     // panel does not need to be right.
     es.addEventListener('prs-changed', (e) => {
         applyRailPrs(JSON.parse(e.data));
+        orchPageTick();
         if (state.current) loadPrStatus();
         // A PR raised elsewhere is the likeliest thing to have moved, and it is
         // what turns a plain `#N` in this conversation into a link.
         loadPrOwners();
+        if (state.dash.open) loadDash();
+    });
+
+    // The nightly review of some PR was read or rewritten. The rows' verdict chips
+    // come with the two fetches below; the findings of an open one are asked for
+    // again when the redraw finds them forgotten.
+    es.addEventListener('pr-reviews-changed', () => {
+        forgetReviews();
+        if (state.current) loadPrStatus();
         if (state.dash.open) loadDash();
     });
 
@@ -2638,6 +2761,9 @@ function connect() {
     // local-only down every open channel would be a poor trade for saving a
     // fetch.
     es.addEventListener('claude-config', async () => {
+        // The Hooks page reads the same files. A dirty draft is kept by
+        // loadHooks() and draws its own banner once the block moved under it.
+        if (state.hooks.open && !state.hooks.saving) loadHooks();
         const s = state.claudeCfg;
         if (!state.settings.open || s.saving) return;
         // A draft in the JSON tab is never destroyed to show somebody what
@@ -2726,6 +2852,7 @@ function connect() {
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
         noteRunner(s);   // when this turn started, for the notification rules
+        digestOnRunner(s);
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
         // The rail's own copy. The session list is only re-sent when the list
         // changes, and none of what moves while a turn runs changes it — the tool
@@ -2738,6 +2865,9 @@ function connect() {
                 detail: s.detail, queued: s.queued, stalled: s.stalled };
             renderRail();
         }
+        // The orchestrator page says what each worker is doing, and what the
+        // orchestrator itself is waiting on — both from this.
+        orchPageTick(s.sessionId);
     });
 
     // A busy turn gone quiet, or back. The badge is the runner-status above,
@@ -2781,6 +2911,7 @@ function connect() {
         // However it was answered — here, in another window, from the toast
         // itself, or by the two-minute auto-deny — the toast has to go.
         clearAsk(p.sessionId);
+        digestOnResolved(p);
         state.waiting.delete(p.sessionId);
         paintLiveBadge();
         paintTaskboardBadge();
@@ -2912,6 +3043,8 @@ function connect() {
         paintNotesBadge();
     });
 
+    // The open conversation's spend, after one of its turns finished.
+    es.addEventListener('session-spend', (e) => applySessionSpend(JSON.parse(e.data)));
     es.addEventListener('turn-complete', (e) => {
         const r = JSON.parse(e.data);
         state.unsent.delete(r.sessionId);   // it is in the transcript now
@@ -3002,6 +3135,8 @@ export function applyRunner(s) {
     // a turn rather than on a timer, because between turns nothing changes and a
     // drawer left open all afternoon should not shell out to git all afternoon.
     if (wasBusy && !busy && state.changes.on && !state.changes.shut) loadChanges();
+    // And the end of a turn is when a review it ran has its result written.
+    if (wasBusy && !busy) refreshReviews();
 
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
@@ -3284,6 +3419,16 @@ dom.search.addEventListener('input', debounce(() => {
     loadSessions();
 }, 180));
 
+// Enter carries the filter's words into a search of every transcript — the
+// filter matches what a session is called, and the moment it finds nothing is
+// the moment to look at what was said instead. See web/search.js.
+dom.search.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || !dom.search.value.trim()) return;
+    e.preventDefault();
+    openSearch(dom.search.value);
+});
+wireSearch();
+
 // The rail's other filter. `renderRail` repaints the button itself, because it is
 // the thing that knows how many sessions the answer covers.
 dom.hideDone.addEventListener('click', () => {
@@ -3356,6 +3501,7 @@ for (const type of ['dragover', 'drop']) {
 }
 wireSnippets();
 wireLater();
+wireDigest();
 
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
 // not one.
@@ -3434,6 +3580,13 @@ dom.btnChanges.addEventListener('click', () => {
     if (state.current) showChanges(!state.changes.on);
 });
 
+dom.btnReviews.addEventListener('click', () => {
+    if (state.current) showReviews(!state.reviews.on);
+});
+dom.reviewsCollapse.addEventListener('click', () => collapseReviews(true));
+dom.reviewsStrip.addEventListener('click', () => collapseReviews(false));
+dom.reviewsRun.addEventListener('click', (e) => openRunMenu(e));
+
 dom.btnChecklist.addEventListener('click', () => {
     if (state.current) showChecklist(!state.checklist.on);
 });
@@ -3454,6 +3607,7 @@ wireTerm();
 dom.newGo.addEventListener('click', startNew);
 dom.newSave.addEventListener('click', drSave);
 dom.newSched.addEventListener('click', drToSchedule);
+wireTemplates();
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
 
@@ -3631,7 +3785,7 @@ for (const log of [dom.log, dom.agentLog]) {
         if (!(d instanceof HTMLDetailsElement) || !d.open || d !== clickedOpen) return;
         clickedOpen = null;
         for (const k of d.children) {
-            if (k.tagName !== 'SUMMARY') enter(k, { kind: 'fade', speed: 'fast', collapse: true });
+            if (k.tagName !== 'SUMMARY') enter(k, { as: 'reveal', collapse: true });
         }
     }, true);
 }
@@ -3669,6 +3823,7 @@ wireAttachments(newC);
 wireWispr();
 wireNewDialog();
 wirePublish();
+wireWorktrees();
 
 // ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
@@ -3693,6 +3848,15 @@ dom.reviewJump.addEventListener('click', () => {
     // collapsed run always has.
     if (entry) revealNode(entry.node);
 });
+
+// ── a code review's findings ─────────────────────────────────────────────
+
+for (const n of dom.creviewScrim.querySelectorAll('[data-close-creview]')) {
+    n.addEventListener('click', closeCodeReview);
+}
+closeOnClickOutside(dom.creviewScrim, closeCodeReview);
+dom.creviewJump.addEventListener('click', jumpFromCodeReview);
+dom.creviewFixall.addEventListener('click', fixAllInChat);
 
 // ── the diff viewer ──────────────────────────────────────────────────────
 
@@ -3934,6 +4098,8 @@ dom.tbSearch.addEventListener('keydown', (e) => {
     }
 });
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
+dom.btnAnalytics.addEventListener('click', () => showAnalytics(!state.analytics.open));
+dom.btnHooks.addEventListener('click', () => showHooks(!state.hooks.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
 dom.btnNotes.addEventListener('click', () => showNotes(!state.notes.open));
@@ -3980,7 +4146,6 @@ dom.setProject.addEventListener('change', () => {
     // A JSON draft is about a file in the *old* project, so it goes — with a
     // confirm, because it is somebody's typing.
     const cfg = state.claudeCfg;
-    // The hooks draft too, which is the one that most needs asking about.
     if (!claudeMayLeave()) {
         dom.setProject.value = settingsProject();
         return;
@@ -4051,6 +4216,44 @@ dom.lockAnyway.addEventListener('click', () => {
     dom.input.focus();
 });
 
+// The eight things `main` can show, ordered by how wide a question each one
+// answers: the conversation in front of you, then everything outstanding,
+// then what is running this second, then what is unfinished in the working
+// trees, then what already reached you, then what has not begun, then what
+// starts on a clock, and last the settings — which are about the app rather
+// than about any work at all. The task board arriving is what made that an
+// ordering rather than the sequence they happened to be built in: Live and
+// Dashboard each moved along by one, which is a real cost and worth paying
+// once, not again. Settings going on the end rather than anywhere tidier is
+// the same reasoning still holding. (Analytics came after them all, and is
+// appended for the same reason.)
+//
+// Exported for the command palette, which offers the same eight. Says whether
+// `command` was one of them, so the keydown ladder knows the key was used.
+const VIEWS = {
+    'view.tasks': (on) => showTaskboard(on),
+    'view.live': (on) => showLive(on),
+    'view.dashboard': (on) => showDash(on),
+    'view.history': (on) => showNotes(on),
+    'view.drafts': (on) => showDrafts(on),
+    'view.schedules': (on) => showSched(on),
+    'view.settings': (on) => showSettings(on),
+    'view.analytics': (on) => showAnalytics(on),
+    // No shortcut of its own — the Ctrl digits are spent — but the palette
+    // and Ctrl+1's close-everything go through here like the rest.
+    'view.hooks': (on) => showHooks(on),
+};
+
+export function showView(command) {
+    if (command === 'view.conversation') {
+        for (const show of Object.values(VIEWS)) show(false);
+        return true;
+    }
+    if (!VIEWS[command]) return false;
+    VIEWS[command](true);
+    return true;
+}
+
 document.addEventListener('keydown', (e) => {
     // The right-click menu is above even those: it is anchored to the pointer, so
     // it can be opened over any of them.
@@ -4076,8 +4279,13 @@ document.addEventListener('keydown', (e) => {
     // instead. This listener is the last of the three registered on the
     // document, so returning here really is the end of the road for the key.
     if (e.key === 'Escape' && modalUp()) return;
+    // The review panel under the conversation header is a popover too, but one
+    // that only exists with no whole-screen panel over it, so it sits here.
+    if (e.key === 'Escape' && !state.dash.open && closeHeaderReview()) return;
     if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
+    if (e.key === 'Escape' && state.analytics.open) { showAnalytics(false); return; }
+    if (e.key === 'Escape' && state.hooks.open) { showHooks(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
     // Schedules was missing from this ladder — Escape closed the other four
@@ -4085,6 +4293,7 @@ document.addEventListener('keydown', (e) => {
     // working rather than as a panel that is special.
     if (e.key === 'Escape' && state.sched.open) { showSched(false); return; }
     if (e.key === 'Escape' && state.settings.open) { showSettings(false); return; }
+    if (e.key === 'Escape' && state.sx.open) { showSearch(false); return; }
     // The preview, one step at a time: out of Maximize first, then Home. Keys
     // typed into the page itself go to the page and never reach here.
     if (e.key === 'Escape' && state.preview.open && state.preview.max) { previewPane.setMaximized(false); return; }
@@ -4124,32 +4333,9 @@ document.addEventListener('keydown', (e) => {
     if (!command) return;
     const inTerm = dom.termBody && dom.termBody.contains(e.target);
 
-    // The eight things `main` can show, ordered by how wide a question each one
-    // answers: the conversation in front of you, then everything outstanding,
-    // then what is running this second, then what is unfinished in the working
-    // trees, then what already reached you, then what has not begun, then what
-    // starts on a clock, and last the settings — which are about the app rather
-    // than about any work at all. The task board arriving is what made that an
-    // ordering rather than the sequence they happened to be built in: Live and
-    // Dashboard each moved along by one, which is a real cost and worth paying
-    // once, not again. Settings going on the end rather than anywhere tidier is
-    // the same reasoning still holding.
-    const views = {
-        'view.tasks': showTaskboard,
-        'view.live': showLive,
-        'view.dashboard': showDash,
-        'view.history': showNotes,
-        'view.drafts': showDrafts,
-        'view.schedules': showSched,
-        'view.settings': showSettings,
-    };
-
-    if (command === 'view.conversation') {
-        e.preventDefault();
-        for (const show of Object.values(views)) show(false);
-        return;
-    }
-    if (views[command]) { e.preventDefault(); views[command](true); return; }
+    if (showView(command)) { e.preventDefault(); return; }
+    // Not gated on `inTerm`, as the filter chord it took over from never was.
+    if (command === 'palette.open') { e.preventDefault(); togglePalette(); return; }
 
     if (command === 'find.open' && state.current && !inTerm) {
         e.preventDefault();
@@ -4162,6 +4348,7 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    if (command === 'search.open') { e.preventDefault(); openSearch(dom.search.value); return; }
     // Three states rather than two, which is what Ctrl+` means in every editor
     // that has one: show it, then focus it, then put it away. So the chord is a
     // way *into* the terminal and not only a way to see it. The toolbar button
@@ -4381,12 +4568,18 @@ function restoreView(q) {
     const dr = q.get('view') === 'drafts';
     const sc = q.get('view') === 'schedules';
     const st = q.get('view') === 'settings';
+    const an = q.get('view') === 'analytics';
+    const hk = q.get('view') === 'hooks';
+    const sx = q.get('view') === 'search';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
     if (tb) showTaskboard(true);
     if (dr) showDrafts(true);
     if (sc) showSched(true);
     if (st) showSettings(true);
+    if (an) showAnalytics(true);
+    if (hk) showHooks(true);
+    if (sx) showSearch(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from

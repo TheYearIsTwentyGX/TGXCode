@@ -66,7 +66,7 @@ export function openContextMenu(ev, items) {
         return row;
     }));
 
-    present(menu, true, { kind: 'pop' });
+    present(menu, true, { as: 'menu' });
 
     // Measured after it is in the layout, and clamped to both axes. The flip is
     // what matters here and does not for #turn-pop: the changes drawer is pinned
@@ -95,7 +95,7 @@ export function openContextMenu(ev, items) {
 
 export function closeContextMenu({ focus = false } = {}) {
     if (!isUp(dom.ctxMenu)) return;
-    present(dom.ctxMenu, false, { kind: 'pop' });
+    present(dom.ctxMenu, false, { as: 'menu' });
     const back = state.ctx.from;
     state.ctx.from = null;
     if (focus && back && back.isConnected) back.focus();

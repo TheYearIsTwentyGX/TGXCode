@@ -102,12 +102,15 @@ function railTree() {
     // its own results, and somebody typing the title of a merged session is looking
     // for exactly that.
     //
-    // Worked out before the workers are nested, because whether an orchestrator
-    // is drawn at all decides whether its workers can be drawn under it.
+    // Nor is an orchestrator, finished or not. It outlives any one pull request —
+    // a merged PR is a batch of its work landing, not the orchestrator being
+    // done — and its row carries the inbox badge and the Workers card, so hiding
+    // it would hide the very thing you come back to. Left out of the count too,
+    // since the count is what the button would hide.
     const hiding = state.hideDone && !state.query;
     // Workers nested under an orchestrator included: they are hidden like any
     // other finished session, so the button that hides them counts them too.
-    const finished = ordered.filter(s => inProjectCard(s) && prDone(s));
+    const finished = ordered.filter(s => inProjectCard(s) && !s.orchestrator && prDone(s));
     const gone = new Set(hiding
         ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
             .map(s => s.sessionId)
@@ -117,11 +120,10 @@ function railTree() {
     // project's rows: they are its work, they come in batches, and they usually
     // live in worktrees of their own that would otherwise scatter them. Only
     // while the orchestrator's own row is drawn — every card can carry the
-    // nested Workers card, so that is any orchestrator not hidden as finished. A
-    // worker whose orchestrator was deleted, or is hidden, is drawn where any
-    // other session would be, rather than nowhere.
-    const hosts = new Set(ordered.filter(s => s.orchestrator && !gone.has(s.sessionId))
-        .map(s => s.sessionId));
+    // nested Workers card, and Hide finished never takes an orchestrator, so that
+    // is any orchestrator in the list. A worker whose orchestrator was deleted is
+    // drawn where any other session would be, rather than nowhere.
+    const hosts = new Set(ordered.filter(s => s.orchestrator).map(s => s.sessionId));
     const workersOf = new Map();
     const nestedWorker = (s) => !!s.worker && hosts.has(s.worker.orchestratorId)
         && !s.pinned && !s.archived;
@@ -434,7 +436,7 @@ function strip(s) {
             ${renaming
                 ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
                 : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
-                    <span class="strip-title">${s.title}</span>${standingLine(s, running)}${meta}</button>`}
+                    <span class="strip-title" title=${s.title}>${s.title}</span>${standingLine(s, running)}${meta}</button>`}
             ${compact ? stripMenuButton(s) : null}
             <div class="strip-actions">
                 ${stalled ? html`<span class="strip-stop" onClick=${(e) => e.stopPropagation()}>

@@ -1,43 +1,37 @@
-// An orchestrator's dock: what sits above the composer in a session marked as
-// one — bridge/orchestrators.js has what that means.
+// An orchestrator's plumbing, and the one line above the composer that goes with
+// it — bridge/orchestrators.js has what an orchestrator is.
 //
-// Five things, top to bottom, with the one read most sitting nearest the
-// composer:
+// The orchestrator is drawn as a page of its own (web/orchestrator-page.js):
+// that is what opens by default, with the conversation as a column beside it.
+// This file is what that page and everything else stand on:
 //
-//   - a **paused** line with Resume, when the usage cutoff has stopped it.
-//   - the **inbox**, shut by default: what workers have filed and whether the
-//     orchestrator has read it. A plan or a permission prompt is answered on the
-//     worker's own page — its title is a link there, where the usual card is
-//     already drawn — so this list never grows a second copy of that card.
-//   - **workers** and **settings**, shut by default.
-//   - the **summary**, pinned to the bottom of the conversation: a paragraph or
-//     two the orchestrator rewrites with `set_summary` as it goes. It is the
-//     thing to glance at on the way past, so it is open by default.
-//
-// A worker gets one line instead, naming its orchestrator, so the way back up is
-// never more than a click.
+//   - **loading** the payload for the session on screen, and replacing it whole
+//     when the `orchestrator` event says it moved;
+//   - **the role**, turned on and off from the header button;
+//   - the line in `#orch-dock`: in the plain conversation, a strip saying how
+//     the workers stand and how to get back to the page (and the pause, with
+//     Resume); on a worker, a line naming its orchestrator, so the way back up is
+//     never more than a click;
+//   - the pieces the page reuses — the inbox list, the settings form, Resume.
 //
 // Preact, rendered from `state.orch`, which is the bridge's `orchestrator`
-// payload for the session on screen: fetched when a session opens and replaced
-// whole by the `orchestrator` event. Nothing here touches its own DOM.
+// payload for the session on screen. Nothing here touches its own DOM.
 
 import { html, render } from './vendor/preact.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
 import { get, post, put } from './api.js';
 import { ago, clip } from './format.js';
-import { renderMarkdown } from './markdown.js';
 import { grow, isUp, morph } from './motion.js';
+import { orchPageUp, paintOrchPage, setOrchPageMode } from './orchestrator-page.js';
+import { needsYou, progress } from './orchestrator-model.js';
 
 const KIND_LABEL = {
     plan: 'Plan', permission: 'Permission', ask: 'Question for it', question: 'Question',
     update: 'Update', done: 'Done', turn: 'Turn report', note: 'Note',
 };
 
-// What is open, per window. Shut by default except the summary.
-const open = { summary: true, inbox: false, workers: false, settings: false };
-
-function goTo(id) {
+export function goTo(id) {
     // Imported at call time: conversation.js imports this module, and a static
     // import back would make the two wait on each other at load.
     import('./transcript/conversation.js').then(m => m.openSession(id));
@@ -109,26 +103,28 @@ export function paintOrchestratorButton() {
 }
 
 /**
- * Draw the dock, growing it open or shrinking it shut as it comes and goes.
+ * Draw everything orchestrator-shaped for the session on screen: the page, and
+ * the line in `#orch-dock`, growing it open or shrinking it shut as it comes and
+ * goes.
  *
- * It sits in the flex column under the transcript, so the transcript lengthens
- * and shortens with it frame by frame rather than jumping by the dock's height.
- * A dock already up and only changing — a section opened, a worker arriving, a
- * different orchestrator's dock replacing this one — animates between the two
- * heights. A closing one keeps what it showed until it has shut, so it does not
- * empty first and then collapse an empty box.
+ * The line sits in the flex column under the transcript, so the transcript
+ * lengthens and shortens with it frame by frame rather than jumping. A closing
+ * one keeps what it showed until it has shut, so it does not empty first and
+ * then collapse an empty box. On the page there is no line: the page is where
+ * all of it is.
  */
 export function paintOrchestrator() {
     const d = dom.orchDock;
     if (!d) return;
     const s = state.current;
     const p = state.orch;
-    const show = !!s && !!p && (s.sessionId === p.orchestratorId || !!s.worker);
+    paintOrchPage();
+    const show = !!s && !!p && !orchPageUp() && (s.sessionId === p.orchestratorId || !!s.worker);
     if (!show) {
         grow(d, false, { onGone: () => render(null, d) });
         return;
     }
-    const tree = s.worker ? workerLine(s, p) : dock(p);
+    const tree = s.worker ? workerLine(s, p) : strip(p);
     if (isUp(d)) { morph(d, () => render(tree, d)); return; }
     render(tree, d);
     grow(d, true);
@@ -146,19 +142,15 @@ export function holdOrchestrator(s) {
     const d = dom.orchDock;
     if (!d) return;
     state.orch = null;
-    if (!s || (!s.orchestrator && !s.worker)) { paintOrchestrator(); return; }
+    // An orchestrator opening onto its page draws the page's own placeholder;
+    // there is no line under it to hold.
+    if (!s || (!s.orchestrator && !s.worker) || orchPageUp()) { paintOrchestrator(); return; }
     const tree = html`<div class="orch orch-loading" role="status" aria-label="Loading the orchestrator">
-        ${s.worker ? html`<div class="skel orch-skel-line"></div>`
-            : [0, 1, 2, 3].map(i => html`<div key=${i} class="skel orch-skel-line"></div>`)}
+        <div class="skel orch-skel-line"></div>
     </div>`;
     if (isUp(d)) { morph(d, () => render(tree, d)); return; }
     render(tree, d);
     grow(d, true);
-}
-
-function toggle(key) {
-    open[key] = !open[key];
-    paintOrchestrator();
 }
 
 function workerLine(s, p) {
@@ -171,47 +163,31 @@ function workerLine(s, p) {
     </div>`;
 }
 
-function section(key, title, extra, body) {
-    return html`<section class=${`orch-sec orch-${key}`} data-open=${String(open[key])}>
-        <button class="orch-sec-head" type="button" aria-expanded=${String(open[key])}
-            onClick=${() => toggle(key)}>
-            <span class="twist">▸</span><span class="orch-sec-title">${title}</span>${extra}
-        </button>
-        ${open[key] ? html`<div class="orch-sec-body">${body()}</div>` : null}
-    </section>`;
-}
-
-function dock(p) {
-    const running = p.workers.filter(w => !w.closedAt && (w.state === 'busy' || w.state === 'starting')).length;
-    const openWorkers = p.workers.filter(w => !w.closedAt);
-    return html`<div class="orch">
-        ${p.paused ? html`<div class="orch-paused">
+/**
+ * The plain conversation's line back to the page: how the workers stand, what
+ * is waiting on you, and the button that brings the page back. The pause, when
+ * there is one, is the whole line — it is the one thing that stops everything.
+ */
+function strip(p) {
+    if (p.paused) {
+        return html`<div class="orch-paused">
             <span>${`Paused — ${p.paused.reason}.`}${p.paused.resumeAt
                 ? html` <span class="orch-wake">${`Carries on by itself at ${clockAt(p.paused.resumeAt)}.`}</span>`
                 : null}</span>
-            <button class="btn-small" type="button" onClick=${resume}>Resume</button>
-        </div>` : null}
-        ${section('inbox', 'Inbox',
-            html`<span class="orch-count" data-hot=${String(p.unread > 0)}>${
-                p.unread ? `${p.unread} unread` : 'nothing unread'}</span>`,
-            () => inbox(p))}
-        ${section('workers', 'Workers',
-            html`<span class="orch-count">${`${openWorkers.length} open · ${running}/${p.settings.maxRunning} running`
-                + `${p.pendingSpawns.length ? ` · ${p.pendingSpawns.length} queued` : ''}`}</span>`,
-            () => workers(p))}
-        ${section('settings', 'Settings', null, () => settings(p))}
-        ${section('summary', 'Summary',
-            html`<span class="orch-count">${p.summary ? updatedWhen(p.summary.at) : 'none yet'}</span>`,
-            () => (p.summary
-                ? html`<div class="orch-summary md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(p.summary.text) }}></div>`
-                : html`<div class="orch-empty">The orchestrator has not written one yet. It is asked to keep
-                    one or two paragraphs here on what is done and what is in flight.</div>`))}
+            <button type="button" onClick=${resume}>Resume</button>
+        </div>`;
+    }
+    const prStatusOf = (id) => { const r = state.railPrs.get(id); return r ? r.status : null; };
+    const g = progress(p, { prStatusOf });
+    const needs = needsYou(p, { orchRunner: state.runner })
+        .filter(n => !(n.kind === 'decision' && n.decision.answeredAt)).length;
+    return html`<div class="orch-strip">
+        ${needs ? html`<span class="orch-strip-needs">${`${needs} need${needs === 1 ? 's' : ''} you`}</span>` : null}
+        <span class="orch-strip-facts">${`${g.running} of ${g.max} running`
+            + `${g.queued ? ` · ${g.queued} queued` : ''} · ${g.finished} of ${g.total} finished`}</span>
+        <button class="lbtn" type="button" onClick=${() => setOrchPageMode(p.orchestratorId, 'overview')}>
+            Overview</button>
     </div>`;
-}
-
-function updatedWhen(at) {
-    const a = ago(at);
-    return a === 'now' ? 'updated just now' : `updated ${a} ago`;
 }
 
 function workerTitle(p, id) {
@@ -219,14 +195,16 @@ function workerTitle(p, id) {
     return w ? (w.title || 'untitled worker') : null;
 }
 
-function inbox(p) {
+/** The inbox, newest first — the page's Activity fold. */
+export function inboxList(p) {
     const items = p.inbox.slice(0, 40);
     if (!items.length) return html`<div class="orch-empty">Nothing has arrived yet.</div>`;
     return html`<ul class="orch-items">${items.map(i => html`
         <li key=${i.id} class="orch-item" data-status=${i.status} data-kind=${i.kind}>
             <div class="orch-item-head">
                 <span class="orch-kind">${KIND_LABEL[i.kind] || i.kind}</span>
-                ${i.workerId ? html`<button class="orch-link" type="button" onClick=${() => goTo(i.workerId)}>
+                ${i.workerId ? html`<button class="orch-link" type="button" title=${workerTitle(p, i.workerId) || 'worker'}
+                    onClick=${() => goTo(i.workerId)}>
                     ${clip(workerTitle(p, i.workerId) || 'worker', 40)}</button>` : null}
                 <span class="orch-when">${ago(i.at)}</span>
                 <span class="orch-status">${statusWord(i)}</span>
@@ -248,22 +226,6 @@ function statusWord(i) {
     return `${i.outcome || 'done'}${i.by ? ` · by ${i.by}` : ''}`;
 }
 
-function workers(p) {
-    if (!p.workers.length && !p.pendingSpawns.length) {
-        return html`<div class="orch-empty">None yet. The orchestrator starts them with spawn_worker.</div>`;
-    }
-    return html`<ul class="orch-workers">
-        ${p.workers.map(w => html`<li key=${w.id} data-closed=${String(!!w.closedAt)}>
-            <button class="orch-link" type="button" onClick=${() => goTo(w.id)}>${w.title || 'untitled'}</button>
-            <span class="orch-state" data-state=${w.state}>${w.closedAt ? 'closed'
-                : w.pending ? `waiting on a ${w.pending}` : w.state}</span>
-            ${w.worktree && w.worktree.branch ? html`<span class="orch-branch">${w.worktree.branch}</span>` : null}
-        </li>`)}
-        ${p.pendingSpawns.map(q => html`<li key=${q.id} data-queued="true">
-            <span>${q.title || 'untitled'}</span><span class="orch-state">queued</span></li>`)}
-    </ul>`;
-}
-
 // The windows "all limits" checks, in the order a person reads them.
 const LIMITS = [
     ['five_hour', 'Five-hour'], ['seven_day', 'Weekly'],
@@ -271,7 +233,7 @@ const LIMITS = [
 ];
 
 /** "4:00 PM", or "Fri 4:00 PM" when it is not today — when a pause lifts. */
-function clockAt(ms) {
+export function clockAt(ms) {
     const d = new Date(ms);
     const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     const day = d.toDateString() === new Date().toDateString()
@@ -281,7 +243,8 @@ function clockAt(ms) {
     return `${day} (in ${mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`})`;
 }
 
-function settings(p) {
+/** The orchestrator's own settings — the page's settings popover. */
+export function settings(p) {
     const s = p.settings;
     const save = (patch) => saveSettings(p, patch);
     const off = !s.usageStop.enabled;
@@ -346,7 +309,7 @@ async function dismiss(p, i) {
     }
 }
 
-async function resume() {
+export async function resume() {
     const p = state.orch;
     if (!p) return;
     try {

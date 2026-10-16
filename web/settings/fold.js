@@ -2,11 +2,12 @@
 // plugins, the verb-group pills, the shortcut table. Each is a list that can
 // run to dozens of entries and push every group under it out of reach.
 //
-// **Driven by state, not by <details>.** The Claude Code group is rebuilt with
-// el() on every renderSettings(), which is twice per save, so an `open`
-// attribute the browser kept on the node would be lost the moment anything was
-// saved. The fold is a fact in `state.settings.folds` and the row is drawn from
-// it, the way `hk-more` recomputes its own `open`.
+// **Driven by state, not by <details>.** The groups that use these were rebuilt
+// with el() on every renderSettings(), which is twice per save, so an `open`
+// attribute the browser kept on the node was lost the moment anything was
+// saved. They are Preact now and would keep it, but the fold stays a fact in
+// `state.settings.folds`: it is remembered across visits, and a row's summary
+// line and LONG default are drawn from it.
 //
 // **Only an explicit choice is stored.** A row nobody has touched is open while
 // it is short and shut once it is long (LONG entries), so a list of two rules
@@ -38,7 +39,8 @@ export function setFold(key, open) {
     catch { /* storage refused — the fold still holds until the page reloads */ }
 }
 
-const flip = (key, open) => { setFold(key, !open); renderSettings(); };
+// `redraw` is whoever drew the fold: Settings, unless the Hooks page passes its own.
+const flip = (key, open, redraw = renderSettings) => { setFold(key, !open); redraw(); };
 
 /** The label as a toggle, for rows built with el(). */
 export function foldLabel(key, open, label, cls = 'set-fold') {
@@ -49,11 +51,11 @@ export function foldLabel(key, open, label, cls = 'set-fold') {
     }, el('span', { class: 'set-fold-caret' }, icon('caret', 12)), label);
 }
 
-/** The same, as a vnode. */
-export function foldLabelV(key, open, label, cls = 'set-fold') {
+/** The same, as a vnode. `redraw` is for a surface outside Settings — see flip. */
+export function foldLabelV(key, open, label, cls = 'set-fold', redraw = renderSettings) {
     return html`<button class=${cls} type="button" aria-expanded=${open ? 'true' : 'false'}
         title=${open ? 'Fold this away' : 'Show all of it'}
-        onClick=${() => flip(key, open)}><span class="set-fold-caret"><svg width="12" height="12"
+        onClick=${() => flip(key, open, redraw)}><span class="set-fold-caret"><svg width="12" height="12"
         viewBox="0 0 24 24" fill="none" aria-hidden="true"
         dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>${label}</button>`;
 }

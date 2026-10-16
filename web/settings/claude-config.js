@@ -1,21 +1,41 @@
 // The Claude Code group: `~/.claude/settings.json` and a project's own, drawn as
-// controls where the app knows the key and as JSON where it does not. The hooks
-// editor inside it is hooks.js. Moved out of app.js as it was.
+// controls where the app knows the key and as JSON where it does not. Its Hooks
+// row is a summary and a way to the Hooks page (web/hooks/page.js), which is
+// where the editor went.
+//
+// Preact, drawn into the Settings tree by renderSettings like the groups built
+// from rows (see index.js). It used to be built with el() and hung in the tree as
+// foreign DOM, which rebuilt the whole group twice per save and took the caret,
+// the hover and every open <details> with it. What the move settled:
+//
+// - **Save-on-change controls follow general.js.** A checkbox and a select are
+//   controlled, so the redraw after a refused save puts them back. A box you
+//   type into is uncontrolled and keyed on `rev` and the stored value, so a save
+//   that moves the value remounts it and claudeRevert() remounts it after one
+//   that did not.
+// - **The two boxes that add an entry own their text** (ListAdd, KvAdd), rather
+//   than being cleared and read back by hand.
+// - **The JSON tab redraws itself.** A keystroke there changes the note and the
+//   Save button and nothing else, so RawCard has a redraw of its own rather than
+//   asking for the whole panel; its textarea is controlled on `draft`, which
+//   mirrors what is typed, so the caret never moves.
+// - **A row a reload changed is lit from state** (`flash`), not by a class
+//   written onto a node Preact owns.
 //
 // Imports from app.js, which imports this — safe because nothing here reads an
 // app.js binding while the module evaluates, only when a function is called.
 // Keep it that way: a module-level `const` built from an app.js `const` throws,
 // because every module under web/settings/ evaluates before app.js's body runs.
 
+import { html, useEffect, useRef, useState } from '../vendor/preact.js';
 import { get, put } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { toast } from '../dom.js';
 import { shortPath } from '../format.js';
-import { cvSettingsNote } from '../quota.js';
+import { cvSettingsNoteV } from '../quota.js';
 import { state } from '../state.js';
 import { grow } from '../composer/send.js';
-import { flashNode } from '../transcript/turn-rail.js';
-import { claudeHooksRow, hkClearDraft } from './hooks.js';
-import { foldLabel, isOpen, LONG } from './fold.js';
+import { openHooksAt } from '../hooks/page.js';
+import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderSettings, settingsProject } from './index.js';
 
 // ── Claude Code's own settings ───────────────────────────────────────────
@@ -94,16 +114,36 @@ function claudeSnapshot(data) {
  * silently, and a checkbox that is suddenly the other way round reads as a
  * misremembering rather than as news. So the rows whose value actually changed
  * are flashed — the same affordance a jump into the transcript uses, and for
- * the same reason.
+ * the same reason. Drawn from `flash` rather than by flashNode(), which writes a
+ * class onto the node, and these rows are Preact's.
  */
+let flashTimer = 0;
 function claudeFlash(before, after) {
     if (!before || !after) return;
-    for (const path_ of new Set([...Object.keys(before), ...Object.keys(after)])) {
-        if (before[path_] === after[path_]) continue;
-        const row = dom.setBody
-            && dom.setBody.querySelector(`.settings-row[data-path="${CSS.escape(path_)}"]`);
-        if (row) flashNode(row);
-    }
+    const moved = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+        .filter(path_ => before[path_] !== after[path_]);
+    if (!moved.length) return;
+    const s = claudeState();
+    s.flash = new Set(moved);
+    renderSettings();
+    clearTimeout(flashTimer);
+    // A little longer than `flash-settings-row` runs, as flashNode() waits.
+    flashTimer = setTimeout(() => { s.flash = null; renderSettings(); }, 1400);
+}
+
+/** ` flash` for a row a reload just changed, for its class. */
+export function claudeFlashClass(path_) {
+    const f = claudeState().flash;
+    return f && f.has(path_) ? ' flash' : '';
+}
+
+/**
+ * Put the typed-into boxes back to what is stored, after a save that did not
+ * move it — refused, or a value that was not one. settingsRevert()'s idea.
+ */
+function claudeRevert() {
+    claudeState().rev++;
+    renderSettings();
 }
 
 /**
@@ -122,10 +162,6 @@ export async function loadClaudeConfig({ flash = false } = {}) {
     try {
         const dir = claudeDir();
         s.data = await get(`/api/claude-config${dir ? `?cwd=${encodeURIComponent(dir)}` : ''}`);
-        // A clean hooks draft reseeds from what was just read; a dirty one is
-        // kept, and draws its own banner if the file moved under it. The same
-        // rule loadCmdConfig() spells out, for the same bug.
-        if (!s.hooksDirty) hkClearDraft(s);
         // A scope the current directory does not offer — Project with no
         // project — would leave every control disabled with no way back, so
         // fall to the one row that always exists.
@@ -175,6 +211,9 @@ async function saveClaudePath(path, value, { collection = false } = {}) {
         } else {
             toast(`Could not save that: ${err.message}`, 'error');
         }
+        // The stored value did not move, so nothing else would remount the box
+        // still showing the refused one.
+        s.rev++;
     }
     s.saving = false;
     renderSettings();
@@ -235,92 +274,87 @@ async function saveClaudeText() {
     renderSettings();
 }
 
+
+/** Several cards under one key — vendor/preact.js exports no Fragment. */
+const Cards = ({ children }) => children;
+
 /**
- * The whole group.
+ * The whole group, for renderSettings.
  *
- * Returns an array so it can be several cards under one contents entry: nine
- * catalogue groups, the keys the catalogue does not model, and the raw tab.
+ * Several cards under one contents entry: the head, nine catalogue groups, the
+ * keys the catalogue does not model, and the raw tab. The head carries the id
+ * the contents scrolls to.
  */
-export function renderClaudeConfig() {
+export function claudeConfigCard() {
+    return html`<${Cards} key="claude">${claudeCards()}</${Cards}>`;
+}
+
+function claudeCards() {
     const s = claudeState();
-    const head = el('section', { class: 'settings-group', id: 'set-g-claude' },
-        el('h2', { class: 'settings-group-title', text: 'Claude Code' }),
-        el('p', { class: 'settings-group-note' },
-            'The settings ', el('code', { text: 'claude' }), ' itself reads — not this '
-            + 'app’s. Everything in these files is here, including keys this page has no '
-            + 'control for; what it does not recognise it shows rather than hides.'),
-        claudeScopeTabs(),
-        claudeFileLine(),
-        claudeReachNote());
-
+    let tail = null;
     if (s.error) {
-        head.append(el('div', { class: 'settings-error' },
-            `Could not read Claude Code’s settings: ${s.error}`));
-        return [head];
+        tail = html`<div class="settings-error">${`Could not read Claude Code’s settings: ${s.error}`}</div>`;
+    } else if (!s.data) {
+        tail = html`<div class="settings-empty">Reading…</div>`;
+    } else if (s.stale) {
+        tail = claudeStaleBanner();
     }
-    if (!s.data) {
-        head.append(el('div', { class: 'settings-empty', text: 'Reading…' }));
-        return [head];
-    }
-    if (s.stale) head.append(claudeStaleBanner());
+    const head = html`<section key="claude" class="settings-group" id="set-g-claude">
+        <h2 class="settings-group-title">Claude Code</h2>
+        <p class="settings-group-note">${'The settings '}<code>claude</code>${' itself reads — not this '
+            + 'app’s. Everything in these files is here, including keys this page has no '
+            + 'control for; what it does not recognise it shows rather than hides.'}</p>
+        ${claudeScopeTabs()}
+        ${claudeFileLine()}
+        ${claudeReachNote()}
+        ${tail}
+    </section>`;
 
-    const cards = [head];
-    if (s.tab === 'raw') {
-        cards.push(claudeRawCard());
-        return cards;
-    }
-    for (const group of s.data.catalogue) {
-        const card = el('section', { class: 'settings-group cfg-sub', id: `set-g-claude-${group.key}` },
-            el('h3', { class: 'settings-group-title', text: group.title }),
-            group.note ? el('p', { class: 'settings-group-note', text: group.note }) : null);
-        for (const row of group.rows) card.append(claudeRow(row));
-        cards.push(card);
-    }
-    cards.push(claudeUnknownCard());
-    return cards;
+    if (s.error || !s.data) return [head];
+    if (s.tab === 'raw') return [head, html`<${RawCard} key="claude-raw" />`];
+    return [
+        head,
+        ...s.data.catalogue.map(group => html`<section key=${`claude-${group.key}`}
+            class="settings-group cfg-sub" id=${`set-g-claude-${group.key}`}>
+            <h3 class="settings-group-title">${group.title}</h3>
+            ${group.note ? html`<p class="settings-group-note">${group.note}</p>` : null}
+            ${group.rows.map(row => claudeRow(row))}
+        </section>`),
+        claudeUnknownCard(),
+    ];
 }
 
 /** Which of the four files this group is looking at. */
 function claudeScopeTabs() {
     const s = claudeState();
     const rows = s.data ? s.data.files : [];
-    return el('div', { class: 'cfg-tabs', role: 'tablist' },
-        rows.map((f) => el('button', {
-            class: `cfg-tab${f.scope === s.scope ? ' on' : ''}`,
-            type: 'button', role: 'tab',
-            'aria-selected': f.scope === s.scope ? 'true' : 'false',
-            // A row nothing can write is still worth opening — it is the answer
-            // to "why is this not what I set?" — so Managed is selectable and
-            // read-only rather than absent.
-            title: f.readonly ? 'An administrator’s file — read-only' : f.file,
-            onclick: () => {
+    return html`<div class="cfg-tabs" role="tablist">
+        ${rows.map(f => html`<button key=${f.scope} class=${`cfg-tab${f.scope === s.scope ? ' on' : ''}`}
+            type="button" role="tab" aria-selected=${f.scope === s.scope ? 'true' : 'false'}
+            title=${f.readonly ? 'An administrator’s file — read-only' : f.file}
+            onClick=${() => {
+                // A row nothing can write is still worth opening — it is the
+                // answer to "why is this not what I set?" — so Managed is
+                // selectable and read-only rather than absent.
                 if (f.scope === s.scope || !claudeMayLeave()) return;
                 s.scope = f.scope;
                 s.stale = null;
-                // A clean draft too: it was seeded from the other file, and
-                // drawing it here would show that file's hooks under this tab.
                 s.draft = null;
-                hkClearDraft(s);
                 renderSettings();
-            },
-        },
-        CLAUDE_SCOPES[f.scope],
-        !f.exists ? el('span', { class: 'cfg-tab-tag', text: 'none' }) : null,
-        f.readonly ? el('span', { class: 'cfg-tab-tag', text: 'read-only' }) : null)),
-        el('div', { class: 'cfg-tabs-spacer' }),
-        el('button', {
-            class: `cfg-tab${s.tab === 'form' ? ' on' : ''}`, type: 'button',
-            onclick: () => { s.tab = 'form'; renderSettings(); },
-        }, 'Controls'),
-        el('button', {
-            class: `cfg-tab${s.tab === 'raw' ? ' on' : ''}`, type: 'button',
-            onclick: () => {
+            }}>${CLAUDE_SCOPES[f.scope]}${
+                !f.exists ? html`<span class="cfg-tab-tag">none</span>` : null}${
+                f.readonly ? html`<span class="cfg-tab-tag">read-only</span>` : null}</button>`)}
+        <div class="cfg-tabs-spacer"></div>
+        <button class=${`cfg-tab${s.tab === 'form' ? ' on' : ''}`} type="button"
+            onClick=${() => { s.tab = 'form'; renderSettings(); }}>Controls</button>
+        <button class=${`cfg-tab${s.tab === 'raw' ? ' on' : ''}`} type="button"
+            onClick=${() => {
                 s.tab = 'raw';
                 // Always re-read on the way in, so a draft never starts from
                 // text that was true ten minutes ago.
                 loadClaudeConfig().then(() => { s.tab = 'raw'; renderSettings(); });
-            },
-        }, 'JSON'));
+            }}>JSON</button>
+    </div>`;
 }
 
 /** The path being written, and everything true about it that is worth saying. */
@@ -328,54 +362,40 @@ function claudeFileLine() {
     const row = claudeTargetRow();
     const s = claudeState();
     const readonly = s.data && s.data.files.find(f => f.scope === s.scope && f.readonly);
-    const line = el('div', { class: 'settings-file' });
 
     if (readonly) {
-        line.append(
-            el('span', { class: 'settings-file-lede', text: 'Reading' }),
-            el('button', {
-                class: 'settings-file-path', type: 'button', title: 'Copy this path',
-                onclick: () => copyPath(readonly.file),
-            }, readonly.file),
-            el('span', { class: 'settings-file-tag' },
-                readonly.exists ? 'an administrator’s — read-only' : 'not present on this machine'));
-        return line;
+        return html`<div class="settings-file">
+            <span class="settings-file-lede">Reading</span>
+            <button class="settings-file-path" type="button" title="Copy this path"
+                onClick=${() => copyPath(readonly.file)}>${readonly.file}</button>
+            <span class="settings-file-tag">${readonly.exists
+                ? 'an administrator’s — read-only' : 'not present on this machine'}</span>
+        </div>`;
     }
     if (!row) {
-        line.append(el('span', { class: 'settings-file-none' },
-            'No file for that scope — pick a project above.'));
-        return line;
+        return html`<div class="settings-file"><span class="settings-file-none"
+            >No file for that scope — pick a project above.</span></div>`;
     }
-    // Filtered rather than passed through, because `append` stringifies a
-    // `false` into the literal word where el()'s own children skip it — the
-    // same trap paintSettingsFile() names a few hundred lines up.
-    line.append(...[
-        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
-        el('button', {
-            class: 'settings-file-path', type: 'button', title: 'Copy this path',
-            onclick: () => copyPath(row.file),
-        }, row.file),
-        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
-        row.symlink
-            && el('span', { class: 'settings-file-tag bad', text: 'a symlink — saving is refused' }),
-        row.exists && !row.parsed && !row.symlink
-            && el('span', { class: 'settings-file-tag bad', text: 'does not parse — use the JSON tab' }),
-        !row.writable && !row.symlink
-            && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
-        claudeState().saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
-    ].filter(Boolean));
-
-    // Whether the local file is really private, answered by git rather than by
-    // hoping. A global excludes file counts, and a repository that relies on
-    // one is a repository a colleague's clone has no protection for.
-    if (row.scope === 'project-local') {
-        line.append(row.ignored
-            ? el('span', { class: 'settings-file-tag', title: `ignored by ${row.ignoredBy}` },
-                'gitignored')
-            : el('span', { class: 'settings-file-tag bad' },
-                'not gitignored — this file would be committed'));
-    }
-    return line;
+    return html`<div class="settings-file">
+        <span class="settings-file-lede">Writing to</span>
+        <button class="settings-file-path" type="button" title="Copy this path"
+            onClick=${() => copyPath(row.file)}>${row.file}</button>
+        ${!row.exists ? html`<span class="settings-file-tag">will be created</span>` : null}
+        ${row.symlink ? html`<span class="settings-file-tag bad">a symlink — saving is refused</span>` : null}
+        ${row.exists && !row.parsed && !row.symlink
+            ? html`<span class="settings-file-tag bad">does not parse — use the JSON tab</span>` : null}
+        ${!row.writable && !row.symlink ? html`<span class="settings-file-tag bad">not writable</span>` : null}
+        ${s.saving ? html`<span class="settings-file-tag">saving…</span>` : null}
+        ${
+            // Whether the local file is really private, answered by git rather
+            // than by hoping. A global excludes file counts, and a repository
+            // that relies on one is a repository a colleague's clone has no
+            // protection for.
+            row.scope !== 'project-local' ? null
+                : row.ignored
+                    ? html`<span class="settings-file-tag" title=${`ignored by ${row.ignoredBy}`}>gitignored</span>`
+                    : html`<span class="settings-file-tag bad">not gitignored — this file would be committed</span>`}
+    </div>`;
 }
 
 export const copyPath = (file) => navigator.clipboard.writeText(file)
@@ -391,36 +411,74 @@ export const copyPath = (file) => navigator.clipboard.writeText(file)
 function claudeReachNote() {
     const s = claudeState();
     const running = (s.data && s.data.running) || 0;
-    return el('p', { class: 'cfg-reach' },
-        el('strong', { text: 'Claude Code reads these when a session starts.' }),
-        ' A change here applies to sessions you start from now on',
-        running
-            ? ` — the ${running} already running will not see it.`
-            : '.',
+    return html`<p class="cfg-reach"><strong>Claude Code reads these when a session starts.</strong>${
+        ' A change here applies to sessions you start from now on'}${
+        running ? ` — the ${running} already running will not see it.` : '.'}${
         s.scope === 'project-local'
-            ? el('span', { class: 'cfg-reach-more' },
-                ' Claude Code appends to this file itself every time you approve a '
-                + 'permission, so it changes under you.')
-            : null);
+            ? html`<span class="cfg-reach-more">${' Claude Code appends to this file itself every time you '
+                + 'approve a permission, so it changes under you.'}</span>`
+            : null}</p>`;
 }
 
 /** A conflict, kept on screen rather than thrown at a toast. */
 function claudeStaleBanner() {
     const s = claudeState();
-    return el('div', { class: 'cfg-stale' },
-        el('div', { class: 'cfg-stale-head' }, 'This file changed on disk since the page read it.'),
-        el('p', null, 'Nothing was overwritten. Claude Code writes these files too — a '
+    return html`<div class="cfg-stale">
+        <div class="cfg-stale-head">This file changed on disk since the page read it.</div>
+        <p>${'Nothing was overwritten. Claude Code writes these files too — a '
             + 'permission you approved, or a theme you changed in a session. What is below '
-            + 'is the file as it is now.'),
-        s.stale.text
-            ? el('details', null,
-                el('summary', { text: 'What is on disk' }),
-                el('pre', { class: 'cfg-stale-text', text: s.stale.text }))
-            : null,
-        el('button', {
-            class: 'linkish', type: 'button',
-            onclick: () => { s.stale = null; renderSettings(); },
-        }, 'Dismiss'));
+            + 'is the file as it is now.'}</p>
+        ${s.stale.text
+            ? html`<details><summary>What is on disk</summary><pre class="cfg-stale-text">${s.stale.text}</pre></details>`
+            : null}
+        <button class="linkish" type="button"
+            onClick=${() => { s.stale = null; renderSettings(); }}>Dismiss</button>
+    </div>`;
+}
+
+/**
+ * The Hooks row: what this file holds, what the others add, and the way to the
+ * Hooks page.
+ *
+ * The editor used to be here, and it outgrew a row: thirty-odd events, a review
+ * step, the scripts hooks run, plugins' hooks. It moved to a page of its own
+ * (web/hooks/page.js) and this row became the door to it — opened on the
+ * project and scope this group is showing, so the link lands on the same file.
+ * One draft, there; none here, so the two can never disagree about it.
+ */
+function claudeHooksRow(row) {
+    const s = claudeState();
+    const file = s.data.files.find(f => f.scope === s.scope);
+    const block = file && file.values ? file.values.hooks : undefined;
+    const isObj = !!block && typeof block === 'object' && !Array.isArray(block);
+    const events = isObj ? Object.keys(block) : [];
+    const here = (s.data.hooks || []).filter(h => h.scope === s.scope);
+    const other = (s.data.hooks || []).filter(h => h.scope !== s.scope);
+    const missing = here.filter(h => h.script && !h.script.exists).length;
+    const off = s.data.effective.disableAllHooks;
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const summary = file && file.exists && !file.parsed ? 'This file does not parse.'
+        : block !== undefined && !isObj ? 'hooks here is not an object — Claude Code ignores it.'
+            : here.length
+                ? `${plural(here.length, 'hook', 'hooks')} on ${events.join(', ')}.`
+                : 'No hooks in this file.';
+    return html`<div class=${`settings-row is-wide${claudeFlashClass(row.path)}`} data-path=${row.path}>
+        <div class="settings-row-head">
+            <div class="settings-row-text">
+                <div class="settings-row-label">${row.label}<code class="cfg-path">${row.path}</code></div>
+                <div class="settings-row-note">${summary}${
+                    other.length ? ` ${plural(other.length, 'more runs', 'more run')} from other files.` : ''}${
+                    missing ? html` <span class="cfg-script bad">${plural(missing, 'script', 'scripts')} missing</span>` : null}${
+                    off && off.value === true ? ' Every hook is off (disableAllHooks).' : ''}</div>
+            </div>
+            <div class="settings-row-side">
+                <button class="btn small" type="button"
+                    onClick=${() => openHooksAt({ dir: claudeDir(), scope: s.scope })}>Open the Hooks page</button>
+            </div>
+        </div>
+        <div class="settings-row-wide"><p class="cmd-field-note">${'Edit, review and save hooks there — along '
+            + 'with the scripts they run, ready-made recipes, and the hooks plugins, skills and agents add.'}</p></div>
+    </div>`;
 }
 
 /**
@@ -460,8 +518,8 @@ function claudeRow(row) {
         ? own
         : (explicit ? values[row.path] : (eff ? eff.value : undefined));
 
-    const disabled = readonlyRow || !target.writable || target.symlink
-        || (target.exists && !target.parsed);
+    const disabled = !!(readonlyRow || !target.writable || target.symlink
+        || (target.exists && !target.parsed));
 
     const merged = !!(eff && eff.merged);
     const inheritedCount = merged
@@ -476,41 +534,35 @@ function claudeRow(row) {
     const fold = row.wide && (isList || isMap) ? claudeFoldSummary(row, own, eff, inheritedCount) : null;
     const open = !fold || isOpen(`claude:${row.path}`, fold.long);
 
-    const text = el('div', { class: 'settings-row-text' },
-        el('div', { class: 'settings-row-label' },
-            fold ? foldLabel(`claude:${row.path}`, open, row.label) : row.label,
-            el('code', { class: 'cfg-path', text: row.path })),
-        !open ? el('div', { class: 'set-fold-sum', text: fold.text }) : null,
-        row.note && open ? el('div', { class: 'settings-row-note', text: row.note }) : null,
-        // What the channel is currently delivering. See paintCvSettingsNote().
-        row.path === 'autoUpdatesChannel' ? cvSettingsNote() : null,
-        row.hint === 'user' && s.scope !== 'user'
-            ? el('div', { class: 'settings-row-note' },
-                'Normally set for you alone rather than checked into a repository.')
-            : null,
-        overridden
-            ? el('div', { class: 'settings-row-warn' },
-                `Overridden by ${CLAUDE_SCOPES[eff.scope]} — `,
-                el('code', { text: shortPath(eff.file) }),
-                ' wins, so this has no effect here.')
-            : null,
-        merged && inheritedCount && open
-            ? el('div', { class: 'settings-row-note cfg-merged' },
+    const text = html`<div class="settings-row-text">
+        <div class="settings-row-label">${
+            fold ? foldLabelV(`claude:${row.path}`, open, row.label) : row.label}<code class="cfg-path">${row.path}</code></div>
+        ${!open ? html`<div class="set-fold-sum">${fold.text}</div>` : null}
+        ${row.note && open ? html`<div class="settings-row-note">${row.note}</div>` : null}
+        ${/* What the channel is currently delivering; renderCv() redraws it. */
+            row.path === 'autoUpdatesChannel' ? cvSettingsNoteV() : null}
+        ${row.hint === 'user' && s.scope !== 'user'
+            ? html`<div class="settings-row-note">Normally set for you alone rather than checked into a repository.</div>`
+            : null}
+        ${overridden
+            ? html`<div class="settings-row-warn">${`Overridden by ${CLAUDE_SCOPES[eff.scope]} — `}<code>${
+                shortPath(eff.file)}</code>${' wins, so this has no effect here.'}</div>`
+            : null}
+        ${merged && inheritedCount && open
+            ? html`<div class="settings-row-note cfg-merged">${
                 `These add up across files rather than overriding: ${inheritedCount} more `
                 + `${inheritedCount === 1 ? 'rule is' : 'rules are'} in force from `
                 + `${eff.from.filter(f => f.scope !== s.scope && f.count)
-                    .map(f => CLAUDE_SCOPES[f.scope]).join(' and ')}.`)
-            : null);
+                    .map(f => CLAUDE_SCOPES[f.scope]).join(' and ')}.`}</div>`
+            : null}
+    </div>`;
 
-    const side = el('div', { class: 'settings-row-side' },
-        explicit
-            ? el('button', {
-                class: 'linkish', type: 'button', disabled: disabled || null,
-                title: 'Remove this key from this file',
-                onclick: () => save(null, { collection: !isScalarValue(values[row.path]) }),
-            }, 'Clear')
-            : el('span', { class: 'settings-row-from',
-                text: eff ? `from ${CLAUDE_SCOPES[eff.scope] || 'another file'}` : 'not set' }));
+    const side = html`<div class="settings-row-side">${explicit
+        ? html`<button class="linkish" type="button" disabled=${disabled}
+            title="Remove this key from this file"
+            onClick=${() => save(null, { collection: !isScalarValue(values[row.path]) })}>Clear</button>`
+        : html`<span class="settings-row-from">${
+            eff ? `from ${CLAUDE_SCOPES[eff.scope] || 'another file'}` : 'not set'}</span>`}</div>`;
 
     // What the *other* files contribute, so a list can show it read-only
     // beside the entries this one owns.
@@ -522,20 +574,20 @@ function claudeRow(row) {
     // enabled in the user file should read as enabled here, and unticking it
     // should write one key rather than twenty.
     const merged_ = eff ? eff.value : undefined;
-    // `data-path` is the only handle a row has: renderSettings() replaces the
-    // whole body, so a value that moved underneath cannot be pointed at unless
-    // the row it landed in can be found again. See claudeFlash(). A folded row
-    // keeps it, so the flash still lands on its head.
+    const control = () => claudeControl(row, value, disabled, save, explicit, inherited, merged_);
+    // `data-path` is what a reload's flash and the cv note are found by. A
+    // folded row keeps it, so the flash still lands on its head.
     if (row.wide) {
-        return el('div', { class: `settings-row is-wide${open ? '' : ' is-folded'}`, 'data-path': row.path },
-            el('div', { class: 'settings-row-head' }, text, side),
-            open ? el('div', { class: 'settings-row-wide' },
-                claudeControl(row, value, disabled, save, explicit, inherited, merged_)) : null);
+        return html`<div key=${row.path} data-path=${row.path}
+            class=${`settings-row is-wide${open ? '' : ' is-folded'}${claudeFlashClass(row.path)}`}>
+            <div class="settings-row-head">${text}${side}</div>
+            ${open ? html`<div class="settings-row-wide">${control()}</div>` : null}
+        </div>`;
     }
-    const control = claudeControl(row, value, disabled, save, explicit, inherited, merged_);
-    return el('div', { class: 'settings-row', 'data-path': row.path },
-        text,
-        el('div', { class: 'settings-row-ctl' }, control, side));
+    return html`<div key=${row.path} class=${`settings-row${claudeFlashClass(row.path)}`} data-path=${row.path}>
+        ${text}
+        <div class="settings-row-ctl">${control()}${side}</div>
+    </div>`;
 }
 
 const isScalarValue = (v) => v === null
@@ -569,34 +621,29 @@ function claudeFoldSummary(row, own, eff, inheritedCount) {
 
 /** The control for a catalogued kind. Every one of them saves on change. */
 function claudeControl(row, value, disabled, save, explicit, inherited, merged) {
+    const rev = claudeState().rev;
     switch (row.kind) {
         case 'bool':
-            return el('label', { class: 'settings-check' },
-                el('input', {
-                    type: 'checkbox', checked: value === true || null,
-                    disabled: disabled || null,
-                    onchange: (e) => save(e.target.checked),
-                }),
-                el('span', { class: 'settings-box' }));
+            return html`<label class="settings-check">
+                <input type="checkbox" checked=${value === true} disabled=${disabled}
+                    onChange=${(e) => save(e.target.checked)} />
+                <span class="settings-box"></span>
+            </label>`;
 
         case 'int':
-            return el('input', {
-                class: 'settings-num', type: 'number', value: value ?? '',
-                min: row.min, max: row.max, disabled: disabled || null,
-                onchange: (e) => {
+            return html`<input key=${`int:${rev}:${value ?? ''}`} class="settings-num" type="number"
+                defaultValue=${value ?? ''} min=${row.min} max=${row.max} disabled=${disabled}
+                onChange=${(e) => {
                     const n = Number(e.target.value);
-                    if (!Number.isInteger(n)) { renderSettings(); return; }
+                    if (!Number.isInteger(n)) { claudeRevert(); return; }
                     save(n);
-                },
-            });
+                }} />`;
 
         case 'string':
-            return el('input', {
-                class: 'settings-text', type: 'text', spellcheck: 'false',
-                value: value == null ? '' : String(value),
-                placeholder: 'not set', disabled: disabled || null,
-                onchange: (e) => save(e.target.value.trim() || null),
-            });
+            return html`<input key=${`str:${rev}:${value ?? ''}`} class="settings-text" type="text"
+                spellcheck=${false} defaultValue=${value == null ? '' : String(value)}
+                placeholder="not set" disabled=${disabled}
+                onChange=${(e) => save(e.target.value.trim() || null)} />`;
 
         case 'choice':
             return claudeChoice(row, value, disabled, save, explicit);
@@ -615,7 +662,7 @@ function claudeControl(row, value, disabled, save, explicit, inherited, merged) 
             return claudeStatusLine();
 
         default:
-            return el('code', { class: 'cfg-raw-value', text: JSON.stringify(value) });
+            return html`<code class="cfg-raw-value">${JSON.stringify(value)}</code>`;
     }
 }
 
@@ -627,22 +674,21 @@ function claudeControl(row, value, disabled, save, explicit, inherited, merged) 
  * *other* value and one careless change away from writing it. The key that
  * taught this is `askUserQuestionTimeout`, whose value on this machine is
  * `never`; a page that assumed a fixed list would have offered to replace it.
+ *
+ * `value` on the select rather than `selected` on an option, as general.js
+ * does, so the redraw after a refused choice puts the stored one back.
  */
 function claudeChoice(row, value, disabled, save, explicit) {
     const options = [...row.options];
     const unlisted = value != null && !options.includes(value);
-    return el('select', {
-        class: 'settings-select', disabled: disabled || null,
-        onchange: (e) => save(e.target.value || null),
-    },
-    !explicit ? el('option', { value: '', text: 'not set' }) : null,
-    unlisted
-        ? el('option', { value: String(value), selected: true },
-            `${value} — not a value this page lists`)
-        : null,
-    options.map(v => el('option', {
-        value: v, selected: v === value || null,
-    }, v)));
+    const current = value != null ? String(value) : (explicit ? String(options[0] ?? '') : '');
+    return html`<select class="settings-select" disabled=${disabled} value=${current}
+        onChange=${(e) => save(e.target.value || null)}>
+        ${!explicit ? html`<option key="" value="">not set</option>` : null}
+        ${unlisted ? html`<option key=${`unlisted:${value}`} value=${String(value)}
+            >${`${value} — not a value this page lists`}</option>` : null}
+        ${options.map(v => html`<option key=${v} value=${v}>${v}</option>`)}
+    </select>`;
 }
 
 /**
@@ -659,77 +705,88 @@ function claudeChoice(row, value, disabled, save, explicit) {
  * one line of diff.
  */
 function claudeList(row, list, disabled, save, inherited = []) {
+    const rev = claudeState().rev;
     const commit = (next) => save(next.length ? next : null, { collection: true });
-    return el('div', { class: 'cfg-list' },
-        list.length
-            ? list.map((entry, i) => el('div', { class: 'cfg-list-row' },
-                el('textarea', {
-                    class: 'cfg-list-value', spellcheck: 'false', rows: 1,
-                    disabled: disabled || null,
-                    onfocus: (e) => grow(e.target, 26, 240),
-                    oninput: (e) => grow(e.target, 26, 240),
-                    onchange: (e) => {
+    return html`<div class="cfg-list">
+        ${list.length
+            ? list.map((entry, i) => html`<div key=${`${rev}:${i}:${entry}`} class="cfg-list-row">
+                <textarea class="cfg-list-value" spellcheck=${false} rows="1" disabled=${disabled}
+                    defaultValue=${entry}
+                    onFocus=${(e) => grow(e.target, 26, 240)}
+                    onInput=${(e) => grow(e.target, 26, 240)}
+                    onChange=${(e) => {
                         const text = e.target.value.trim();
                         if (!text) { commit(list.filter((_, j) => j !== i)); return; }
                         if (text === entry) return;
                         if (list.includes(text)) {
                             toast('That entry is already in this list.', 'warn');
-                            renderSettings();
+                            claudeRevert();
                             return;
                         }
                         commit(list.map((v, j) => (j === i ? text : v)));
-                    },
-                }, entry),
-                el('button', {
-                    class: 'cfg-list-x', type: 'button', disabled: disabled || null,
-                    'aria-label': `Remove ${entry}`, title: 'Remove',
-                    onclick: () => commit(list.filter((_, j) => j !== i)),
-                }, '×')))
-            : el('div', { class: 'cfg-list-none', text: 'Nothing in this file.' }),
+                    }}></textarea>
+                <button class="cfg-list-x" type="button" disabled=${disabled}
+                    aria-label=${`Remove ${entry}`} title="Remove"
+                    onClick=${() => commit(list.filter((_, j) => j !== i))}>×</button>
+            </div>`)
+            : html`<div class="cfg-list-none">Nothing in this file.</div>`}
+        ${
+            // The other files' entries, read-only and attributed. Shown because
+            // these lists add up rather than override, so "what is in force
+            // here" is not answerable from one file — and reading it used to
+            // mean opening two. Not editable from this scope: the row that owns
+            // an entry is the row that may remove it.
+            //
+            // Shut by default, each file on its own: it is read-only, and the
+            // longest part of the row — the user's allow list, seen from a
+            // project.
+            inherited.map((from) => {
+                const key = `claude:${row.path}:from:${from.scope}`;
+                const open = isOpen(key, true);
+                return html`<div key=${from.scope} class="cfg-inherit">
+                    <div class="cfg-inherit-head">${foldLabelV(key, open,
+                        `${from.count} more from ${CLAUDE_SCOPES[from.scope]}`, 'set-fold is-quiet')}<code>${
+                        shortPath(from.file)}</code></div>
+                    ${
+                        // Guarded rather than assumed: a page served by one
+                        // bridge and still open when another restarts is
+                        // routine here, and a missing field should cost the
+                        // entry list rather than the whole panel.
+                        open ? (from.values || []).map((entry, j) => html`<div key=${j}
+                            class="cfg-inherit-row">${entry}</div>`) : null}
+                </div>`;
+            })}
+        <${ListAdd} disabled=${disabled}
+            placeholder=${row.kind === 'rules' ? 'Bash(npm test)' : 'add an entry'}
+            add=${(text) => {
+                if (list.includes(text)) {
+                    toast('That entry is already in this list.', 'warn');
+                    return;
+                }
+                // Appended, never inserted in sorted position: the file's
+                // order is somebody's and not ours to tidy.
+                commit([...list, text]);
+            }} />
+    </div>`;
+}
 
-        // The other files' entries, read-only and attributed. Shown because
-        // these lists add up rather than override, so "what is in force here"
-        // is not answerable from one file — and reading it used to mean opening
-        // two. Not editable from this scope: the row that owns an entry is the
-        // row that may remove it.
-        //
-        // Shut by default, each file on its own: it is read-only, and the
-        // longest part of the row — the user's allow list, seen from a project.
-        inherited.map((from) => {
-            const key = `claude:${row.path}:from:${from.scope}`;
-            const open = isOpen(key, true);
-            return el('div', { class: 'cfg-inherit' },
-                el('div', { class: 'cfg-inherit-head' },
-                    foldLabel(key, open, `${from.count} more from ${CLAUDE_SCOPES[from.scope]}`,
-                        'set-fold is-quiet'),
-                    el('code', { text: shortPath(from.file) })),
-                // Guarded rather than assumed: a page served by one bridge and
-                // still open when another restarts is routine here, and a missing
-                // field should cost the entry list rather than the whole panel.
-                open ? (from.values || []).map(entry => el('div', {
-                    class: 'cfg-inherit-row', text: entry,
-                })) : null);
-        }),
-
-        el('div', { class: 'cfg-list-add' },
-            el('input', {
-                class: 'settings-text is-long', type: 'text', spellcheck: 'false',
-                placeholder: row.kind === 'rules' ? 'Bash(npm test)' : 'add an entry',
-                disabled: disabled || null,
-                onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } },
-                onchange: (e) => {
-                    const text = e.target.value.trim();
-                    e.target.value = '';
-                    if (!text) return;
-                    if (list.includes(text)) {
-                        toast('That entry is already in this list.', 'warn');
-                        return;
-                    }
-                    // Appended, never inserted in sorted position: the file's
-                    // order is somebody's and not ours to tidy.
-                    commit([...list, text]);
-                },
-            })));
+/**
+ * The box under a list that adds one entry. Its text is its own until it is
+ * committed — on blur, or Enter — and it empties itself whatever became of it.
+ */
+function ListAdd({ disabled, placeholder, add }) {
+    const [text, setText] = useState('');
+    return html`<div class="cfg-list-add">
+        <input class="settings-text is-long" type="text" spellcheck=${false}
+            placeholder=${placeholder} disabled=${disabled} value=${text}
+            onInput=${(e) => setText(e.target.value)}
+            onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
+            onChange=${(e) => {
+                const next = e.target.value.trim();
+                setText('');
+                if (next) add(next);
+            }} />
+    </div>`;
 }
 
 /**
@@ -748,35 +805,30 @@ function claudeMapBool(row, own, disabled, save, merged) {
         ...installed.filter(n => !(n in inForce)).sort(),
     ])];
     if (!names.length) {
-        return el('div', { class: 'cfg-list-none', text: 'Nothing in this file, and nothing installed.' });
+        return html`<div class="cfg-list-none">Nothing in this file, and nothing installed.</div>`;
     }
-    return el('div', { class: 'settings-groups' },
-        names.map((name) => {
-            const here = name in mine;
-            return el('label', {
-                // Ticked from what is *in force*, so a plugin the user file
-                // enables reads as enabled at a project scope too. Written as
-                // one key into this file's own map, so unticking it writes one
-                // entry rather than a copy of every inherited one.
-                class: `settings-group-pill${inForce[name] === true ? ' on' : ''}`,
-                title: here
-                    ? name
-                    : `${name} — not set in this file${name in inForce ? ', inherited' : ', installed'}`,
-            },
-            el('input', {
-                type: 'checkbox', checked: inForce[name] === true || null,
-                disabled: disabled || null,
-                onchange: (e) => save({ ...mine, [name]: e.target.checked }, { collection: true }),
-            }),
-            el('span', { class: 'settings-group-name', text: name }),
-            !here ? el('span', { class: 'settings-group-count', text: 'inherited' }) : null);
-        }));
+    return html`<div class="settings-groups">${names.map((name) => {
+        const here = name in mine;
+        // Ticked from what is *in force*, so a plugin the user file enables
+        // reads as enabled at a project scope too. Written as one key into this
+        // file's own map, so unticking it writes one entry rather than a copy of
+        // every inherited one.
+        return html`<label key=${name} class=${`settings-group-pill${inForce[name] === true ? ' on' : ''}`}
+            title=${here ? name
+                : `${name} — not set in this file${name in inForce ? ', inherited' : ', installed'}`}>
+            <input type="checkbox" checked=${inForce[name] === true} disabled=${disabled}
+                onChange=${(e) => save({ ...mine, [name]: e.target.checked }, { collection: true })} />
+            <span class="settings-group-name">${name}</span>
+            ${!here ? html`<span class="settings-group-count">inherited</span>` : null}
+        </label>`;
+    })}</div>`;
 }
 
 const asMap = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 
 /** Name and value rows — `env`, and anything else shaped like it. */
 function claudeMapString(row, own, disabled, save, merged) {
+    const rev = claudeState().rev;
     const map = asMap(own);
     const inForce = asMap(merged);
     // Entries another file owns. Read-only for the same reason an inherited
@@ -786,64 +838,67 @@ function claudeMapString(row, own, disabled, save, merged) {
     const elsewhere = Object.keys(inForce).filter(n => !(n in map)).sort();
     const names = Object.keys(map);
     const commit = (next) => save(Object.keys(next).length ? next : null, { collection: true });
-    return el('div', { class: 'cfg-kv' },
-        names.length || elsewhere.length
-            ? names.map(name => el('div', { class: 'cfg-kv-row' },
-                el('code', { class: 'cfg-kv-name', text: name }),
-                el('input', {
-                    class: 'settings-text is-long', type: 'text', spellcheck: 'false',
-                    value: map[name], disabled: disabled || null,
-                    onchange: (e) => commit({ ...map, [name]: e.target.value }),
-                }),
-                el('button', {
-                    class: 'cfg-list-x', type: 'button', disabled: disabled || null,
-                    'aria-label': `Remove ${name}`, title: 'Remove',
-                    onclick: () => {
+    const fromKey = `claude:${row.path}:from`;
+    const fromOpen = isOpen(fromKey, true);
+    return html`<div class="cfg-kv">
+        ${names.length || elsewhere.length
+            ? names.map(name => html`<div key=${name} class="cfg-kv-row">
+                <code class="cfg-kv-name">${name}</code>
+                <input key=${`${rev}:${map[name]}`} class="settings-text is-long" type="text"
+                    spellcheck=${false} defaultValue=${map[name]} disabled=${disabled}
+                    onChange=${(e) => commit({ ...map, [name]: e.target.value })} />
+                <button class="cfg-list-x" type="button" disabled=${disabled}
+                    aria-label=${`Remove ${name}`} title="Remove"
+                    onClick=${() => {
                         const next = { ...map };
                         delete next[name];
                         commit(next);
-                    },
-                }, '×')))
-            : el('div', { class: 'cfg-list-none', text: 'Nothing in this file.' }),
-        elsewhere.length
-            ? el('div', { class: 'cfg-inherit' },
-                el('div', { class: 'cfg-inherit-head' },
-                    foldLabel(`claude:${row.path}:from`, isOpen(`claude:${row.path}:from`, true),
-                        `${elsewhere.length} more in force from another file`, 'set-fold is-quiet')),
-                isOpen(`claude:${row.path}:from`, true)
-                    ? elsewhere.map(name => el('div', { class: 'cfg-inherit-row' },
-                        `${name} = ${inForce[name]}`))
-                    : null)
-            : null,
-        el('div', { class: 'cfg-kv-add' },
-            el('input', { class: 'settings-text cfg-kv-newname', type: 'text',
-                placeholder: 'NAME', spellcheck: 'false', disabled: disabled || null }),
-            el('input', { class: 'settings-text is-long cfg-kv-newvalue', type: 'text',
-                placeholder: 'value', spellcheck: 'false', disabled: disabled || null }),
-            el('button', {
-                class: 'dash-btn', type: 'button', disabled: disabled || null,
-                onclick: (e) => {
-                    const wrap = e.target.closest('.cfg-kv-add');
-                    const name = wrap.querySelector('.cfg-kv-newname').value.trim();
-                    const val = wrap.querySelector('.cfg-kv-newvalue').value;
-                    if (!name) return;
-                    commit({ ...map, [name]: val });
-                },
-            }, 'Add')));
+                    }}>×</button>
+            </div>`)
+            : html`<div class="cfg-list-none">Nothing in this file.</div>`}
+        ${elsewhere.length
+            ? html`<div class="cfg-inherit">
+                <div class="cfg-inherit-head">${foldLabelV(fromKey, fromOpen,
+                    `${elsewhere.length} more in force from another file`, 'set-fold is-quiet')}</div>
+                ${fromOpen ? elsewhere.map(name => html`<div key=${name}
+                    class="cfg-inherit-row">${`${name} = ${inForce[name]}`}</div>`) : null}
+            </div>`
+            : null}
+        <${KvAdd} disabled=${disabled} add=${(name, val) => commit({ ...map, [name]: val })} />
+    </div>`;
+}
+
+/** The NAME / value / Add row under a map. Its two boxes are its own. */
+function KvAdd({ disabled, add }) {
+    const [name, setName] = useState('');
+    const [val, setVal] = useState('');
+    return html`<div class="cfg-kv-add">
+        <input class="settings-text cfg-kv-newname" type="text" placeholder="NAME"
+            spellcheck=${false} disabled=${disabled} value=${name}
+            onInput=${(e) => setName(e.target.value)} />
+        <input class="settings-text is-long cfg-kv-newvalue" type="text" placeholder="value"
+            spellcheck=${false} disabled=${disabled} value=${val}
+            onInput=${(e) => setVal(e.target.value)} />
+        <button class="dash-btn" type="button" disabled=${disabled}
+            onClick=${() => {
+                const n = name.trim();
+                if (!n) return;
+                setName('');
+                setVal('');
+                add(n, val);
+            }}>Add</button>
+    </div>`;
 }
 
 /** Nothing typed on this group, or the user said to drop it. */
 export function claudeMayLeave() {
     const s = claudeState();
-    if (!s.dirty && !s.hooksDirty) return true;
-    const what = s.hooksDirty && s.dirty ? 'the JSON and the hooks you have edited'
-        : (s.hooksDirty ? 'the hooks you have edited' : 'the JSON you have edited');
+    if (!s.dirty) return true;
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`Discard ${what}?`)) return false;
+    if (!window.confirm('Discard the JSON you have edited?')) return false;
     s.draft = null;
     s.dirty = false;
     s.jsonError = null;
-    hkClearDraft(s);
     return true;
 }
 
@@ -859,32 +914,27 @@ export function claudeMayLeave() {
 function claudeStatusLine() {
     const line = claudeState().data.statusLine;
     if (!line) {
-        return el('div', { class: 'cfg-list-none' },
-            'No status line set. ', claudeJsonLink('statusLine', 'Add one as JSON'));
+        return html`<div class="cfg-list-none">${'No status line set. '}${
+            claudeJsonLink('statusLine', 'Add one as JSON')}</div>`;
     }
-    return el('div', { class: 'cfg-statusline' },
-        el('code', { class: 'cfg-raw-value', text: line.command || JSON.stringify(line.value) }),
-        line.ours
-            ? el('p', { class: 'settings-row-note' },
-                'This app installed this one, to harvest the quota percentages. ',
-                el('code', { text: 'node scripts/install-quota-statusline.js --uninstall' }),
-                ' takes it back out.')
-            : el('p', { class: 'settings-row-note' },
-                'Set outside this app. ', claudeJsonLink('statusLine', 'Edit as JSON')),
-        el('div', { class: 'settings-row-from', text: `from ${CLAUDE_SCOPES[line.scope]}` }));
+    return html`<div class="cfg-statusline">
+        <code class="cfg-raw-value">${line.command || JSON.stringify(line.value)}</code>
+        ${line.ours
+            ? html`<p class="settings-row-note">${'This app installed this one, to harvest the quota percentages. '}<code
+                >node scripts/install-quota-statusline.js --uninstall</code>${' takes it back out.'}</p>`
+            : html`<p class="settings-row-note">${'Set outside this app. '}${claudeJsonLink('statusLine', 'Edit as JSON')}</p>`}
+        <div class="settings-row-from">${`from ${CLAUDE_SCOPES[line.scope]}`}</div>
+    </div>`;
 }
 
 /** Jump to the JSON tab, at a key. */
 export function claudeJsonLink(path, label) {
-    return el('button', {
-        class: 'linkish', type: 'button',
-        onclick: () => {
-            const s = claudeState();
-            s.tab = 'raw';
-            s.jumpTo = path;
-            loadClaudeConfig().then(() => { s.tab = 'raw'; renderSettings(); });
-        },
-    }, label);
+    return html`<button class="linkish" type="button" onClick=${() => {
+        const s = claudeState();
+        s.tab = 'raw';
+        s.jumpTo = path;
+        loadClaudeConfig().then(() => { s.tab = 'raw'; renderSettings(); });
+    }}>${label}</button>`;
 }
 
 /**
@@ -902,61 +952,58 @@ function claudeUnknownCard() {
     // Folds as a whole card: it is a heap of unrelated keys, often long, and
     // the one group on the page nobody came here to edit.
     const open = !unknown.length || isOpen('claude:unknown', unknown.length > LONG);
-    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-claude-unknown' },
-        el('h3', { class: 'settings-group-title' },
-            unknown.length ? foldLabel('claude:unknown', open, 'Also in these files') : 'Also in these files'),
-        open
-            ? el('p', { class: 'settings-group-note' },
-                'Keys this page has no control for. Claude Code adds settings faster than '
-                + 'this app learns their names, so nothing here is hidden — a scalar gets a '
+    let body = null;
+    if (open && !unknown.length) {
+        body = html`<div class="cfg-list-none">Nothing — this page has a control for every key in these files.</div>`;
+    } else if (open) {
+        const target = claudeTargetRow();
+        body = unknown.map(item => claudeUnknownRow(item, target));
+    }
+    return html`<section key="claude-unknown" class="settings-group cfg-sub" id="set-g-claude-unknown">
+        <h3 class="settings-group-title">${unknown.length
+            ? foldLabelV('claude:unknown', open, 'Also in these files') : 'Also in these files'}</h3>
+        ${open
+            ? html`<p class="settings-group-note">${'Keys this page has no control for. Claude Code adds settings '
+                + 'faster than this app learns their names, so nothing here is hidden — a scalar gets a '
                 + 'plain control by type, and anything larger opens in the JSON tab. Read '
-                + 'against Claude Code ', el('code', { text: s.data.catalogueAgainst }), '.')
-            : el('div', { class: 'set-fold-sum' },
-                `${unknown.length} ${unknown.length === 1 ? 'key' : 'keys'} this page has no control for`));
+                + 'against Claude Code '}<code>${s.data.catalogueAgainst}</code>${'.'}</p>`
+            : html`<div class="set-fold-sum">${
+                `${unknown.length} ${unknown.length === 1 ? 'key' : 'keys'} this page has no control for`}</div>`}
+        ${body}
+    </section>`;
+}
 
-    if (!open) return card;
-    if (!unknown.length) {
-        card.append(el('div', { class: 'cfg-list-none',
-            text: 'Nothing — this page has a control for every key in these files.' }));
-        return card;
+function claudeUnknownRow(item, target) {
+    const values = target ? target.values : {};
+    const explicit = values[item.path] !== undefined;
+    const disabled = !!(!target || !target.writable || target.symlink
+        || (target.exists && !target.parsed));
+    const value = explicit ? values[item.path] : undefined;
+
+    let control;
+    if (item.kind === 'scalar' && explicit) {
+        control = claudeGenericControl(item, value, disabled);
+    } else if (item.kind === 'scalar') {
+        control = html`<span class="settings-row-from">inherited — open the file that sets it to change it</span>`;
+    } else {
+        control = claudeJsonLink(item.path, 'Edit as JSON');
     }
 
-    const target = claudeTargetRow();
-    for (const item of unknown) {
-        const values = target ? target.values : {};
-        const explicit = values[item.path] !== undefined;
-        const disabled = !target || !target.writable || target.symlink
-            || (target.exists && !target.parsed);
-        const value = explicit ? values[item.path] : undefined;
-
-        const text = el('div', { class: 'settings-row-text' },
-            el('div', { class: 'settings-row-label' }, el('code', { text: item.path })),
-            el('div', { class: 'settings-row-note' },
-                explicit ? 'Set in this file.' : `Set in ${CLAUDE_SCOPES[item.scope]}.`,
-                ' ', el('code', { class: 'cfg-raw-value', text: item.preview })));
-
-        let control;
-        if (item.kind === 'scalar' && explicit) {
-            control = claudeGenericControl(item, value, disabled);
-        } else if (item.kind === 'scalar') {
-            control = el('span', { class: 'settings-row-from',
-                text: 'inherited — open the file that sets it to change it' });
-        } else {
-            control = claudeJsonLink(item.path, 'Edit as JSON');
-        }
-
-        card.append(el('div', { class: 'settings-row', 'data-path': item.path },
-            text,
-            el('div', { class: 'settings-row-ctl' },
-                control,
-                explicit && item.kind === 'scalar'
-                    ? el('button', {
-                        class: 'linkish', type: 'button', disabled: disabled || null,
-                        onclick: () => saveClaudePath(item.path, null),
-                    }, 'Clear')
-                    : null)));
-    }
-    return card;
+    return html`<div key=${item.path} class=${`settings-row${claudeFlashClass(item.path)}`} data-path=${item.path}>
+        <div class="settings-row-text">
+            <div class="settings-row-label"><code>${item.path}</code></div>
+            <div class="settings-row-note">${
+                explicit ? 'Set in this file.' : `Set in ${CLAUDE_SCOPES[item.scope]}.`}${' '}<code
+                class="cfg-raw-value">${item.preview}</code></div>
+        </div>
+        <div class="settings-row-ctl">
+            ${control}
+            ${explicit && item.kind === 'scalar'
+                ? html`<button class="linkish" type="button" disabled=${disabled}
+                    onClick=${() => saveClaudePath(item.path, null)}>Clear</button>`
+                : null}
+        </div>
+    </div>`;
 }
 
 /**
@@ -967,31 +1014,27 @@ function claudeUnknownCard() {
  * is the whole safety argument for offering these at all.
  */
 function claudeGenericControl(item, value, disabled) {
+    const rev = claudeState().rev;
     const save = (v) => saveClaudePath(item.path, v);
     if (item.type === 'boolean') {
-        return el('label', { class: 'settings-check' },
-            el('input', {
-                type: 'checkbox', checked: value === true || null, disabled: disabled || null,
-                onchange: (e) => save(e.target.checked),
-            }),
-            el('span', { class: 'settings-box' }));
+        return html`<label class="settings-check">
+            <input type="checkbox" checked=${value === true} disabled=${disabled}
+                onChange=${(e) => save(e.target.checked)} />
+            <span class="settings-box"></span>
+        </label>`;
     }
     if (item.type === 'number') {
-        return el('input', {
-            class: 'settings-num', type: 'number', value: value ?? '',
-            disabled: disabled || null,
-            onchange: (e) => {
+        return html`<input key=${`num:${rev}:${value ?? ''}`} class="settings-num" type="number"
+            defaultValue=${value ?? ''} disabled=${disabled}
+            onChange=${(e) => {
                 const n = Number(e.target.value);
-                if (!Number.isFinite(n)) { renderSettings(); return; }
+                if (!Number.isFinite(n)) { claudeRevert(); return; }
                 save(n);
-            },
-        });
+            }} />`;
     }
-    return el('input', {
-        class: 'settings-text', type: 'text', spellcheck: 'false',
-        value: value == null ? '' : String(value), disabled: disabled || null,
-        onchange: (e) => save(e.target.value),
-    });
+    return html`<input key=${`str:${rev}:${value ?? ''}`} class="settings-text" type="text"
+        spellcheck=${false} defaultValue=${value == null ? '' : String(value)} disabled=${disabled}
+        onChange=${(e) => save(e.target.value)} />`;
 }
 
 /**
@@ -1012,22 +1055,47 @@ function claudeGenericControl(item, value, disabled) {
  * page's no-drafts rule exists so a control cannot disagree with what is in
  * force; a document being typed into is a draft by nature, and saving it per
  * keystroke would write broken JSON forty times a minute.
+ *
+ * A component for the redraw: a keystroke changes the note and the Save button
+ * and nothing else on the page, so it redraws this card rather than the panel.
  */
-function claudeRawCard() {
+function RawCard() {
+    const [, redraw] = useState(0);
+    const box = useRef(null);
+    const jump = useRef(null);
     const s = claudeState();
     const row = claudeTargetRow()
         || s.data.files.find(f => f.scope === s.scope)
         || null;
-    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-claude-raw' },
-        el('h3', { class: 'settings-group-title', text: 'The file itself' }));
+    const onDisk = row && row.text !== null ? row.text : '';
+
+    // Requested by an Edit as JSON button. Scrolling to the key beats dropping
+    // somebody into four thousand characters with no idea where to look. Taken
+    // in the render that sees it, acted on once the box is there.
+    if (row && s.jumpTo) {
+        const at = onDisk.indexOf(`"${s.jumpTo.split('.')[0]}"`);
+        s.jumpTo = null;
+        // Roughly: line height times the lines before it.
+        if (at >= 0) jump.current = { at, top: onDisk.slice(0, at).split('\n').length * 18 - 60 };
+    }
+    useEffect(() => {
+        const to = jump.current;
+        const ta = box.current;
+        if (!to || !ta) return;
+        jump.current = null;
+        ta.focus();
+        ta.setSelectionRange(to.at, to.at);
+        ta.scrollTop = to.top;
+    });
 
     if (!row) {
-        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
-        return card;
+        return html`<section class="settings-group cfg-sub" id="set-g-claude-raw">
+            <h3 class="settings-group-title">The file itself</h3>
+            <div class="cfg-list-none">No file for that scope.</div>
+        </section>`;
     }
 
-    const readonly = !!row.readonly || !row.writable || row.symlink;
-    const onDisk = row.text === null ? '' : row.text;
+    const readonly = !!(row.readonly || !row.writable || row.symlink);
     // A clean box is a *view* of the file, not a draft of it, so it re-seeds
     // whenever the file moves. Keying that off `draft === null` instead was
     // wrong in both directions once these files started changing underneath:
@@ -1038,78 +1106,50 @@ function claudeRawCard() {
     // "somebody typed here", and it is the only thing that should stop this.
     if (s.draft === null || !s.dirty) s.draft = onDisk;
 
-    const note = el('div', { class: `cfg-json-note${s.jsonError ? ' bad' : ''}` },
-        s.jsonError || (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.'));
-
-    const box = el('textarea', {
-        class: 'cfg-json', spellcheck: 'false', autocapitalize: 'off',
-        autocorrect: 'off', disabled: readonly || null,
-        // A parse on every keystroke rather than on save: the point of the
-        // message is to be there while the mistake is still on screen. Silent
-        // on an empty box, the way describeCronSoon() is on a half-typed cron.
-        oninput: (e) => {
-            s.draft = e.target.value;
-            s.dirty = s.draft !== onDisk;
-            const text = s.draft.trim();
-            if (!text) { s.jsonError = null; }
-            else {
-                try {
-                    const doc = JSON.parse(text);
-                    s.jsonError = (doc && typeof doc === 'object' && !Array.isArray(doc))
-                        ? null : 'The document has to be a JSON object.';
-                } catch (err) { s.jsonError = err.message; }
-            }
-            note.className = `cfg-json-note${s.jsonError ? ' bad' : ''}`;
-            note.textContent = s.jsonError
-                || (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.');
-            saveBtn.disabled = readonly || !s.dirty || !!s.jsonError;
-            grow(e.target, 220, 900);
-        },
-    }, s.draft);
-
-    const saveBtn = el('button', {
-        class: 'dash-btn', type: 'button',
-        disabled: readonly || !s.dirty || !!s.jsonError || null,
-        onclick: () => saveClaudeText(),
-    }, 'Save the file');
-
-    card.append(
-        el('p', { class: 'settings-group-note' },
-            readonly
-                ? 'Read-only.'
-                : 'Saved whole, and re-indented to two spaces on the way — so a '
-                + 'hand-formatted file comes back formatted like the ones Claude Code '
-                + 'writes. Keys keep their order.'),
-        box,
-        el('div', { class: 'cfg-json-foot' },
-            note,
-            el('div', { class: 'cfg-json-acts' },
-                s.dirty
-                    ? el('button', {
-                        class: 'linkish', type: 'button',
-                        onclick: () => {
-                            s.draft = onDisk;
-                            s.dirty = false;
-                            s.jsonError = null;
-                            renderSettings();
-                        },
-                    }, 'Discard changes')
-                    : null,
-                saveBtn)));
-
-    // Requested by an Edit as JSON button. Scrolling to the key beats dropping
-    // somebody into four thousand characters with no idea where to look.
-    if (s.jumpTo) {
-        const at = onDisk.indexOf(`"${s.jumpTo.split('.')[0]}"`);
-        s.jumpTo = null;
-        if (at >= 0) {
-            setTimeout(() => {
-                box.focus();
-                box.setSelectionRange(at, at);
-                // Roughly: line height times the lines before it.
-                box.scrollTop = onDisk.slice(0, at).split('\n').length * 18 - 60;
-            }, 0);
+    // A parse on every keystroke rather than on save: the point of the message
+    // is to be there while the mistake is still on screen. Silent on an empty
+    // box, the way describeCronSoon() is on a half-typed cron.
+    const onInput = (e) => {
+        s.draft = e.target.value;
+        s.dirty = s.draft !== onDisk;
+        const text = s.draft.trim();
+        if (!text) { s.jsonError = null; }
+        else {
+            try {
+                const doc = JSON.parse(text);
+                s.jsonError = (doc && typeof doc === 'object' && !Array.isArray(doc))
+                    ? null : 'The document has to be a JSON object.';
+            } catch (err) { s.jsonError = err.message; }
         }
-    }
-    return card;
+        grow(e.target, 220, 900);
+        redraw(n => n + 1);
+    };
+
+    return html`<section class="settings-group cfg-sub" id="set-g-claude-raw">
+        <h3 class="settings-group-title">The file itself</h3>
+        <p class="settings-group-note">${readonly
+            ? 'Read-only.'
+            : 'Saved whole, and re-indented to two spaces on the way — so a '
+            + 'hand-formatted file comes back formatted like the ones Claude Code '
+            + 'writes. Keys keep their order.'}</p>
+        <textarea ref=${box} class="cfg-json" spellcheck=${false} autocapitalize="off"
+            autocorrect="off" disabled=${readonly} value=${s.draft} onInput=${onInput}></textarea>
+        <div class="cfg-json-foot">
+            <div class=${`cfg-json-note${s.jsonError ? ' bad' : ''}`}>${
+                s.jsonError || (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</div>
+            <div class="cfg-json-acts">
+                ${s.dirty
+                    ? html`<button class="linkish" type="button" onClick=${() => {
+                        s.draft = onDisk;
+                        s.dirty = false;
+                        s.jsonError = null;
+                        renderSettings();
+                    }}>Discard changes</button>`
+                    : null}
+                <button class="dash-btn" type="button"
+                    disabled=${readonly || !s.dirty || !!s.jsonError}
+                    onClick=${() => saveClaudeText()}>Save the file</button>
+            </div>
+        </div>
+    </section>`;
 }

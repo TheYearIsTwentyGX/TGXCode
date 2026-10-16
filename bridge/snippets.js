@@ -67,6 +67,31 @@
 // is an honest escape hatch that gives you the shipped rows again, which is the
 // same deal spinner.js offers for ~/.tgxcode/verbs/.
 //
+// **Triggers are a field an older build cannot see, and that shaped the merge
+// rather than the version.** `trigger` is the word you type before Tab in the
+// composer. Every bridge reads this file through `clean()`, which whitelists, so a
+// bridge from before triggers existed drops the field on every row the next time
+// it writes — and the everyday bridge is one of those until this lands. Bumping
+// VERSION would have been worse rather than safer: an old bridge reads a newer
+// document as unreadable, which is an *empty* store as far as `flush()` is
+// concerned, so its next edit would write its own startup snapshot over the file
+// and take every snippet written since with it. A missing trigger is a word you
+// retype; a missing snippet is a paragraph. So the document stays at version 1 and
+// the field is additive, and the loss is narrowed from the other side: this build
+// always writes the key, `null` included, so a row on disk *without* the key was
+// written by an older build, and `flush()` carries this bridge's trigger across
+// onto it rather than letting the older write's silence count as "cleared". That
+// heals whenever a bridge still holding the trigger writes again; it cannot heal a
+// trigger nobody holds in memory any more, which is the gap that remains until
+// every bridge is on this build.
+//
+// **Unique, case-insensitively, but only as far as this bridge can see.** The
+// route refuses a trigger another snippet holds. Two bridges can still each hand
+// the same word to a different snippet and the merge will keep both, and that is
+// accepted rather than fixed: the client expands the first one in display order,
+// which is predictable, and saving either snippet again is refused until one of
+// them gives the word up.
+//
 // **What this deliberately does not fix:** drafts.js's tombstone gap, unchanged —
 // a row another bridge deleted, that this one still holds in memory, comes back on
 // the next write here, and costs you deleting a card a second time. And two
@@ -98,6 +123,15 @@ const MAX_TITLE = 200;
 // 1100 characters. This is a guard against a client pasting a transcript into the
 // store, not a style rule.
 const MAX_BODY = 20000;
+
+/**
+ * A trigger is one word you type before pressing Tab, so it is short and has no
+ * whitespace in it — the composer finds it by walking back from the caret to the
+ * last whitespace, so a trigger containing a space could never be typed whole.
+ * 32 is generous for a word and stops a trigger being mistaken for a title.
+ */
+const MAX_TRIGGER = 32;
+const TRIGGER_RE = /^\S+$/;
 
 /**
  * How a snippet lands in the compose box.
@@ -182,6 +216,32 @@ function orNull(v) {
 function textOrNull(v) {
     return typeof v === 'string' && v !== '' ? v : null;
 }
+
+/**
+ * Why this trigger cannot be stored, or null if it can.
+ *
+ * Takes what the route was sent: `null`, `undefined` and the empty string all mean
+ * "no trigger" and are fine. Trimmed before it is judged, because a trailing space
+ * from a form is not a decision, and the same trim is what `cleanTrigger` stores.
+ */
+function triggerProblem(v) {
+    if (v === undefined || v === null) return null;
+    if (typeof v !== 'string') return 'trigger must be a string or null';
+    const t = v.trim();
+    if (!t) return null;
+    if (!TRIGGER_RE.test(t)) return 'a trigger is one word — no spaces';
+    if (t.length > MAX_TRIGGER) return `trigger is longer than ${MAX_TRIGGER} characters`;
+    return null;
+}
+
+/** The trigger to store: trimmed, or null when there is none or it is unusable. */
+function cleanTrigger(v) {
+    const t = orNull(v);
+    return t && !triggerProblem(t) ? t : null;
+}
+
+/** What two triggers are compared by. Case-insensitive, as the composer matches. */
+const triggerKey = (t) => String(t).toLowerCase();
 
 /** An integer, or null for "no opinion" — which is what `order` mostly is. */
 function intOrNull(v) {
@@ -285,6 +345,10 @@ function clean(row) {
         // first line of the body, which is a guess; this is where LGTM's carefully
         // worded tooltip lives now that the button is not written out in the page.
         hint: row.hint,
+        // The word that expands to this snippet when you press Tab after it in
+        // the composer, or null. See the header on why an older bridge's write
+        // cannot be trusted to have meant "none".
+        trigger: row.trigger,
         // Null is ungrouped, which is a place in the popover rather than a group
         // with no name. A groupId naming a group that is not here is **kept**, not
         // nulled — another bridge may hold that group and be about to write it,
@@ -440,7 +504,9 @@ function fillBody(body, params = [], answers = {}) {
  * the two apart, because nothing else writes unprompted.
  */
 function read() {
-    const empty = { groups: [], snippets: [], seeded: [], unreadable: false };
+    const empty = {
+        groups: [], snippets: [], seeded: [], untriggered: new Set(), unreadable: false,
+    };
     let raw;
     try { raw = fs.readFileSync(STATE_FILE, 'utf8'); } catch { return empty; }
     try {
@@ -465,6 +531,9 @@ function read() {
         }
 
         const snippets = [];
+        // Rows written by a build that did not know about triggers — see the
+        // header. Only `flush()` reads it.
+        const untriggered = new Set();
         for (const row of Array.isArray(data.snippets) ? data.snippets : []) {
             // The three fields without which a snippet cannot do anything. A row
             // missing one is dropped rather than repaired: there is no title to
@@ -472,11 +541,13 @@ function read() {
             if (!row || typeof row.id !== 'string' || !row.id) continue;
             if (typeof row.title !== 'string' || !row.title.trim()) continue;
             if (typeof row.body !== 'string' || !row.body) continue;
+            if (!Object.prototype.hasOwnProperty.call(row, 'trigger')) untriggered.add(row.id);
             snippets.push(clean({
                 id: row.id,
                 title: row.title.trim().slice(0, MAX_TITLE),
                 body: row.body.slice(0, MAX_BODY),
                 hint: orNull(row.hint),
+                trigger: cleanTrigger(row.trigger),
                 groupId: orNull(row.groupId),
                 params: cleanParams(row.params),
                 insert: INSERT_STYLES.includes(row.insert) ? row.insert : 'overwrite',
@@ -498,6 +569,7 @@ function read() {
             // that is right: it predates the seed, so it is owed it.
             seeded: Array.isArray(data.seeded)
                 ? data.seeded.filter(id => typeof id === 'string' && id) : [],
+            untriggered,
             unreadable: false,
         };
     } catch (err) {
@@ -621,6 +693,12 @@ class Snippets {
             for (const row of this.rows) {
                 const theirs = snippets.get(row.id);
                 if (!theirs || row.updatedAt >= theirs.updatedAt) snippets.set(row.id, row);
+                // Theirs is newer but was written by a build that cannot see
+                // triggers, so its silence is not a decision — keep ours. See the
+                // header.
+                else if (row.trigger && disk.untriggered.has(row.id)) {
+                    snippets.set(row.id, { ...theirs, trigger: row.trigger });
+                }
             }
             for (const id of this._removed) snippets.delete(id);
             this._removed.clear();
@@ -701,6 +779,23 @@ class Snippets {
     }
 
     /**
+     * The snippet already answering to this trigger, case-insensitively, or null.
+     *
+     * `exceptId` is the snippet being edited, so saving one with its own trigger —
+     * or with its own trigger in a different case — is not a clash with itself.
+     * The route asks this before a write and refuses with a 409; the store does not
+     * refuse on its own, for the reason the header gives about two bridges.
+     */
+    triggerOwner(trigger, exceptId = null) {
+        const t = cleanTrigger(trigger);
+        if (!t) return null;
+        const key = triggerKey(t);
+        const row = this.rows.find(r => r.id !== exceptId && r.trigger
+            && triggerKey(r.trigger) === key);
+        return row ? clean(row) : null;
+    }
+
+    /**
      * @returns {object|null} the snippet, or null when the cap is reached — which
      *   the route turns into a 409. Null rather than a throw so the one caller
      *   that has to tell the two apart does not have to read a message.
@@ -713,6 +808,7 @@ class Snippets {
             title: String(fields.title).trim().slice(0, MAX_TITLE),
             body: String(fields.body).slice(0, MAX_BODY),
             hint: orNull(fields.hint),
+            trigger: cleanTrigger(fields.trigger),
             groupId: orNull(fields.groupId),
             params: cleanParams(fields.params),
             insert: INSERT_STYLES.includes(fields.insert) ? fields.insert : 'overwrite',
@@ -755,6 +851,7 @@ class Snippets {
         }
         if (fields.body !== undefined) row.body = String(fields.body).slice(0, MAX_BODY);
         if (fields.hint !== undefined) row.hint = orNull(fields.hint);
+        if (fields.trigger !== undefined) row.trigger = cleanTrigger(fields.trigger);
         if (fields.groupId !== undefined) row.groupId = orNull(fields.groupId);
         if (fields.params !== undefined) row.params = cleanParams(fields.params);
         if (fields.insert !== undefined) {
@@ -979,6 +1076,11 @@ const SEEDS = [
         body: LGTM_BODY,
         hint: 'open a PR for this work if there is not one, run the checks, and '
             + 'merge it once they pass',
+        // Typing LGTM and pressing Tab puts this paragraph in the box to edit,
+        // where the button sends it as it stands. Only for a store seeded from now
+        // on: a file that has already been offered LGTM is never offered it again,
+        // so nobody's existing row is rewritten to add this.
+        trigger: 'LGTM',
         groupId: null,
         params: [],
         insert: 'overwrite',
@@ -994,7 +1096,8 @@ const SEEDS = [
 
 module.exports = {
     Snippets, STATE_FILE, VERSION, SEEDS,
-    MAX_SNIPPETS, MAX_GROUPS, MAX_PARAMS, MAX_BODY, MAX_PROJECTS, MAX_TITLE,
+    MAX_SNIPPETS, MAX_GROUPS, MAX_PARAMS, MAX_BODY, MAX_PROJECTS, MAX_TITLE, MAX_TRIGGER,
     INSERT_STYLES, PARAM_TYPES, PLACEHOLDER,
     isParamName, isAccent, matchesCwd, scanPlaceholders, fillBody,
+    triggerProblem, cleanTrigger,
 };

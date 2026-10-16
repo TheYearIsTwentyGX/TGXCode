@@ -147,11 +147,21 @@ async function digest(file, { cwd, status, lastResult } = {}) {
     const stat = await gitStat(cwd);
     if (stat) lines.push(`git diff --stat HEAD:\n${stat.split('\n').map(l => `  ${l}`).join('\n')}`);
     const said = (lastResult && lastResult.trim()) || lastText;
-    if (said) {
-        const cut = said.length > 3000 ? `…${said.slice(-3000)}` : said;
-        lines.push(`last message:\n${cut}`);
-    }
-    return { text: lines.join('\n'), headline: said ? firstLine(said, 120) : null };
+    const cut = said ? (said.length > 3000 ? `…${said.slice(-3000)}` : said) : null;
+    if (cut) lines.push(`last message:\n${cut}`);
+    // The same reading as `text`, for a page to lay out rather than a model to
+    // read. Nothing here is computed twice.
+    const fields = {
+        state: status ? status.state : null,
+        pending: status && status.pendingPermission ? status.pendingPermission.kind : null,
+        turns: turns.length,
+        todo: todo ? { done: todo.done, total: todo.total, now: todo.current || null } : null,
+        tools: [...tools].sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, n })),
+        files: [...touched],
+        diffStat: stat || null,
+        lastMessage: cut,
+    };
+    return { text: lines.join('\n'), headline: said ? firstLine(said, 120) : null, fields };
 }
 
 module.exports = { digest, tail, full, turnsOf, PAGE_CHARS };

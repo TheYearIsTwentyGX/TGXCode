@@ -36,6 +36,7 @@ import {
 } from './picker.js';
 import { describeCronSoon, paintGateFields, paintNewAttach, setWhen } from './trigger.js';
 import { openPublish } from '../github/publish.js';
+import { prepareTemplates } from './templates.js';
 
 // ── new session ──────────────────────────────────────────────────────────
 
@@ -155,7 +156,7 @@ function onRecentKey(e, i) {
  * brand-new session, having been asked for once, about something else.
  */
 export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
-    schedule = null, seed = null } = {}) {
+    schedule = null, seed = null, template = null } = {}) {
     // `schedule: true` means "a new one"; a row means "edit that one". The two
     // have to be told apart because only the second has fields to prefill, and
     // both have to put the dialog in schedule mode.
@@ -165,7 +166,9 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // local stands in for whichever is being edited and the prefill below reads
     // from it once instead of branching on every line. A `seed` joins them as a
     // third: the same fields again, from something that is not a stored row.
-    const src = sched || seed || draft;
+    // A template being edited is a fourth: the same fields again, with two of
+    // its own (worktree and orchestrator) that prepareTemplates() writes below.
+    const src = sched || seed || draft || template;
 
     state.drafts.editing = draft ? draft.id : null;
     // A seed is prefill, not an edit — the schedule it describes does not exist
@@ -260,6 +263,7 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // Painted again now because setNewCwd above painted it under the last open's
     // mode; the repo-state answer it is waiting on paints it once more.
     wt.offered = !schedMode && !draft;
+    // A template keeps both Start-only options, so editing one offers them too.
     wt.named = false;
     dom.newWt.checked = false;
     // Starting as an orchestrator, on the worktree box's terms: Start only, reset
@@ -271,11 +275,14 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newWtName.value = '';
     dom.newWtBase.value = '';
     paintNewWorktree();
+    // The picker and Save as template… are plain Start only. Editing a template
+    // writes its worktree and orchestrator over the resets just above.
+    prepareTemplates({ plain: !schedMode && !draft && !template, template });
 
     dom.newTitle.textContent = schedMode
         ? (sched ? 'Edit schedule'
             : (state.sched.fromDraft ? 'Schedule this draft' : 'Schedule a session'))
-        : (draft ? 'Edit draft' : 'Start a session');
+        : (template ? 'Edit template' : (draft ? 'Edit draft' : 'Start a session'));
     dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
     // A filter left over from the last open would hide rows for no reason you
@@ -438,6 +445,14 @@ export function paintNewWorktree() {
         dom.newWtNote.classList.add('warn');
         return;
     }
+    // A placeholder is a name the template fills in when it is used, which is
+    // only something to save while editing one. Anywhere else it is unfilled.
+    if (state.templates.editing && /\{\{\s*\w+\s*\}\}/.test(name)) {
+        dom.newWtNote.classList.remove('warn');
+        dom.newWtNote.replaceChildren('Filled in from the template\u2019s answers, then made into a name '
+            + 'when the template is used.');
+        return;
+    }
     if (!wtNameOk(name)) {
         dom.newWtNote.replaceChildren('Letters, digits, ".", "_" and "-" only, up to 60, '
             + 'not starting with "." or "-".');
@@ -498,6 +513,36 @@ export function newDialogWorktree() {
     return base ? { name, base } : { name };
 }
 
+/**
+ * The Start-only options as a template stores them: the worktree name exactly as
+ * typed (placeholders and all) rather than checked the way newDialogWorktree()
+ * checks it, because a template's name is a pattern.
+ */
+export function newDialogStartOptions() {
+    const on = !dom.newWtRow.hidden && dom.newWt.checked && dom.newWtName.value.trim();
+    const base = dom.newWtBase.value.trim();
+    return {
+        worktree: on ? { name: dom.newWtName.value.trim(), base: base || null } : null,
+        orchestrator: newDialogOrchestrator(),
+    };
+}
+
+/**
+ * Write the worktree and orchestrator boxes, from a template or a filled one. A
+ * name set here counts as typed, so editing the prompt afterwards does not
+ * overwrite it. The worktree row may still be hidden until the repository
+ * check comes back, and it shows with these values when it does.
+ */
+export function setNewStartOptions({ worktree = null, orchestrator = false } = {}) {
+    dom.newWt.checked = !!worktree;
+    dom.newWtName.value = worktree && worktree.name ? worktree.name : '';
+    dom.newWtBase.value = worktree && worktree.base ? worktree.base : '';
+    wt.named = !!(worktree && worktree.name);
+    dom.newOrch.checked = !!orchestrator;
+    paintNewOrch();
+    paintNewWorktree();
+}
+
 /** Open Publish to GitHub over this dialog, for `cwd`, and look again afterwards. */
 export function publishFromNew(cwd) {
     openPublish(cwd, { onDone: () => paintNewGh() });
@@ -518,6 +563,7 @@ export function closeNew() {
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
     state.sched.editing = null;
+    state.templates.editing = null;
     // Otherwise a schedule saved later in this window would consume a draft that
     // an earlier, abandoned conversion had named.
     state.sched.fromDraft = null;

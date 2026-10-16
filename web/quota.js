@@ -28,12 +28,10 @@
 // windows while it is open) — a diff that moves one text node — and still leaves
 // the pill's title and accessible name to the thirty-second repaint.
 //
-// `cvSettingsNote()` stays an el() builder because its caller, the Update channel
-// row in web/settings/claude-config.js, is an el() tree, and paintCvSettingsNote
-// swaps it in place there. That swap is for the el() caller only, and is inert
-// until cvSettingsNote() has been called: a Preact settings tree should render
-// `cvSettingsNoteV()` instead, which reads only `state` and touches no DOM, and
-// redraw it itself when `state.cv` moves (renderCv is where that happens).
+// The Update channel row in web/settings/claude-config.js renders
+// `cvSettingsNoteV()`, which reads only `state` and touches no DOM, and renderCv
+// redraws Settings when `state.cv` moves. There used to be an el() twin swapped
+// into that row by hand; it went when the Claude Code group became Preact.
 //
 // This imports the menus it closes when it opens, `openSession` and friends from app.js, which imports this — safe because
 // nothing here reads an app.js binding at module top level, only when a
@@ -42,12 +40,13 @@
 import { html, render } from './vendor/preact.js';
 import { get, post } from './api.js';
 import { state } from './state.js';
-import { dom, el, toast } from './dom.js';
+import { dom, toast } from './dom.js';
 import { pad, shortPath } from './format.js';
 import { pullAndRestart } from './restart.js';
 import { showNewMenu } from './new-session/recent.js';
 import { openSession, renderHeader } from './transcript/conversation.js';
 import { openContextMenu } from './transcript/context-menu.js';
+import { renderSettings } from './settings/index.js';
 import { showBarMore } from './settings/toolbar.js';
 import { isUp, present } from './motion.js';
 
@@ -593,7 +592,20 @@ export function applyQuotaSnapshot(next) {
     quota.at = Date.now();
     renderQuota();
     quotaFlash(before, next);
+    for (const fn of quotaListeners) {
+        try { fn(); } catch (err) { console.error(err); }
+    }
 }
+
+// Whoever else draws from the same reading — the orchestrator page's meters —
+// told when it moves, so nothing outside this file polls for usage.
+const quotaListeners = new Set();
+
+/** The usage windows from the latest reading, or none before the first. */
+export const quotaWindows = () => (quota.snap && quota.snap.windows) || [];
+
+/** Be called whenever a new reading lands. */
+export function onQuotaChange(fn) { quotaListeners.add(fn); }
 
 /**
  * A window's status got worse — say so on the pill.
@@ -698,7 +710,7 @@ async function refreshQuotaNow() {
 }
 
 export function showQuota(on) {
-    present(dom.quotaMenu, on, { kind: 'pop' });
+    present(dom.quotaMenu, on, { as: 'menu' });
     dom.quotaPill.setAttribute('aria-expanded', String(on));
     // The two popovers must not sit open together, and each one's outside-click
     // listener is stopped by the other's trigger. There were three of these
@@ -796,7 +808,9 @@ function renderCv() {
                 + `on an older binary than the installed ${cv.installed}`;
     }
     if (!dom.cvMenu.hidden) renderCvPanel();
-    paintCvSettingsNote();
+    // The Update channel row's note — see cvSettingsNoteV(). A no-op while
+    // Settings is shut.
+    renderSettings();
     if (state.current) renderHeader();
 }
 
@@ -847,7 +861,7 @@ function renderCvPanel() {
 
 export function showCv(on) {
     if (on === isUp(dom.cvMenu)) return;
-    present(dom.cvMenu, on, { kind: 'pop' });
+    present(dom.cvMenu, on, { as: 'menu' });
     dom.cvPill.setAttribute('aria-expanded', String(on));
     if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
 }
@@ -877,51 +891,10 @@ async function updateClaudeNow() {
 
 /**
  * The Update channel row in Claude settings, which is where somebody looking for
- * "what version am I on" goes. Patched in place rather than by re-rendering the
- * settings page, which would throw away whatever is being typed there.
- *
- * **For the el() caller only.** A settings row drawn by Preact renders
- * cvSettingsNoteV() instead, and a node swapped or appended into it here would
- * be a hand edit on a tree Preact owns. So this does nothing until something has
- * asked for the el() note — once the settings page renders the vnode and never
- * calls cvSettingsNote(), this is inert, and that caller redraws the note itself.
- */
-let cvNoteElUsed = false;
-function paintCvSettingsNote() {
-    if (!cvNoteElUsed) return;
-    const row = document.querySelector('.settings-row[data-path="autoUpdatesChannel"] .settings-row-text');
-    if (!row) return;
-    const old = row.querySelector('.cv-note');
-    const note = buildCvSettingsNote();
-    if (old) old.replaceWith(note || '');
-    else if (note) row.append(note);
-}
-
-/** The settings note as a DOM node, for an el() settings row. See cvSettingsNoteV. */
-export function cvSettingsNote() {
-    cvNoteElUsed = true;
-    return buildCvSettingsNote();
-}
-
-function buildCvSettingsNote() {
-    const cv = state.cv;
-    if (!cv || !cv.installed) return null;
-    const busy = state.cvBusy || cv.updating;
-    return el('div', { class: 'settings-row-note cv-note' },
-        `Installed ${cv.installed}`,
-        cv.latest ? ` · newest on this channel ${cv.latest}` : '',
-        cv.behind && !state.remote
-            ? el('button', {
-                class: 'linkish', type: 'button', disabled: busy || null,
-                onclick: updateClaudeNow,
-            }, busy ? ' Updating…' : ' Update now')
-            : '');
-}
-
-/**
- * The same note as a vnode, for a settings row drawn by Preact. Reads `state`
- * and nothing else, so it can sit in any tree; whoever renders it redraws it
- * when `state.cv` moves. Returns null when there is nothing to say.
+ * "what version am I on" goes. A vnode that reads `state` and nothing else, so
+ * it can sit in any tree; renderCv() redraws Settings when `state.cv` moves,
+ * which is a diff now rather than a rebuild, so nothing being typed there is
+ * lost. Returns null when there is nothing to say.
  */
 export function cvSettingsNoteV() {
     const cv = state.cv;

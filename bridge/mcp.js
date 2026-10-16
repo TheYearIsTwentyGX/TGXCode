@@ -646,10 +646,52 @@ const GET_USAGE = {
 
 const SET_SUMMARY = {
     name: 'set_summary',
-    title: 'Update your summary for the user',
-    description: 'Replace the summary pinned beneath your conversation: one or two short paragraphs '
-        + 'on what is done, what is in flight and what is waiting on the user. Up to 1500 characters.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    title: 'Update your brief for the user',
+    description: [
+        'Replace your brief, which the orchestrator page shows the user: `text` is one or two',
+        'short paragraphs on what is done, what is in flight and what is waiting on them (up',
+        'to 1500 characters). The other fields are drawn as structure, and each is optional:',
+        'leave one out to keep it as it was, pass null or [] to clear it.',
+        '',
+        '`decisions` is every question you need the user to answer. Put them here rather than',
+        'asking in prose: the page lists them where the user cannot miss them. The answer',
+        'comes back as a message starting "Re: <question>"; once you have acted on it, leave',
+        'that question out of the next call.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            text: { type: 'string' },
+            goal: { type: ['string', 'null'], description: 'The overall task, in one line (up to 200 characters).' },
+            decisions: {
+                type: ['array', 'null'],
+                maxItems: 6,
+                description: 'Open questions for the user, as plain strings or objects.',
+                items: {
+                    anyOf: [
+                        { type: 'string' },
+                        {
+                            type: 'object',
+                            properties: {
+                                text: { type: 'string', description: 'The question, up to 400 characters.' },
+                                options: { type: 'array', items: { type: 'string' }, maxItems: 4,
+                                    description: 'Short answers the user can pick with one click.' },
+                                worker: { type: 'string', description: 'The worker id it is about, if one.' },
+                            },
+                            required: ['text'],
+                        },
+                    ],
+                },
+            },
+            mergeOrder: {
+                type: ['array', 'null'],
+                items: { type: 'integer' },
+                maxItems: 30,
+                description: 'Pull request numbers in the order they should be merged.',
+            },
+        },
+        required: ['text'],
+    },
 };
 
 const REPORT = {
@@ -1148,7 +1190,10 @@ async function callGetUsage(id) {
 }
 
 async function callSetSummary(id, args) {
-    const { failed } = await orchCall(id, 'POST', 'summary', { text: args.text });
+    const body = { text: args.text };
+    // Only what was passed: a field left out keeps what the brief had.
+    for (const k of ['goal', 'decisions', 'mergeOrder']) if (k in args) body[k] = args[k];
+    const { failed } = await orchCall(id, 'POST', 'summary', body);
     if (failed) return failed;
     return say(id, 'Summary updated.');
 }

@@ -168,7 +168,7 @@ export function renderAsk() {
     const old = liveCard();
     if (old) {
         if (kind === 'tool') old.remove();
-        else exit(old, { kind: 'fade', speed: 'med', collapse: true });
+        else exit(old, { as: 'reveal', collapse: true });
     }
     // An answer in flight belongs to its request; a redraw of that same request
     // keeps it dimmed and its buttons dead, so it cannot be sent twice.
@@ -191,7 +191,7 @@ export function renderAsk() {
             if (!state.askDockFor) render(null, dom.askDock);
         } });
     }
-    if (kind !== 'plan') present(dom.planPane, false, { kind: 'rise', speed: 'med' });
+    if (kind !== 'plan') present(dom.planPane, false, { as: 'arrive' });
 
     if (!kind) return;
     if (kind === 'plan') renderPlanPane(ask);
@@ -290,7 +290,7 @@ function renderPlanPane(ask) {
     }
 
     paintPlanFoot();
-    present(dom.planPane, true, { kind: 'rise', speed: 'med' });
+    present(dom.planPane, true, { as: 'arrive' });
     closeFind();
     setPlanAside(state.planAside, !dom.planFoot.contains(document.activeElement));
     if (fresh && !state.planAside) dom.planBody.scrollTop = 0;

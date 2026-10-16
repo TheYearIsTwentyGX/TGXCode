@@ -16,6 +16,8 @@ const path = require('path');
 const cfg = require('./config');
 const auth = require('./auth');
 const { SessionIndex } = require('./sessions');
+const { SpendIndex } = require('./spend-index');
+const { Warmer } = require('./search-index');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const hostClient = require('./host-client');
@@ -24,6 +26,8 @@ const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
 const { ClaudeVersion } = require('./claude-version');
 const { ClaudeDocs } = require('./claude-docs');
+const { HookScripts } = require('./hook-scripts');
+const { HookSources } = require('./hook-sources');
 const keymap = require('./keymap');
 const { Spinner } = require('./spinner');
 const { Suggestions } = require('./suggestions');
@@ -31,6 +35,7 @@ const { Drafts } = require('./drafts');
 const { Later } = require('./later');
 const { Standing } = require('./standing');
 const { Snippets } = require('./snippets');
+const { Templates } = require('./templates');
 const { Schedules } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
@@ -44,6 +49,7 @@ const { RunPool } = require('./runs');
 const events = require('./events');
 const scheduler = require('./scheduler');
 const prRefresh = require('./pr-refresh');
+const prReviews = require('./pr-reviews');
 const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
 const { Orchestrators } = require('./orchestrators');
@@ -53,6 +59,7 @@ const { pair } = require('./pairing');
 const { send, NEXT } = require('./http');
 const { laterPayload } = require('./routes/later');
 const { resolveAttachments } = require('./routes/files');
+const viewers = require('./viewers');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
 // The CSRF header every non-GET /api/ call must carry. The old name is still
@@ -83,6 +90,12 @@ const claudeConfig = new ClaudeConfig({
 // key inside a JSON one.
 const claudeDocs = new ClaudeDocs();
 
+// The Hooks page's two reaches past the settings files: the scripts hooks run,
+// and the hooks plugins, skills and agents bring. See the headers of
+// bridge/hook-scripts.js and bridge/hook-sources.js.
+const hookScripts = new HookScripts();
+const hookSources = new HookSources();
+
 // The words a turn in progress calls itself, out of the groups those settings
 // enable. Shares the Prefs instance rather than making its own, so the two
 // cannot read different settings out of the same file.
@@ -112,6 +125,9 @@ const later = new Later();
 // `snippetStore` rather than `snippets` so that nothing here has to wonder
 // whether it is looking at the store or at the array of rows the payload carries.
 const snippetStore = new Snippets();
+// Create calls kept for reuse, with placeholders — the Start dialog's template
+// picker. See bridge/templates.js.
+const templates = new Templates();
 // Sessions that start on a clock. A draft that is never consumed, plus a cron
 // expression, plus a gate — see bridge/schedule.js. Only the everyday instance
 // fires them; the tick in bridge/scheduler.js says why.
@@ -120,6 +136,8 @@ const schedules = new Schedules();
 // see bridge/orchestrators.js. What acts on it is bridge/orchestration.js.
 const orchestrators = new Orchestrators();
 const index = new SessionIndex(flags);
+// Tokens and API-equivalent cost out of the transcripts — see bridge/spend-index.js.
+const spend = new SpendIndex();
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
 // Installed Claude Code against the registry, and which live processes predate
@@ -245,6 +263,13 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
+    // A polling client saying it is watching, so its asks are held for it rather
+    // than auto-denied. Only past the token and the remote refusals above, so a
+    // request that was turned away renews nothing. See bridge/viewers.js.
+    if (pathname.startsWith('/api/') && who.ok && req.headers[viewers.HEADER]) {
+        viewers.leases.touch(String(req.headers[viewers.HEADER]));
+    }
+
     try {
         if (pathname === '/pair' || pathname === '/pair/forget') {
             return pair(req, res, url, pathname, who);
@@ -360,6 +385,11 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/commands-config' || pathname.startsWith('/api/commands-config/')) {
         return 'a project’s commands can only be edited on the machine they run on';
     }
+    // The janitor's GET only reads, so it stays open. Removal deletes a directory
+    // on this machine, which is a decision for somebody looking at it.
+    if (pathname === '/api/worktrees/remove') {
+        return 'worktrees can only be removed at the machine they live on';
+    }
     if (pathname === '/api/shutdown') {
         return 'the bridge can only be shut down from the machine it runs on';
     }
@@ -460,9 +490,11 @@ function remoteRefusal(pathname, method) {
     // An orchestrator's own tools, and a worker's report: they start sessions in
     // fresh worktrees, answer those sessions' permission prompts and send them
     // work — the handoff clause below, several times over. Reading the payload,
-    // changing its settings, dismissing an item and pressing Resume stay open: a
-    // phone is a reasonable place to watch an orchestrator and to restart one the
-    // usage cutoff stopped.
+    // changing its settings, dismissing an item, recording the answer to one of
+    // the brief's decisions and pressing Resume stay open: a phone is a reasonable
+    // place to watch an orchestrator, answer what it asked you, and restart one the
+    // usage cutoff stopped. (The answer itself travels by `/send`, which a paired
+    // phone may already use.)
     if (/^\/api\/sessions\/[^/]+\/orchestrator\/(spawn|next|send|answer|read|stop|close|summary)$/
         .test(pathname) || /^\/api\/sessions\/[^/]+\/report$/.test(pathname)) {
         return 'an orchestrator\u2019s tools only work on the machine its sessions run on';
@@ -470,19 +502,14 @@ function remoteRefusal(pathname, method) {
     if (/^\/api\/sessions\/[^/]+\/handoff$/.test(pathname) && method === 'POST') {
         return 'a session can only be handed work from the machine it runs on';
     }
-    // Attaching a file writes it into a checkout, which is the mkdir clause above.
-    //
-    // This is the weakest of the refusals on this list and it is worth saying so:
-    // a phone taking a photo has nowhere *else* to put it, so "write it on the
-    // machine you are sitting at" is advice a phone cannot take. It was refused in
-    // v1 because the phone surface of the day had no attach affordance to refuse
-    // anything for, and it stays refused because nothing has replaced that reason
-    // yet — not because the argument is strong. If the Android app grows an attach
-    // button, the answer is a smaller cap for a remote caller, not deleting this
-    // line and letting a leaked token write 25MB files into a repo.
-    if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)
-        || pathname === '/api/attachments') {
-        return 'files can only be attached on the machine they are saved to';
+    // Opening an attachment launches whatever Windows opens that kind of file with,
+    // on a desktop the caller is not sitting at. Uploading one is *not* refused here,
+    // though it writes into a checkout like mkdir does: a phone taking a photo has
+    // nowhere else to put it. What a remote caller gets instead is a smaller cap —
+    // MAX_REMOTE_ATTACHMENT_BYTES in bridge/attachments.js, applied by the upload
+    // routes, which are the ones that know who is asking.
+    if (/^\/api\/sessions\/[^/]+\/attachments\/open$/.test(pathname)) {
+        return 'attachments can only be opened on the machine they are saved to';
     }
     return null;
 }
@@ -557,7 +584,8 @@ const {
     tickSchedules, recoverInterruptedReviews, noteScheduledOutcome,
 } = scheduler;
 
-prRefresh.init({ index, pool });
+prRefresh.init({ index, pool, onChanged: () => orchestration.onPrsChanged() });
+prReviews.init({ schedules, pool, index });
 prOwners.init({ index });
 const { tickPrs } = prRefresh;
 
@@ -623,15 +651,21 @@ const ROUTES = [
     require('./routes/bridge'),
     require('./routes/settings'),
     require('./routes/notifications'),
+    require('./routes/digest'),
     require('./routes/sessions'),
     require('./routes/suggestions'),
     require('./routes/drafts'),
     require('./routes/later'),
     require('./routes/snippets'),
+    require('./routes/templates'),
     require('./routes/schedules'),
     require('./routes/dashboard'),
+    require('./routes/search'),
     require('./routes/github'),
+    require('./routes/worktrees'),
+    require('./routes/pr-reviews'),
     require('./routes/quota'),
+    require('./routes/analytics'),
     require('./routes/orchestrators'),
     require('./routes/session'),
     require('./routes/session-workspace'),
@@ -641,9 +675,15 @@ const ROUTES = [
     require('./routes/files'),
 ];
 
+// Builds the full-text index in the background, a few milliseconds at a time.
+// Started once the session index has its first scan. See bridge/search-index.js.
+const searchWarmer = new Warmer(index.searchIndex,
+    () => index.searchCandidates({ includeTest: true }));
+
 const ROUTE_DEPS = {
-    index, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
-    beacon, drafts, later, standing, snippetStore, schedules, claudeVersion, terminals,
+    index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, hookScripts, hookSources,
+    spinner, suggestions,
+    beacon, drafts, later, standing, snippetStore, templates, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent,
@@ -786,9 +826,10 @@ function serveStatic(req, res, pathname, who) {
  * Any live SSE client counts, not just one already following this transcript:
  * the card is a session-level thing and a window that is open can be switched to
  * it. With nothing connected there is nobody to ask, and the runner denies —
- * which is exactly what the app did before approvals existed.
+ * which is exactly what the app did before approvals existed. A polling client
+ * that sends `X-TGXCode-Viewer` counts too, for thirty seconds per poll.
  */
-pool.hasViewer = () => clients.size > 0;
+pool.hasViewer = () => clients.size > 0 || viewers.leases.active() > 0;
 
 // And what it says while it works. Every surface that shows a session working
 // reads `runner.activity` off one SSE message, so deciding it here is what makes
@@ -1009,7 +1050,13 @@ pool.on('turn-complete', (r) => {
     standing.noteTurn(r);
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
+    prReviews.noteTurn(r);
     orchestration.onTurnComplete(r);
+    // The header's running total. The turn's own `costUsd` covers this turn
+    // alone, so the session's transcript is re-read for the whole of it.
+    spend.refreshSession(index, r.sessionId).then((out) => {
+        if (out) broadcast('session-spend', { sessionId: r.sessionId, totals: out.totals });
+    }).catch(() => { /* the next request catches up */ });
 });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
@@ -1066,6 +1113,9 @@ function shutdown(code = 0) {
         // between a turn left running in the host and one that is lost.
         console.error(`[tgxcode] runner shutdown failed: ${err && err.stack || err}`);
     }
+    // Not load-bearing — a stale manifest only means an index is re-read once.
+    searchWarmer.stop();
+    try { index.searchIndex.flushManifest(); } catch { /* best effort */ }
     // Terminals run in their own process groups, so unlike turns they would
     // outlive us if we did not take them with us. A run is the same, and worse
     // if left: its stdout is a pipe nobody is reading any more, so it would fill
@@ -1089,6 +1139,7 @@ function shutdown(code = 0) {
     // losing it means the draft comes back and can be started a second time.
     // flush() merges, so writing here cannot trample another bridge either.
     try { drafts.flush(); } catch { /* nothing to save */ }
+    try { templates.flush(); } catch { /* nothing to save */ }
     // Load-bearing rather than tidy: the process exits well inside the debounce
     // window, and an unflushed `delivering` claim would come back up looking like
     // `pending` — the one transition this store must never make.
@@ -1224,6 +1275,11 @@ takeBackHeld().catch((err) => {
     const t0 = Date.now();
     await index.start();
     console.log(`[tgxcode] indexed ${index.sessions.size} sessions in ${Date.now() - t0}ms`);
+    // Warm the spend index in the background: a cold pass reads every
+    // transcript once, and the first visit to the board should not be that.
+    spend.refresh(index).catch(err => console.error(
+        `[tgxcode] spend index: ${err.message}`));
+    searchWarmer.start();
 
     if (cfg.IS_DEV) {
         console.log('[tgxcode] development instance — the everyday one on '

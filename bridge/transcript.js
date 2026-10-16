@@ -707,8 +707,10 @@ function userText(entry) {
 //
 // **A command invocation is deliberately left in.** `buildEvents` runs
 // `parseCommand` over the result to draw the command chip, so taking the tags
-// off here would leave it nothing to read. Somewhere that wants the command as
-// text rather than as a chip — a title, a search haystack — calls `commandText`.
+// off here would leave it nothing to read. `buildEvents` takes them out of a
+// `user` event's `text` itself, after parsing (`stripCommandTags`). Somewhere
+// that wants the command as text rather than as a chip — a title, a search
+// haystack — calls `commandText`.
 function stripEnvelope(s) {
     return String(s)
         .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -959,14 +961,21 @@ function buildEvents(entries, ctx = {}) {
         // why these are two fields rather than one: the thumbnail is what was sent,
         // the card is the file on disk.
         const attached = parseAttachmentNote(text);
-        const body = attached ? attached.text : (text || '');
-        if (!body && !images.length && !attached) continue;
+        const raw = attached ? attached.text : (text || '');
+        // The command is parsed off the raw text and then its tags come out of
+        // `text`, so a client that renders `text` as the message does not draw
+        // a paragraph of `<command-message>` bookkeeping. A pure invocation is
+        // therefore `text: ""` with `command` set — every renderer here already
+        // draws a command turn from `command`, and the phone has to.
+        const command = parseCommand(raw);
+        const body = command ? stripCommandTags(raw) : raw;
+        if (!body && !command && !images.length && !attached) continue;
 
         events.push({
             id: e.uuid, kind: 'user', ts: e.timestamp,
             text: body, images,
             files: attached ? attached.files : [],
-            command: parseCommand(body),
+            command,
             origin: e.origin && e.origin.kind,
             // The chain entry this turn follows, which is what branching from it
             // keeps history up to: `--resume-session-at` truncates *after* the
@@ -1454,6 +1463,15 @@ function parseCommand(text) {
     return { name: name[1].trim().replace(/^\/+/, ''), args: args ? args[1].trim() : '' };
 }
 
+// The tags a slash-command invocation is written in, removed whole. Only
+// called once `parseCommand` has found a `<command-name>`: prose that merely
+// mentions one of these tags is somebody saying something, not bookkeeping.
+function stripCommandTags(text) {
+    return String(text)
+        .replace(/<(command-[a-z-]+)>[\s\S]*?<\/\1>/g, '')
+        .trim();
+}
+
 /**
  * A user message as text, with a command invocation written the way it was typed.
  *
@@ -1532,7 +1550,11 @@ function resultPayload(block, entry, ctx) {
     let text = '';
     if (typeof block.content === 'string') text = block.content;
     else if (Array.isArray(block.content)) {
+        // An image is described by `images` below and fetched on demand, so it
+        // is left out of the text rather than standing in it as `[image]` —
+        // which used to be all a Read of a screenshot showed.
         text = block.content
+            .filter(c => c.type !== 'image')
             .map(c => (c.type === 'text' ? c.text : `[${c.type}]`))
             .join('\n');
     }
@@ -1590,6 +1612,12 @@ function resultPayload(block, entry, ctx) {
         // Written only when true, so its absence is not "not edited" arriving
         // as a fact — it is the usual case saying nothing.
         planWasEdited: !!(struct && struct.planWasEdited),
+        // The images a result carried — a Read of a PNG, a browser screenshot —
+        // described but not included. Each is ~400 KB of base64 in the
+        // transcript, re-sent on every load and every live tail if it rode
+        // along here, and almost none are ever looked at; the client asks
+        // `/tool-image` for one when its dropdown is opened. See toolResultImage.
+        images: resultImages(block, struct),
     };
 
     // A Task/Agent call writes its own transcript keyed by the tool_use id.
@@ -1622,6 +1650,63 @@ function resultPayload(block, entry, ctx) {
     }
 
     return ev;
+}
+
+/**
+ * `{mediaType, width, height}` per image block in a tool result, in order.
+ * Dimensions are what Claude Code recorded for a Read, and null for anything
+ * else (an MCP screenshot says nothing about its size).
+ */
+function resultImages(block, struct) {
+    if (!Array.isArray(block.content)) return [];
+    const dims = struct && struct.file && struct.file.dimensions;
+    const imgs = block.content.filter(c => c && c.type === 'image');
+    return imgs.map(c => ({
+        mediaType: (c.source && c.source.media_type) || 'image/png',
+        // Only a single-image result can be matched to the one `file` it describes.
+        width: imgs.length === 1 && dims && dims.displayWidth || null,
+        height: imgs.length === 1 && dims && dims.displayHeight || null,
+    }));
+}
+
+// The id formats Claude Code writes (`toolu_…`, and MCP's own), and nothing
+// that could reach outside a JSON string when it is spliced into a needle.
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * The `n`th image a tool result carried, read back out of the transcript.
+ *
+ * From the transcript, not from the file the Read named: that file may have
+ * changed or gone since, and what is worth showing is what Claude saw.
+ * Found with a byte search for the id rather than by parsing the file — a
+ * transcript with screenshots in it runs to tens of megabytes, and only one
+ * line of it is wanted. Every occurrence is tried, not just the first: the
+ * needle can also turn up quoted inside some other entry's text.
+ *
+ * @returns {null | {mediaType: string, data: Buffer}}
+ */
+function toolResultImage(file, toolUseId, n = 0) {
+    if (!TOOL_USE_ID.test(String(toolUseId || ''))) return null;
+    if (!Number.isInteger(n) || n < 0) return null;
+    let buf;
+    try { buf = fs.readFileSync(file); } catch { return null; }
+    const needle = Buffer.from(`"tool_use_id":"${toolUseId}"`);
+    for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) {
+        const start = buf.lastIndexOf(10, at) + 1;
+        let end = buf.indexOf(10, at);
+        if (end < 0) end = buf.length;
+        let entry;
+        try { entry = JSON.parse(buf.subarray(start, end).toString('utf8')); } catch { continue; }
+        const content = entry && entry.message && entry.message.content;
+        if (!Array.isArray(content)) continue;
+        const block = content.find(b => b && b.type === 'tool_result' && b.tool_use_id === toolUseId);
+        if (!block || !Array.isArray(block.content)) continue;
+        const img = block.content.filter(c => c && c.type === 'image')[n];
+        const src = img && img.source;
+        if (!src || src.type !== 'base64' || typeof src.data !== 'string') return null;
+        return { mediaType: src.media_type || 'image/png', data: Buffer.from(src.data, 'base64') };
+    }
+    return null;
 }
 
 /**
@@ -1931,7 +2016,9 @@ function todoProgress(file) {
 
 module.exports = {
     parseLines, scanMeta, buildEvents, branchPoint, readSubagentIndex, readSubagentTranscript,
+    toolResultImage,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
+    stripCommandTags, parseCommand,
     commandText,
     // The three parts of the TodoWrite format: what shape it arrived in
     // (`todoInput`), the list itself (`todoList`) and the count over it

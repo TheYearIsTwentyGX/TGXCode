@@ -1,18 +1,43 @@
 // The Commands group: the `.tgxcode/commands.json` a project declares, as a
 // form and as JSON. Moved out of app.js as it was.
 //
+// Drawn with Preact, as part of the Settings tree rather than hung in it as
+// foreign DOM — see web/rail.js for the pattern. What that settled here:
+//
+// - **A redraw of its own for typing.** CmdGroup keeps a counter the way
+//   NotifyGroup does, and everything that only changes this group — a
+//   keystroke, a fold, the JSON box — redraws just the group through `again()`.
+//   A renderSettings() per keystroke would also rebuild every group still made
+//   with el() and rerun every foreign group's painter. Changes the rest of the
+//   page draws (the file line's "saving…", a tab, a save) still go through
+//   renderSettings(), as they always did.
+// - **Controlled where the draft moves on input, uncontrolled where it moves
+//   on change.** Preact compares `value` with the DOM, and the draft already
+//   holds what was typed, so a controlled box keeps its caret through any
+//   redraw. A box that writes the draft only on change (the port numbers and
+//   its variable, an environment variable's name) would have the old value put
+//   back by a redraw mid-typing, so those are `defaultValue`, keyed by whether
+//   the field is set — and the card by `_k`, which a revert, save or re-read
+//   regenerates — so they still remount with the right value.
+// - **The fold and the footer are state.** The card toggle used to flip
+//   `aria-expanded`, `hidden` and a class in place, and the footer was found
+//   with `querySelector` and repainted, both to dodge a redraw that would have
+//   taken the caret. A redraw no longer does.
+//
 // Imports from app.js, which imports this — safe because nothing here reads an
 // app.js binding while the module evaluates, only when a function is called.
 // Keep it that way: a module-level `const` built from an app.js `const` throws,
 // because every module under web/settings/ evaluates before app.js's body runs.
 
+import { html, useEffect, useState } from '../vendor/preact.js';
 import { get, put } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { state } from '../state.js';
 import { loadCommands } from '../commands.js';
 import { devBrowserShown } from '../app.js';
-import { snipDeleteButton } from '../snippets/settings.js';
+import { DeleteButton } from '../snippets/settings.js';
+import { icon } from '../boards/parts.js';
 import { grow } from '../composer/send.js';
 import { copyPath } from './claude-config.js';
 import { renderSettings, settingsProject } from './index.js';
@@ -169,13 +194,12 @@ function cmdDraft() {
     return s.draft;
 }
 
+/** The draft moved. The caller redraws — the group, or the page. */
 const cmdDirty = () => {
     const s = cmdCfgState();
     s.dirty = true;
     // The problems belong to the document that was refused, not to this one.
     s.problems = null;
-    const foot = dom.setBody.querySelector('.cmd-foot');
-    if (foot) cmdPaintFoot(foot);
 };
 
 /** Strip the client-only key, and drop keys the form left empty. */
@@ -187,100 +211,104 @@ const cmdForWire = () => cmdDraft().map((e) => {
 
 // ── rendering ──────────────────────────────────────────────────────────────
 
+// The mounted group's own redraw, or the page's when it is not mounted.
+let redrawCmds = null;
+const again = () => (redrawCmds ? redrawCmds() : renderSettings());
+
+/** The group, for SETTINGS' `card`. Its cards share one contents entry. */
 export function renderCmdConfig() {
+    return html`<${CmdGroup} key="commands" />`;
+}
+
+function CmdGroup() {
+    const [, redraw] = useState(0);
+    redrawCmds = () => redraw(n => n + 1);
+    useEffect(() => () => { redrawCmds = null; }, []);
+    return cmdSections();
+}
+
+function cmdSections() {
     const s = cmdCfgState();
-    const head = el('section', { class: 'settings-group', id: 'set-g-commands' },
-        el('h2', { class: 'settings-group-title', text: 'Project commands' }),
-        el('p', { class: 'settings-group-note' },
-            'What this project declares in ', el('code', { text: '.tgxcode/' }),
-            ' — one button in the conversation header per command. The shared file '
-            + 'is checked in; the local one is yours and is never committed.'),
-        cmdScopeTabs(),
-        cmdFileLine(),
-        cmdReachNote());
-
+    let tail = null;
     if (s.error) {
-        head.append(el('div', { class: 'settings-error' },
-            `Could not read this project’s commands: ${s.error}`));
-        return [head];
+        tail = html`<div class="settings-error">${
+            `Could not read this project’s commands: ${s.error}`}</div>`;
+    } else if (!s.data) {
+        tail = html`<div class="settings-empty">${
+            s.loading ? 'Reading…' : 'No project selected — pick one above.'}</div>`;
+    } else {
+        tail = [s.stale ? cmdStaleBanner() : null, cmdProblemNotes()];
     }
-    if (!s.data) {
-        head.append(el('div', { class: 'settings-empty',
-            text: s.loading ? 'Reading…' : 'No project selected — pick one above.' }));
-        return [head];
-    }
-    if (s.stale) head.append(cmdStaleBanner());
-    cmdProblemNotes(head);
-
+    const head = html`<section key="head" class="settings-group" id="set-g-commands">
+        <h2 class="settings-group-title">Project commands</h2>
+        <p class="settings-group-note">${'What this project declares in '}<code>.tgxcode/</code>${
+            ' — one button in the conversation header per command. The shared file '
+            + 'is checked in; the local one is yours and is never committed.'}</p>
+        ${cmdScopeTabs()}
+        ${cmdFileLine()}
+        ${cmdReachNote()}
+        ${tail}
+    </section>`;
+    if (s.error || !s.data) return [head];
     return [head, s.tab === 'raw' ? cmdRawCard() : cmdFormCard()];
 }
+
+/** A tag in the file line. */
+const fileTag = (text, bad) => html`<span class=${bad ? 'settings-file-tag bad' : 'settings-file-tag'}
+    >${text}</span>`;
 
 /** Which file, and which of the two ways of looking at it. */
 function cmdScopeTabs() {
     const s = cmdCfgState();
     const rows = s.data ? s.data.files : [];
     const go = (fn) => { if (cmdMayLeave()) { fn(); renderSettings(); } };
-    return el('div', { class: 'cfg-tabs', role: 'tablist' },
-        Object.keys(CMD_SCOPES).map((scope) => {
+    return html`<div class="cfg-tabs" role="tablist">
+        ${Object.keys(CMD_SCOPES).map((scope) => {
             const row = rows.find(f => f.scope === scope);
-            return el('button', {
-                class: `cfg-tab${scope === s.scope ? ' on' : ''}`,
-                type: 'button', role: 'tab', disabled: !row || null,
-                'aria-selected': scope === s.scope ? 'true' : 'false',
-                title: row ? row.file : 'Pick a project above',
-                onclick: () => go(() => { s.scope = scope; cmdClearDrafts(s); }),
-            },
-            CMD_SCOPES[scope],
-            row && !row.exists ? el('span', { class: 'cfg-tab-tag', text: 'none' }) : null,
-            row && row.exists && !row.parsed
-                ? el('span', { class: 'cfg-tab-tag', text: 'broken' }) : null,
-            row && row.symlink ? el('span', { class: 'cfg-tab-tag', text: 'symlink' }) : null);
-        }),
-        el('div', { class: 'cfg-tabs-spacer' }),
-        el('button', {
-            class: `cfg-tab${s.tab === 'form' ? ' on' : ''}`, type: 'button',
-            onclick: () => go(() => { s.tab = 'form'; }),
-        }, 'Form'),
-        el('button', {
-            class: `cfg-tab${s.tab === 'raw' ? ' on' : ''}`, type: 'button',
-            onclick: () => go(() => { s.tab = 'raw'; }),
-        }, 'JSON'));
+            return html`<button key=${scope} class=${`cfg-tab${scope === s.scope ? ' on' : ''}`}
+                type="button" role="tab" disabled=${!row}
+                aria-selected=${scope === s.scope ? 'true' : 'false'}
+                title=${row ? row.file : 'Pick a project above'}
+                onClick=${() => go(() => { s.scope = scope; cmdClearDrafts(s); })}
+                >${CMD_SCOPES[scope]}${
+                    row && !row.exists ? html`<span class="cfg-tab-tag">none</span>` : null}${
+                    row && row.exists && !row.parsed ? html`<span class="cfg-tab-tag">broken</span>` : null}${
+                    row && row.symlink ? html`<span class="cfg-tab-tag">symlink</span>` : null}</button>`;
+        })}
+        <div class="cfg-tabs-spacer"></div>
+        <button class=${`cfg-tab${s.tab === 'form' ? ' on' : ''}`} type="button"
+            onClick=${() => go(() => { s.tab = 'form'; })}>Form</button>
+        <button class=${`cfg-tab${s.tab === 'raw' ? ' on' : ''}`} type="button"
+            onClick=${() => go(() => { s.tab = 'raw'; })}>JSON</button>
+    </div>`;
 }
 
 /** The path being written, and everything true about it worth saying. */
 function cmdFileLine() {
     const s = cmdCfgState();
     const row = cmdCfgRow();
-    const line = el('div', { class: 'settings-file' });
     if (!row) {
-        line.append(el('span', { class: 'settings-file-none' },
-            'No project selected — pick one above to edit its commands.'));
-        return line;
+        return html`<div class="settings-file"><span class="settings-file-none"
+            >No project selected — pick one above to edit its commands.</span></div>`;
     }
-    line.append(...[
-        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
-        el('button', {
-            class: 'settings-file-path', type: 'button', title: 'Copy this path',
-            onclick: () => copyPath(row.file),
-        }, row.file),
-        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
-        row.exists && !row.parsed
-            && el('span', { class: 'settings-file-tag bad', text: 'does not parse' }),
-        row.symlink
-            && el('span', { class: 'settings-file-tag bad', text: 'a symlink — saving is refused' }),
-        !row.writable && !row.symlink
-            && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
-        // The only thing making the local file personal is a line in
-        // .gitignore. When it is missing, a private override becomes a
-        // committed one and nobody finds out until it is in somebody else's
-        // checkout. The app is in a position to notice, so it says so.
-        row.scope === 'project-local' && row.ignored === false
-            && el('span', { class: 'settings-file-tag bad', text: 'not ignored — this would be committed' }),
-        row.scope === 'project-local' && row.ignored && row.ignoredBy
-            && el('span', { class: 'settings-file-tag', text: `ignored by ${row.ignoredBy}` }),
-        s.saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
-    ].filter(Boolean));
-    return line;
+    // The two `ignored` tags: the only thing making the local file personal is
+    // a line in .gitignore. When it is missing, a private override becomes a
+    // committed one and nobody finds out until it is in somebody else's
+    // checkout. The app is in a position to notice, so it says so.
+    return html`<div class="settings-file">
+        <span class="settings-file-lede">Writing to</span>
+        <button class="settings-file-path" type="button" title="Copy this path"
+            onClick=${() => copyPath(row.file)}>${row.file}</button>
+        ${!row.exists ? fileTag('will be created') : null}
+        ${row.exists && !row.parsed ? fileTag('does not parse', true) : null}
+        ${row.symlink ? fileTag('a symlink — saving is refused', true) : null}
+        ${!row.writable && !row.symlink ? fileTag('not writable', true) : null}
+        ${row.scope === 'project-local' && row.ignored === false
+            ? fileTag('not ignored — this would be committed', true) : null}
+        ${row.scope === 'project-local' && row.ignored && row.ignoredBy
+            ? fileTag(`ignored by ${row.ignoredBy}`) : null}
+        ${s.saving ? fileTag('saving…') : null}
+    </div>`;
 }
 
 /**
@@ -297,22 +325,20 @@ function cmdReachNote() {
     const s = cmdCfgState();
     if (!s.data) return null;
     if (s.scope === 'project-local') {
-        return el('p', { class: 'cfg-reach' },
-            el('strong', { text: 'Your local overrides follow you into every worktree.' }),
+        return html`<p class="cfg-reach"><strong>Your local overrides follow you into every worktree.</strong>${
             ' This file is read from the main checkout whichever worktree a session is in, '
             + 'which is what it is for — and it is the tab to use when you want a change to '
-            + 'reach work already in flight.');
+            + 'reach work already in flight.'}</p>`;
     }
-    return el('p', { class: 'cfg-reach' },
-        el('strong', { text: 'A worktree carries its own copy of this file.' }),
-        ' A session running in ', el('code', { text: '.claude/worktrees/…' }),
+    return html`<p class="cfg-reach"><strong>A worktree carries its own copy of this file.</strong>${
+        ' A session running in '}<code>.claude/worktrees/…</code>${
         ' uses that copy, so a change here does not reach it until the branch picks '
-        + 'this up. The ', el('strong', { text: 'Local' }), ' tab is read from the main '
-        + 'checkout for every worktree, and does reach them.');
+        + 'this up. The '}<strong>Local</strong>${' tab is read from the main '
+        + 'checkout for every worktree, and does reach them.'}</p>`;
 }
 
 /** What the bridge already thinks is wrong with these files, before any edit. */
-function cmdProblemNotes(head) {
+function cmdProblemNotes() {
     const s = cmdCfgState();
     const row = cmdCfgRow();
     // A parse failure in the file you are looking at is already on screen, said
@@ -323,33 +349,28 @@ function cmdProblemNotes(head) {
     const loud = (s.data.problems || [])
         .filter(p => !p.informational)
         .filter(p => !(shown && p.file === shown && !p.id));
-    if (!loud.length) return;
+    if (!loud.length) return null;
     // The shape paintSettingsProblems() uses one card up: the path first, in a
     // `code`, then the sentence. Anything else reads as a different kind of
     // message when the two are on screen together, which they routinely are.
-    head.append(el('div', { class: 'settings-problems' },
-        loud.map(p => el('div', { class: 'settings-problem' },
-            p.file ? el('code', { text: shortPath(p.file) }) : null,
-            p.id ? el('code', { text: p.id }) : null,
-            ' ', p.message))));
+    return html`<div class="settings-problems">${loud.map((p, i) => html`<div
+        key=${`${p.file || ''}:${p.id || ''}:${i}`} class="settings-problem">${
+        p.file ? html`<code>${shortPath(p.file)}</code>` : null}${
+        p.id ? html`<code>${p.id}</code>` : null}${' '}${p.message}</div>`)}</div>`;
 }
 
 /** A conflict, kept on screen rather than thrown at a toast. */
 function cmdStaleBanner() {
     const s = cmdCfgState();
-    return el('div', { class: 'cfg-stale' },
-        el('div', { class: 'cfg-stale-head' }, 'This file changed on disk since the page read it.'),
-        el('p', null, 'Nothing was overwritten, and nothing you typed was lost — what is in '
-            + 'the form is still yours. Below is the file as it is now.'),
-        s.stale.text
-            ? el('details', null,
-                el('summary', { text: 'What is on disk' }),
-                el('pre', { class: 'cfg-stale-text', text: s.stale.text }))
-            : null,
-        el('button', {
-            class: 'linkish', type: 'button',
-            onclick: () => { s.stale = null; renderSettings(); },
-        }, 'Dismiss'));
+    return html`<div class="cfg-stale">
+        <div class="cfg-stale-head">This file changed on disk since the page read it.</div>
+        <p>${'Nothing was overwritten, and nothing you typed was lost — what is in '
+            + 'the form is still yours. Below is the file as it is now.'}</p>
+        ${s.stale.text ? html`<details><summary>What is on disk</summary><pre
+            class="cfg-stale-text">${s.stale.text}</pre></details>` : null}
+        <button class="linkish" type="button"
+            onClick=${() => { s.stale = null; renderSettings(); }}>Dismiss</button>
+    </div>`;
 }
 
 // ── the form ───────────────────────────────────────────────────────────────
@@ -357,64 +378,51 @@ function cmdStaleBanner() {
 function cmdFormCard() {
     const s = cmdCfgState();
     const row = cmdCfgRow();
-    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-commands-form' },
-        el('h3', { class: 'settings-group-title', text: 'The commands' }));
+    const card = (...kids) => html`<section key="form" class="settings-group cfg-sub"
+        id="set-g-commands-form"><h3 class="settings-group-title">The commands</h3>${kids}</section>`;
 
-    if (!row) {
-        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
-        return card;
-    }
+    if (!row) return card(html`<div class="cfg-list-none">No file for that scope.</div>`);
     // A file that will not parse has no entries to draw, and drawing an empty
     // form over it would offer to replace somebody's file with nothing.
     if (row.exists && !row.parsed) {
-        card.append(el('div', { class: 'cfg-broken' },
-            el('p', null, el('strong', { text: 'This file does not parse, so the form cannot show it.' }),
+        return card(html`<div class="cfg-broken">
+            <p><strong>This file does not parse, so the form cannot show it.</strong>${
                 ' Nothing here is lost — the JSON tab has the text exactly as it is on disk, '
-                + 'and it is the only thing in the app that can repair one.'),
-            row.problem ? el('pre', { class: 'cfg-stale-text', text: row.problem.message }) : null,
-            el('button', {
-                class: 'btn small', type: 'button',
-                onclick: () => { s.tab = 'raw'; renderSettings(); },
-            }, 'Open the JSON tab')));
-        return card;
+                + 'and it is the only thing in the app that can repair one.'}</p>
+            ${row.problem ? html`<pre class="cfg-stale-text">${row.problem.message}</pre>` : null}
+            <button class="btn small" type="button"
+                onClick=${() => { s.tab = 'raw'; renderSettings(); }}>Open the JSON tab</button>
+        </div>`);
     }
 
     const draft = cmdDraft();
     const shared = s.scope === 'project-local' ? cmdSharedById() : new Map();
     const editable = cmdEditable();
-
-    if (!draft.length) {
-        card.append(el('div', { class: 'cfg-list-none',
-            text: s.scope === 'project-local'
-                ? 'Nothing overridden. Add one to change a shared command for yourself alone.'
-                : 'No commands declared here yet.' }));
-    }
-    draft.forEach((entry, i) => card.append(cmdCard(entry, i, shared, editable)));
-
     const limits = s.data.limits;
-    card.append(el('div', { class: 'cfg-list-add' },
-        el('button', {
-            class: 'linkish', type: 'button',
-            disabled: !editable || draft.length >= limits.maxCommands || null,
-            onclick: () => {
-                // A new row starts with the keys the file will need and nothing
-                // else, so the JSON tab shows exactly what the form says.
-                const added = cmdKeyed(s.scope === 'project-local'
-                    ? { id: '' } : { id: '', label: '', run: '' });
-                draft.push(added);
-                // Open, since the only thing to do with a blank one is fill it in.
-                s.open.add(added._k);
-                cmdDirty();
-                renderSettings();
-            },
-        }, 'Add a command'),
-        draft.length >= limits.maxCommands
-            ? el('span', { class: 'settings-row-note',
-                text: `${limits.maxCommands} is as many as one file may declare.` })
-            : null));
 
-    card.append(cmdFoot());
-    return card;
+    return card(
+        !draft.length ? html`<div class="cfg-list-none">${s.scope === 'project-local'
+            ? 'Nothing overridden. Add one to change a shared command for yourself alone.'
+            : 'No commands declared here yet.'}</div>` : null,
+        draft.map((entry, i) => cmdCard(entry, i, shared, editable)),
+        html`<div class="cfg-list-add">
+            <button class="linkish" type="button"
+                disabled=${!editable || draft.length >= limits.maxCommands}
+                onClick=${() => {
+                    // A new row starts with the keys the file will need and nothing
+                    // else, so the JSON tab shows exactly what the form says.
+                    const added = cmdKeyed(s.scope === 'project-local'
+                        ? { id: '' } : { id: '', label: '', run: '' });
+                    draft.push(added);
+                    // Open, since the only thing to do with a blank one is fill it in.
+                    s.open.add(added._k);
+                    cmdDirty();
+                    renderSettings();
+                }}>Add a command</button>
+            ${draft.length >= limits.maxCommands ? html`<span class="settings-row-note"
+                >${`${limits.maxCommands} is as many as one file may declare.`}</span>` : null}
+        </div>`,
+        cmdFoot());
 }
 
 /**
@@ -453,98 +461,81 @@ function cmdCard(entry, i, shared, editable) {
         if (entry.id) s.openIds.add(entry.id);
     }
 
-    const body = el('div', { class: 'cmd-card-body', hidden: !open || null });
-    const toggle = el('button', {
-        class: 'cmd-card-toggle', type: 'button',
-        'aria-expanded': open ? 'true' : 'false',
-        onclick: () => {
-            const now = toggle.getAttribute('aria-expanded') !== 'true';
-            // Flipped in place rather than through renderSettings(): nothing
-            // else on the page depends on it, and a redraw would take focus.
-            toggle.setAttribute('aria-expanded', now ? 'true' : 'false');
-            body.hidden = !now;
-            card.classList.toggle('open', now);
-            if (now) {
-                s.open.add(entry._k);
-                if (entry.id) s.openIds.add(entry.id);
-            } else {
-                s.open.delete(entry._k);
-                s.openIds.delete(entry.id);
-            }
-        },
-    },
-    el('code', { class: 'cmd-card-id', text: entry.id || 'no id yet' }),
-    el('span', { class: 'cmd-card-name',
-        text: entry.label || (base && base.label) || '' }),
-    local && base ? el('span', { class: 'cfg-tab-tag', text: 'overrides the shared file' }) : null,
-    local && !base && !orphan ? el('span', { class: 'cfg-tab-tag', text: 'local only' }) : null,
-    orphan ? el('span', { class: 'cfg-tab-tag bad', text: 'orphaned' }) : null);
-
-    const head = el('div', { class: 'cmd-card-head' }, toggle, cmdDeleteButton(i, editable));
-
-    const card = el('div', {
-        class: `cmd-card${problems.length ? ' bad' : ''}${open ? ' open' : ''}`, 'data-index': i,
-    }, head, body);
-
-    if (orphan) {
-        body.append(el('p', { class: 'cmd-orphan' },
-            el('strong', { text: 'The shared file no longer declares this id.' }),
-            ' So this is a new command rather than an override, and it needs a label '
-            + 'and a command of its own before anything here will save. ',
-            el('button', {
-                class: 'linkish', type: 'button', disabled: !editable || null,
-                onclick: () => {
-                    if (!hasOwn(entry, 'label')) entry.label = '';
-                    if (!hasOwn(entry, 'run')) entry.run = '';
-                    cmdDirty();
-                    renderSettings();
-                },
-            }, 'Fill those in'),
-            ' or remove it.'));
-    }
+    // Through the group's own redraw: nothing else on the page depends on it.
+    const flip = () => {
+        if (open) {
+            s.open.delete(entry._k);
+            s.openIds.delete(entry.id);
+        } else {
+            s.open.add(entry._k);
+            if (entry.id) s.openIds.add(entry.id);
+        }
+        again();
+    };
 
     // The id is the join key rather than a field: changing it on an override is
     // "delete this and add another", not an edit, and doing it in place would
     // silently orphan the entry.
-    body.append(cmdIdField(entry, i, local, base, editable, problems));
-    for (const field of CMD_FIELDS) {
+    const fields = CMD_FIELDS
         // Settings → DevBrowser → Show off: nothing in the window names it.
         // The key is kept in the file either way; only the field goes.
-        if (field.key === 'devbrowser' && !devBrowserShown()) continue;
-        body.append(cmdField(field, entry, i, { local, base, editable, problems }));
-    }
-    // Filtered rather than passed through: `append` stringifies a null into the
-    // literal word, where el()'s own children skip it. The same trap
-    // docsFileLine() carries a comment about, and it prints "null" under a
-    // command before anybody notices.
-    const preview = cmdPreview(entry, base);
-    if (preview) body.append(preview);
-    return card;
+        .filter(field => field.key !== 'devbrowser' || devBrowserShown())
+        .map(field => cmdField(field, entry, i, { local, base, editable, problems }));
+
+    return html`<div key=${entry._k}
+        class=${`cmd-card${problems.length ? ' bad' : ''}${open ? ' open' : ''}`} data-index=${i}>
+        <div class="cmd-card-head">
+            <button class="cmd-card-toggle" type="button" aria-expanded=${open ? 'true' : 'false'}
+                onClick=${flip}><code class="cmd-card-id">${entry.id || 'no id yet'}</code><span
+                class="cmd-card-name">${entry.label || (base && base.label) || ''}</span>${
+                local && base ? html`<span class="cfg-tab-tag">overrides the shared file</span>` : null}${
+                local && !base && !orphan ? html`<span class="cfg-tab-tag">local only</span>` : null}${
+                orphan ? html`<span class="cfg-tab-tag bad">orphaned</span>` : null}</button>
+            ${cmdDeleteButton(i, editable)}
+        </div>
+        <div class="cmd-card-body" hidden=${!open}>
+            ${orphan ? html`<p class="cmd-orphan"><strong>The shared file no longer declares this id.</strong>${
+                ' So this is a new command rather than an override, and it needs a label '
+                + 'and a command of its own before anything here will save. '}<button
+                class="linkish" type="button" disabled=${!editable}
+                onClick=${() => {
+                    if (!hasOwn(entry, 'label')) entry.label = '';
+                    if (!hasOwn(entry, 'run')) entry.run = '';
+                    cmdDirty();
+                    renderSettings();
+                }}>Fill those in</button>${' or remove it.'}</p>` : null}
+            ${cmdIdField(entry, local, base, editable, problems)}
+            ${fields}
+            ${cmdPreview(entry, base)}
+        </div>
+    </div>`;
 }
 
-function cmdIdField(entry, i, local, base, editable, problems) {
+function cmdIdField(entry, local, base, editable, problems) {
     const s = cmdCfgState();
     const bad = problems.find(p => p.field === 'id');
-    return el('div', { class: `cmd-field${bad ? ' bad' : ''}`, 'data-field': 'id' },
-        el('div', { class: 'cmd-field-head' }, el('span', { class: 'cmd-field-label', text: 'Id' })),
-        el('input', {
-            class: 'settings-text cmd-mono', type: 'text', spellcheck: 'false',
-            value: entry.id || '', placeholder: 'dev',
-            disabled: !editable || null,
-            oninput: (e) => { entry.id = e.target.value; cmdDirty(); },
-            // Re-drawn on blur rather than per keystroke: the id decides whether
-            // a local row is an override or an orphan, and every tag on the card
-            // moves with it.
-            onchange: () => { if (local) renderSettings(); },
-        }),
-        el('p', { class: 'cmd-field-note' },
-            local
-                ? 'The id of the shared command this changes — or a new one, for a command only you have.'
-                : 'How the file refers to this command. Lower case, digits, dot, dash or underscore.'),
-        bad ? el('p', { class: 'cmd-field-bad', text: bad.message }) : null,
-        local && base ? el('p', { class: 'cmd-field-note' },
-            'Matches ', el('code', { text: base.id }), ' in the shared file.') : null,
-        s.data.patterns ? null : null);
+    // Every tag on the card moves with the id — override, local only,
+    // orphaned — so the group redraws as it is typed. Controlled, so the redraw
+    // leaves the caret where it is.
+    const onInput = (e) => {
+        // The old id is forgotten as the fold's second name, or every prefix of
+        // the one being typed would stay remembered as open.
+        if (entry.id && s.open.has(entry._k)) s.openIds.delete(entry.id);
+        entry.id = e.target.value;
+        cmdDirty();
+        again();
+    };
+    return html`<div key="id" class=${`cmd-field${bad ? ' bad' : ''}`} data-field="id">
+        <div class="cmd-field-head"><span class="cmd-field-label">Id</span></div>
+        <input class="settings-text cmd-mono" type="text" spellcheck=${false}
+            value=${entry.id || ''} placeholder="dev" disabled=${!editable} onInput=${onInput} />
+        <p class="cmd-field-note">${local
+            ? 'The id of the shared command this changes — or a new one, for a command only you have.'
+            : 'How the file refers to this command. Lower case, digits, dot, dash or underscore.'}</p>
+        ${bad ? html`<p class="cmd-field-bad">${bad.message}</p>` : null}
+        ${local && base ? html`<p class="cmd-field-note">${'Matches '}<code>${base.id}</code>${
+            ' in the shared file.'}</p>` : null}
+    </div>`;
 }
 
 function cmdField(field, entry, i, ctx) {
@@ -567,26 +558,19 @@ function cmdField(field, entry, i, ctx) {
         renderSettings();
     };
 
-    const head = el('div', { class: 'cmd-field-head' },
-        forced ? null : el('label', { class: 'settings-check cmd-set' },
-            el('input', {
-                type: 'checkbox', checked: set || null, disabled: !editable || null,
-                onchange: (e) => toggle(e.target.checked),
-            }),
-            el('span', { class: 'settings-box' })),
-        el('span', { class: 'cmd-field-label', text: field.label }),
-        !set && !forced && inherited !== undefined
-            ? el('span', { class: 'cmd-field-from', text: 'inherited' })
-            : null);
-
-    return el('div', {
-        class: `cmd-field${bad ? ' bad' : ''}${!set && !forced ? ' unset' : ''}`,
-        'data-field': field.key,
-    },
-    head,
-    cmdControl(field, entry, { set: set || forced, disabled, inherited, local }),
-    field.note ? el('p', { class: 'cmd-field-note', text: field.note }) : null,
-    bad ? el('p', { class: 'cmd-field-bad', text: bad.message }) : null);
+    return html`<div key=${field.key}
+        class=${`cmd-field${bad ? ' bad' : ''}${!set && !forced ? ' unset' : ''}`} data-field=${field.key}>
+        <div class="cmd-field-head">${
+            forced ? null : html`<label class="settings-check cmd-set"><input type="checkbox"
+                checked=${set} disabled=${!editable}
+                onChange=${(e) => toggle(e.target.checked)} /><span class="settings-box"></span></label>`}<span
+            class="cmd-field-label">${field.label}</span>${
+            !set && !forced && inherited !== undefined
+                ? html`<span class="cmd-field-from">inherited</span>` : null}</div>
+        ${cmdControl(field, entry, { set: set || forced, disabled, inherited, local })}
+        ${field.note ? html`<p class="cmd-field-note">${field.note}</p>` : null}
+        ${bad ? html`<p class="cmd-field-bad">${bad.message}</p>` : null}
+    </div>`;
 }
 
 /** What an unticked field becomes when somebody ticks it. */
@@ -610,35 +594,36 @@ function cmdControl(field, entry, o) {
     // and it cannot say `false` out loud, which is exactly what un-hiding a
     // command the shared file hides requires.
     if (field.kind === 'bool') {
-        return el('select', {
-            class: 'settings-select', disabled: o.disabled || null,
-            onchange: (e) => { entry[field.key] = e.target.value === 'on'; cmdDirty(); },
-        },
-        el('option', { value: 'off', selected: value !== true || null }, field.choices[0]),
-        el('option', { value: 'on', selected: value === true || null }, field.choices[1]));
+        return html`<select class="settings-select" disabled=${o.disabled}
+            value=${value === true ? 'on' : 'off'}
+            onChange=${(e) => { entry[field.key] = e.target.value === 'on'; cmdDirty(); again(); }}>
+            <option value="off">${field.choices[0]}</option>
+            <option value="on">${field.choices[1]}</option>
+        </select>`;
     }
 
     if (field.kind === 'area') {
         // A textarea, not an input: `validate()` refuses only a NUL, so a
         // newline is legal in a command — and a single-line input strips one
         // silently, eating half of somebody's command on the first save.
-        return el('textarea', {
-            class: 'cmd-area', spellcheck: 'false', rows: 1, placeholder: ph,
-            disabled: o.disabled || null,
-            onfocus: (e) => grow(e.target, 26, 240),
-            oninput: (e) => { entry[field.key] = e.target.value; grow(e.target, 26, 240); cmdDirty(); },
-        }, value == null ? '' : String(value));
+        // grow() writes the height into `style`, which Preact is never given.
+        return html`<textarea class="cmd-area" spellcheck=${false} rows="1" placeholder=${ph}
+            disabled=${o.disabled} value=${value == null ? '' : String(value)}
+            onFocus=${(e) => grow(e.target, 26, 240)}
+            onInput=${(e) => {
+                entry[field.key] = e.target.value;
+                grow(e.target, 26, 240);
+                cmdDirty();
+                again();
+            }}></textarea>`;
     }
 
     if (field.kind === 'port') return cmdPortControl(entry, field, o);
     if (field.kind === 'env') return cmdEnvControl(entry, field, o);
 
-    return el('input', {
-        class: 'settings-text is-long', type: 'text', spellcheck: 'false',
-        value: value == null ? '' : String(value), placeholder: ph,
-        disabled: o.disabled || null,
-        oninput: (e) => { entry[field.key] = e.target.value; cmdDirty(); },
-    });
+    return html`<input class="settings-text is-long" type="text" spellcheck=${false}
+        value=${value == null ? '' : String(value)} placeholder=${ph} disabled=${o.disabled}
+        onInput=${(e) => { entry[field.key] = e.target.value; cmdDirty(); again(); }} />`;
 }
 
 /** The inherited value, as a placeholder reads it. */
@@ -651,6 +636,14 @@ function cmdPlaceholderOf(field, v) {
     return v === '' ? '(empty)' : String(v);
 }
 
+/**
+ * The port range and its variable.
+ *
+ * Uncontrolled, because they write the draft on change rather than on input:
+ * a controlled box would have the old number put back by any redraw that came
+ * while somebody was typing. Keyed by whether the field is set, so ticking or
+ * unticking "Set here" remounts them with what the draft now says.
+ */
 function cmdPortControl(entry, field, o) {
     const v = o.set && entry.port ? entry.port : null;
     const range = (v && Array.isArray(v.range)) ? v.range : [null, null];
@@ -659,30 +652,30 @@ function cmdPortControl(entry, field, o) {
     // the one place on this tab where "unset" and "set to nothing" look alike.
     const from = o.inherited && typeof o.inherited === 'object' ? o.inherited : null;
     const fromRange = from && Array.isArray(from.range) ? from.range : [null, null];
-    const num = (at) => el('input', {
-        class: 'settings-num', type: 'number', min: 1024, max: 65535,
-        value: range[at] == null ? '' : range[at], disabled: o.disabled || null,
-        placeholder: fromRange[at] == null ? '' : String(fromRange[at]),
-        onchange: (e) => {
+    const k = o.set ? 'set' : 'unset';
+    const num = (at) => html`<input key=${`n${at}:${k}`} class="settings-num" type="number"
+        min="1024" max="65535" defaultValue=${range[at] == null ? '' : range[at]} disabled=${o.disabled}
+        placeholder=${fromRange[at] == null ? '' : String(fromRange[at])}
+        onChange=${(e) => {
             if (!entry.port) entry.port = { range: [0, 0] };
             if (!Array.isArray(entry.port.range)) entry.port.range = [0, 0];
             entry.port.range[at] = Number(e.target.value);
             cmdDirty();
-        },
-    });
-    return el('div', { class: 'cmd-port' },
-        num(0), el('span', { class: 'cmd-port-dash', text: '–' }), num(1),
-        el('input', {
-            class: 'settings-text cmd-mono cmd-port-env', type: 'text', spellcheck: 'false',
-            placeholder: (from && from.env) || 'PORT (optional)', value: (v && v.env) || '',
-            disabled: o.disabled || null,
-            onchange: (e) => {
+            again();
+        }} />`;
+    return html`<div class="cmd-port">
+        ${num(0)}<span key="dash" class="cmd-port-dash">–</span>${num(1)}<input key=${`env:${k}`}
+            class="settings-text cmd-mono cmd-port-env" type="text" spellcheck=${false}
+            placeholder=${(from && from.env) || 'PORT (optional)'} defaultValue=${(v && v.env) || ''}
+            disabled=${o.disabled}
+            onChange=${(e) => {
                 if (!entry.port) return;
                 const name = e.target.value.trim();
                 if (name) entry.port.env = name; else delete entry.port.env;
                 cmdDirty();
-            },
-        }));
+                again();
+            }} />
+    </div>`;
 }
 
 /**
@@ -693,6 +686,9 @@ function cmdPortControl(entry, field, o) {
  * beside the ones this file sets, and the note says the thing the format cannot
  * do: there is no way to *remove* an inherited variable from the local file,
  * only to give it another value.
+ *
+ * Rows are keyed by name, and the name box is uncontrolled and renames on
+ * change: a rename is a new row, which is what it is in the file.
  */
 function cmdEnvControl(entry, field, o) {
     const env = o.set && entry.env && typeof entry.env === 'object' ? entry.env : null;
@@ -700,12 +696,11 @@ function cmdEnvControl(entry, field, o) {
     const inherited = o.inherited && typeof o.inherited === 'object' ? o.inherited : {};
     const extra = Object.keys(inherited).filter(k => !keys.includes(k));
 
-    return el('div', { class: 'cfg-list cmd-env' },
-        keys.map(k => el('div', { class: 'cmd-env-row' },
-            el('input', {
-                class: 'settings-text cmd-mono cmd-env-name', type: 'text', spellcheck: 'false',
-                value: k, disabled: o.disabled || null,
-                onchange: (e) => {
+    return html`<div class="cfg-list cmd-env">
+        ${keys.map(k => html`<div key=${k} class="cmd-env-row">
+            <input class="settings-text cmd-mono cmd-env-name" type="text" spellcheck=${false}
+                defaultValue=${k} disabled=${o.disabled}
+                onChange=${(e) => {
                     const next = e.target.value.trim();
                     if (next === k) return;
                     const was = env[k];
@@ -713,39 +708,32 @@ function cmdEnvControl(entry, field, o) {
                     if (next) env[next] = was;
                     cmdDirty();
                     renderSettings();
-                },
-            }),
-            el('input', {
-                class: 'settings-text cmd-env-value', type: 'text', spellcheck: 'false',
-                value: env[k], disabled: o.disabled || null,
-                oninput: (e) => { env[k] = e.target.value; cmdDirty(); },
-            }),
-            el('button', {
-                class: 'cfg-list-x', type: 'button', disabled: o.disabled || null,
-                'aria-label': `Remove ${k}`, title: 'Remove',
-                onclick: () => { delete env[k]; cmdDirty(); renderSettings(); },
-            }, '×'))),
-        el('div', { class: 'cfg-list-add' },
-            el('button', {
-                class: 'linkish', type: 'button', disabled: o.disabled || null,
-                onclick: () => {
+                }} />
+            <input class="settings-text cmd-env-value" type="text" spellcheck=${false}
+                value=${env[k]} disabled=${o.disabled}
+                onInput=${(e) => { env[k] = e.target.value; cmdDirty(); again(); }} />
+            <button class="cfg-list-x" type="button" disabled=${o.disabled}
+                aria-label=${`Remove ${k}`} title="Remove"
+                onClick=${() => { delete env[k]; cmdDirty(); renderSettings(); }}>×</button>
+        </div>`)}
+        <div class="cfg-list-add">
+            <button class="linkish" type="button" disabled=${o.disabled}
+                onClick=${() => {
                     if (!entry.env || typeof entry.env !== 'object') entry.env = {};
                     let name = 'NAME';
                     for (let n = 2; hasOwn(entry.env, name); n += 1) name = `NAME_${n}`;
                     entry.env[name] = '';
                     cmdDirty();
                     renderSettings();
-                },
-            }, 'Add a variable')),
-        extra.length
-            ? el('div', { class: 'cfg-inherit' },
-                el('div', { class: 'cfg-inherit-head' },
-                    `${extra.length} more from the shared file`),
-                extra.map(k => el('div', { class: 'cfg-inherit-row', text: `${k}=${inherited[k]}` })),
-                el('p', { class: 'cmd-field-note' },
-                    'These add to yours rather than being replaced by them. The format has no '
-                    + 'way to remove one here — only to give it a different value.'))
-            : null);
+                }}>Add a variable</button>
+        </div>
+        ${extra.length ? html`<div class="cfg-inherit">
+            <div class="cfg-inherit-head">${`${extra.length} more from the shared file`}</div>
+            ${extra.map(k => html`<div key=${k} class="cfg-inherit-row">${`${k}=${inherited[k]}`}</div>`)}
+            <p class="cmd-field-note">${'These add to yours rather than being replaced by them. The format has no '
+                + 'way to remove one here — only to give it a different value.'}</p>
+        </div>` : null}
+    </div>`;
 }
 
 /** What this command will actually run, here. */
@@ -756,57 +744,49 @@ function cmdPreview(entry, base) {
     if (!run) return null;
     const out = cmdExpand(run, ctx);
     if (out === String(run)) return null;
-    return el('p', { class: 'cmd-preview' },
-        el('span', { class: 'cmd-preview-lede', text: 'Here, that runs' }),
-        el('code', { text: out }));
+    return html`<p class="cmd-preview"><span class="cmd-preview-lede">Here, that runs</span><code
+        >${out}</code></p>`;
 }
 
 /**
  * Remove a command, with the snippets group's arm-in-place confirm.
  *
- * Reused rather than reimplemented, and not only for the look: that one arms
- * itself inside the button without a re-render, where a version driven from
- * `state` would rebuild the whole panel twice per click — and rebuilding this
- * panel throws away the focus and the caret of whatever field was being typed
- * into. A misclick here takes a button somebody uses out of the header.
+ * Reused rather than reimplemented, and not only for the look: a misclick here
+ * takes a button somebody uses out of the header. "Armed" is the component's
+ * own state, so it lasts across the redraws typing elsewhere causes. A file
+ * that cannot be written gets the same button, disabled — DeleteButton has no
+ * disabled state, and one that cannot arm needs none.
  */
 function cmdDeleteButton(i, editable) {
-    const b = snipDeleteButton('Remove this command', () => {
+    const label = 'Remove this command';
+    if (!editable) {
+        return html`<button class="snip-del" type="button" aria-label=${label} title=${label}
+            disabled>${icon('trash', 13)}</button>`;
+    }
+    return html`<${DeleteButton} label=${label} go=${() => {
         cmdDraft().splice(i, 1);
         cmdDirty();
         renderSettings();
-    });
-    if (!editable) b.disabled = true;
-    return b;
+    }} />`;
 }
 
 // ── saving ─────────────────────────────────────────────────────────────────
 
 function cmdFoot() {
-    const foot = el('div', { class: 'cmd-foot' });
-    cmdPaintFoot(foot);
-    return foot;
-}
-
-function cmdPaintFoot(foot) {
     const s = cmdCfgState();
     const row = cmdCfgRow();
     const editable = cmdEditable();
-    foot.replaceChildren(
-        el('span', { class: `cmd-foot-note${s.problems ? ' bad' : ''}` },
-            s.problems
-                ? `${s.problems.length} ${s.problems.length === 1 ? 'problem' : 'problems'} — nothing was written.`
-                : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.')),
-        el('div', { class: 'cmd-card-spacer' }),
-        el('button', {
-            class: 'btn quiet small', type: 'button', disabled: !s.dirty || null,
-            onclick: () => { cmdClearDrafts(s); renderSettings(); },
-        }, 'Revert'),
-        el('button', {
-            class: 'btn primary small', type: 'button',
-            disabled: !editable || !s.dirty || s.saving || null,
-            onclick: () => saveCmdConfig(),
-        }, row && row.exists ? 'Save' : 'Create the file'));
+    return html`<div class="cmd-foot">
+        <span class=${`cmd-foot-note${s.problems ? ' bad' : ''}`}>${s.problems
+            ? `${s.problems.length} ${s.problems.length === 1 ? 'problem' : 'problems'} — nothing was written.`
+            : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</span>
+        <div class="cmd-card-spacer"></div>
+        <button class="btn quiet small" type="button" disabled=${!s.dirty}
+            onClick=${() => { cmdClearDrafts(s); renderSettings(); }}>Revert</button>
+        <button class="btn primary small" type="button"
+            disabled=${!editable || !s.dirty || s.saving}
+            onClick=${() => saveCmdConfig()}>${row && row.exists ? 'Save' : 'Create the file'}</button>
+    </div>`;
 }
 
 export function cmdClearDrafts(s) {
@@ -905,12 +885,9 @@ function cmdSaveFailed(err) {
 function cmdRawCard() {
     const s = cmdCfgState();
     const row = cmdCfgRow();
-    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-commands-raw' },
-        el('h3', { class: 'settings-group-title', text: 'The file itself' }));
-    if (!row) {
-        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
-        return card;
-    }
+    const card = (...kids) => html`<section key="raw" class="settings-group cfg-sub"
+        id="set-g-commands-raw"><h3 class="settings-group-title">The file itself</h3>${kids}</section>`;
+    if (!row) return card(html`<div class="cfg-list-none">No file for that scope.</div>`);
 
     const readonly = !cmdEditable();
     const onDisk = row.text === null
@@ -921,21 +898,12 @@ function cmdRawCard() {
     // typed here, and it is the only thing that should stop this.
     if (s.raw === null || !s.rawDirty) s.raw = onDisk;
 
-    const note = el('div', { class: `cfg-json-note${s.jsonError ? ' bad' : ''}` },
-        s.jsonError || (s.rawDirty ? 'Edited — not saved.' : 'Matches the file on disk.'));
-    const save = el('button', {
-        class: 'btn primary small', type: 'button',
-        disabled: readonly || !s.rawDirty || s.saving || null,
-        onclick: () => saveCmdText(),
-    }, row.exists ? 'Save' : 'Create the file');
-
-    card.append(
-        el('textarea', {
-            class: 'cfg-json', spellcheck: 'false', autocapitalize: 'off',
-            autocorrect: 'off', disabled: readonly || null,
-            // Parsed on every keystroke rather than on save: the point of the
-            // message is to be there while the mistake is still on screen.
-            oninput: (e) => {
+    return card(
+        html`<textarea class="cfg-json" spellcheck=${false} autocapitalize="off" autocorrect="off"
+            disabled=${readonly} value=${s.raw}
+            onInput=${(e) => {
+                // Parsed on every keystroke rather than on save: the point of the
+                // message is to be there while the mistake is still on screen.
                 s.raw = e.target.value;
                 s.rawDirty = s.raw !== onDisk;
                 s.jsonError = null;
@@ -943,19 +911,18 @@ function cmdRawCard() {
                     try { JSON.parse(s.raw); }
                     catch (err) { s.jsonError = err.message; }
                 }
-                note.className = `cfg-json-note${s.jsonError ? ' bad' : ''}`;
-                note.textContent = s.jsonError
-                    || (s.rawDirty ? 'Edited — not saved.' : 'Matches the file on disk.');
-                save.disabled = readonly || !s.rawDirty || !!s.jsonError;
-            },
-        }, s.raw),
-        el('div', { class: 'cmd-foot' }, note, el('div', { class: 'cmd-card-spacer' }),
-            el('button', {
-                class: 'btn quiet small', type: 'button', disabled: !s.rawDirty || null,
-                onclick: () => { cmdClearDrafts(s); renderSettings(); },
-            }, 'Revert'),
-            save));
-    return card;
+                again();
+            }}></textarea>`,
+        html`<div class="cmd-foot">
+            <div class=${`cfg-json-note${s.jsonError ? ' bad' : ''}`}>${s.jsonError
+                || (s.rawDirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</div>
+            <div class="cmd-card-spacer"></div>
+            <button class="btn quiet small" type="button" disabled=${!s.rawDirty}
+                onClick=${() => { cmdClearDrafts(s); renderSettings(); }}>Revert</button>
+            <button class="btn primary small" type="button"
+                disabled=${readonly || !s.rawDirty || !!s.jsonError || s.saving}
+                onClick=${() => saveCmdText()}>${row.exists ? 'Save' : 'Create the file'}</button>
+        </div>`);
 }
 
 async function saveCmdText() {

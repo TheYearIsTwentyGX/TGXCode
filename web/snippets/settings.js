@@ -170,7 +170,9 @@ function snipSettingsRow(s) {
             <div class="snip-set-title">${s.title}</div>
             <div class="snip-set-preview">${snipPreview(s)}</div>
         </div>
-        <div class="snip-set-badges">${badges.map(b => html`<span class="snip-badge">${b}</span>`)}</div>
+        <div class="snip-set-badges">${s.trigger
+            ? html`<span class="snip-trigger" title="Type this then press Tab in the composer">${s.trigger}</span>`
+            : null}${badges.map(b => html`<span class="snip-badge">${b}</span>`)}</div>
         ${snipMoveButtons('snippet', s.id)}
         <button class="btn small" type="button" onClick=${() => openSnipEditor(s)}>Edit</button>
         <${DeleteButton} label="Delete this snippet" go=${() => deleteSnippet(s)} />
@@ -350,9 +352,9 @@ async function commitSnipOrder() {
  * tuned rather than one you just wrote.
  *
  * Two of them, for the two ways a surface is drawn: `DeleteButton` for Preact,
- * where "armed" is the component's state, and `snipDeleteButton` for the Settings
- * groups still built by hand with `el()` — hooks, project commands, Wispr — which
- * own their nodes and may write to them.
+ * where "armed" is the component's state, and `snipDeleteButton` for what is still
+ * built by hand with `el()` — Wispr's transforms — which owns its nodes and may
+ * write to them.
  */
 export function DeleteButton({ label, go }) {
     const [armed, setArmed] = useState(0);

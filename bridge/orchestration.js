@@ -47,6 +47,8 @@ const {
     shouldNudge, usageTrips, resumeAtFor, describeCounts, cleanSettings, DEFAULT_SETTINGS,
 } = require('./orchestrators');
 const workerRead = require('./worker-read');
+const pulls = require('./pulls');
+const prStore = require('./pr-store');
 const {
     orchestratorInboxEnvelope, orchestratorMessageEnvelope, isOrchestratorMessage, parseOrchestratorMessage,
 } = require('./transcript');
@@ -132,11 +134,18 @@ function orchestratorBrief(id) {
         '  note listing the workers that were cut off — tell those to carry on.',
         '- close_worker when a worker is finished with, so it stops counting.',
         '',
-        'Keep a summary for the user with set_summary: one or two short paragraphs on',
+        'Keep a brief for the user with set_summary: one or two short paragraphs on',
         'what has been done, what is in flight, and anything waiting on them. Rewrite it',
         'after each batch of inbox items you handle and whenever you spawn or close a',
-        'worker. It is shown pinned beneath your conversation, and it is what the user',
-        'reads to catch up — keep it current rather than complete.',
+        'worker. It is what the user reads to catch up — keep it current rather than',
+        'complete. Its structured fields are drawn on the orchestrator page, so fill them:',
+        '- goal: the overall task in one line.',
+        '- decisions: every question you need the user to answer, as a list — not asked',
+        '  in prose, where it scrolls away unanswered. Give options when there are a few',
+        '  obvious answers, and worker when it is about one worker. The user\'s answer',
+        '  arrives as a message starting "Re: <question>"; act on it, then leave that',
+        '  question out of the next set_summary.',
+        '- mergeOrder: the PR numbers in the order they should land, once there are any.',
         ...(add ? ['', '## From the user', '', add] : []),
     ].join('\n');
 }
@@ -185,6 +194,26 @@ function workerRow(w) {
         closedAt: w.closedAt,
         state: st ? st.state : 'stopped',
         pending: st && st.pendingPermission ? st.pendingPermission.kind : null,
+        pr: workerPr(s),
+    };
+}
+
+/**
+ * The newest pull request a worker's transcript links, with its status where
+ * pr-store already has one. Memory only, as pr-owners is: the payload is built
+ * on every filing, and a `gh` call there would put GitHub between a worker
+ * reporting and the window hearing about it. A PR the store has not seen yet
+ * comes back `status: "unknown"` with its number and url, which is still
+ * something to link to.
+ */
+function workerPr(s) {
+    const list = (s && s.prs) || [];
+    const last = list[list.length - 1];
+    if (!last || last.number == null) return null;
+    const [r] = pulls.resolveBatch([last], prStore.lookup);
+    return {
+        number: last.number, url: last.url || null, repo: r.repo || null,
+        title: r.title || null, status: r.status, label: r.label || null,
     };
 }
 
@@ -364,6 +393,22 @@ function onTurnComplete(res) {
 function onStatus(s) {
     if (!s || !s.sessionId) return;
     if (store.get(s.sessionId) && s.state === 'idle') scheduleNudge(s.sessionId);
+    else noteWorkerStatus(s);
+}
+
+// What each worker last looked like in a payload, so a status tick that changed
+// neither its state nor what it waits on — most of them: `status` also moves on
+// every busySince and mode — does not rebroadcast the whole orchestrator.
+const workerSeen = new Map();
+
+/** A worker's state moving is a change to its orchestrator's payload; say so. */
+function noteWorkerStatus(s) {
+    const o = store.orchestratorOf(s.sessionId);
+    if (!o) return;
+    const sig = `${s.state}|${s.pendingPermission ? s.pendingPermission.kind : ''}`;
+    if (workerSeen.get(s.sessionId) === sig) return;
+    workerSeen.set(s.sessionId, sig);
+    emit(o.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -917,14 +962,47 @@ function forget(sessionId) {
     if (o && store.removeWorker(o.id, sessionId)) emit(o.id);
 }
 
-function setSummary(orchId, text) {
-    if (!store.setSummary(orchId, text)) throw refuse(404, 'that session is not an orchestrator');
+function setSummary(orchId, text, fields) {
+    if (!store.setSummary(orchId, text, fields)) throw refuse(404, 'that session is not an orchestrator');
     emit(orchId);
     return store.get(orchId).summary;
 }
 
+/** The user answered one of the brief's decisions — recorded, not delivered. */
+function answerDecision(orchId, decisionId, text) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    if (!String(text || '').trim()) throw refuse(400, 'text is required');
+    const d = store.answerDecision(orchId, decisionId, text);
+    if (!d) throw refuse(404, 'no such decision — the orchestrator may have dropped it');
+    emit(orchId);
+    return d;
+}
+
+// What each orchestrator's workers' pull requests looked like at the last
+// look, so a PR pass that moved somebody else's PR does not rebroadcast this one.
+const prSeen = new Map();
+
+/**
+ * A PR pass moved something. Nothing about a worker changed, so nothing else
+ * would tell its orchestrator's page that the PR it shows went from open to
+ * approved — re-broadcast every orchestrator whose workers' PRs read differently.
+ */
+function onPrsChanged() {
+    for (const id of store.ids()) {
+        const o = store.get(id);
+        const sig = o.workers.map(w => {
+            const pr = workerPr(index.summary(w.id));
+            return pr ? `${pr.number}:${pr.status}` : '';
+        }).join('|');
+        if (prSeen.get(id) === sig) continue;
+        const first = !prSeen.has(id);
+        prSeen.set(id, sig);
+        if (!first) emit(id);
+    }
+}
+
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
-    report, resume, usageFor, setSummary, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

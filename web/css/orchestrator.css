@@ -1,113 +1,125 @@
-/* An orchestrator's dock above the composer — web/orchestrator.js. Sits where
-   the ask dock does and is inset the same way, so the two line up when both are
-   up. Capped in height: the conversation is still the main thing on the page,
-   and a long inbox scrolls inside its own box rather than pushing it away. */
+/* web/css/orchestrator.css
+ *
+ * An orchestrator: its page (web/orchestrator-page.js) — the overview, the
+ * splitter, the conversation column and the worker drawer — and the one line it
+ * leaves above the composer everywhere else (web/orchestrator.js): the plain
+ * conversation's strip back to the page, or a worker's line up to its
+ * orchestrator.
+ */
+
+/* ── the line above the composer ──────────────────────────────────────── */
+/* Sits where the ask dock does and is inset the same way, so the two line up
+   when both are up. One line now, but capped all the same: the inbox and the
+   settings it holds when the paused line is up can wrap. */
 
 .orch-dock {
     flex: none;
-    margin: 0 calc(28px + var(--pane-right)) 6px calc(28px + var(--pane-left));
-    max-height: 42vh;
+    margin: 0 calc(var(--pane-x, 28px) + var(--pane-right)) var(--sp-3) calc(var(--pane-x, 28px) + var(--pane-left));
+    max-height: min(34vh, 320px);
     overflow-y: auto;
     background: var(--s2);
     border: 1px solid var(--s4);
     border-radius: var(--r);
-    transition: margin var(--t-fast) var(--ease);
+    transition: margin var(--dur-fast) var(--ease-standard);
 }
 .orch-dock[hidden] { display: none; }
 
-.orch { max-width: 1000px; margin: 0 auto; padding: 4px 6px; }
+.orch { max-width: 1000px; margin: 0 auto; padding: var(--sp-2) var(--sp-3); }
 
 .orch-paused {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin: 6px 8px;
-    padding: 8px 12px;
+    gap: var(--sp-6);
+    margin: var(--sp-3) var(--sp-4);
+    padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r-sm);
-    background: color-mix(in srgb, var(--yellow) 14%, transparent);
+    background: var(--yellow-cont);
     color: var(--yellow);
-    font: 400 13px/1.45 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
 .orch-paused span { flex: 1; }
 .orch-paused button,
 .orch-worker-line button.orch-link { flex: none; }
+/* The one thing to do about it, so a filled pill on the line's own hue rather
+   than an outline: an outlined button on a tinted ground read as a second box. */
 .orch-paused button {
-    padding: 4px 12px;
-    border: 1px solid var(--yellow);
-    border-radius: var(--r-xs);
-    background: transparent;
-    color: var(--yellow);
-    font: 500 12.5px/1.4 var(--sans);
-    cursor: pointer;
-}
-
-.orch-sec + .orch-sec { border-top: 1px solid var(--s3); }
-.orch-sec-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 10px;
+    height: 28px;
+    padding: 0 var(--sp-6);
     border: 0;
-    background: none;
-    color: var(--text-2);
-    font: 500 12.5px/1.4 var(--sans);
-    text-align: left;
+    border-radius: var(--pill);
+    background: var(--yellow-cont-hover);
+    color: var(--yellow);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
     cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard);
 }
-.orch-sec-head:hover { color: var(--text); }
-.orch-sec-head .twist {
-    display: inline-block;
-    width: 10px;
-    color: var(--text-4);
-    transition: transform var(--t-fast) var(--ease);
-}
-.orch-sec[data-open="true"] .twist { transform: rotate(90deg); }
-.orch-sec-title { flex: none; }
-.orch-count { margin-left: auto; color: var(--text-4); font: 400 11.5px/1.4 var(--mono); }
-.orch-count[data-hot="true"] { color: var(--blue); }
-.orch-sec-body { padding: 0 12px 10px 28px; font: 400 13px/1.5 var(--sans); color: var(--text-2); }
+.orch-paused button:hover { background: var(--yellow-cont-strong); }
 
 .orch-empty { color: var(--text-4); }
-.orch-summary { color: var(--text); }
-.orch-summary p { margin: 0 0 8px; }
-.orch-summary p:last-child { margin-bottom: 0; }
 
-.orch-items, .orch-workers { list-style: none; margin: 0; padding: 0; }
-.orch-item { padding: 6px 0; }
+/* The plain conversation's strip: how the workers stand, and the way back. */
+.orch-strip {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-6);
+    padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-6);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
+    color: var(--text-3);
+}
+.orch-strip-facts { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.orch-strip-needs {
+    flex: none;
+    padding: var(--sp-1) var(--sp-4);
+    border-radius: var(--pill);
+    background: var(--yellow-cont);
+    color: var(--yellow);
+    font-weight: var(--fw-medium);
+}
+
+.orch-items { list-style: none; margin: 0; padding: 0; }
+.orch-item { padding: var(--sp-3) 0; }
 .orch-item + .orch-item { border-top: 1px solid var(--s3); }
 .orch-item[data-status="resolved"], .orch-item[data-status="stale"] { opacity: 0.6; }
-.orch-item-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.orch-item-head { display: flex; align-items: center; gap: var(--sp-4); min-width: 0; }
 .orch-kind {
     flex: none;
-    padding: 0 6px;
-    border-radius: var(--r-xs);
+    /* 1px, not a step: at --lh-snug that makes the chip 17px, the height it had
+       and the height of the line beside it. */
+    padding: 1px var(--sp-3);
+    border-radius: var(--r-2xs);
     background: var(--s4);
     color: var(--text-2);
-    font: 500 10.5px/17px var(--mono);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
 }
 .orch-item[data-kind="plan"] .orch-kind,
 .orch-item[data-kind="permission"] .orch-kind,
 .orch-item[data-kind="ask"] .orch-kind,
 .orch-item[data-kind="question"] .orch-kind {
-    background: color-mix(in srgb, var(--yellow) 18%, transparent);
+    background: var(--yellow-cont);
     color: var(--yellow);
 }
 .orch-item[data-status="new"] .orch-kind { box-shadow: inset 0 0 0 1px var(--blue); }
-.orch-when, .orch-status { color: var(--text-4); font: 400 11.5px/1.4 var(--mono); }
+.orch-when, .orch-status { color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
 .orch-status { margin-left: auto; }
 .orch-x {
     flex: none;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
     border: 0;
+    border-radius: var(--r-2xs);
     background: none;
     color: var(--text-4);
     font-size: 15px;
-    line-height: 1;
+    line-height: var(--lh-none);
     cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
-.orch-x:hover { color: var(--text); }
+.orch-x:hover { background: var(--s3); color: var(--text); }
 
-.orch-text { margin-top: 3px; }
+.orch-text { margin-top: var(--sp-2); }
 .orch-text summary { cursor: pointer; color: var(--text-2); list-style: none; }
 .orch-text summary::-webkit-details-marker { display: none; }
 .orch-text[open] summary { display: none; }
@@ -118,7 +130,7 @@
     white-space: pre-wrap;
     word-break: break-word;
     color: var(--text);
-    font: 400 12.5px/1.5 var(--mono);
+    font: 400 var(--fs-md)/var(--lh-base) var(--mono);
 }
 
 .orch-link {
@@ -135,55 +147,670 @@
 }
 .orch-link:hover { text-decoration: underline; }
 
-.orch-workers li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
-.orch-workers li[data-closed="true"] { opacity: 0.55; }
-.orch-state { color: var(--text-3); font: 400 11.5px/1.4 var(--mono); }
-.orch-state[data-state="busy"], .orch-state[data-state="starting"] { color: var(--green); }
-.orch-branch { margin-left: auto; color: var(--text-4); font: 400 11.5px/1.4 var(--mono); }
-
-.orch-settings { display: grid; gap: 8px; }
-.orch-settings label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.orch-settings input[type="number"] {
-    width: 56px;
-    padding: 2px 6px;
-    border: 1px solid var(--s5);
-    border-radius: var(--r-xs);
-    background: var(--s1);
-    color: var(--text);
-    font: inherit;
-    color-scheme: dark;
-}
+.orch-settings { display: grid; gap: var(--sp-4); }
+.orch-settings label { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+/* A step up from the dock rather than a hairline round a sunk field: the
+   app's controls are tonal everywhere else. */
+.orch-settings input[type="number"],
 .orch-settings select {
-    padding: 2px 6px;
-    border: 1px solid var(--s5);
+    padding: var(--sp-1) var(--sp-3);
+    border: 0;
     border-radius: var(--r-xs);
-    background: var(--s1);
+    background: var(--s3);
     color: var(--text);
     font: inherit;
+    transition: background var(--dur-fast) var(--ease-standard);
 }
-.orch-note { color: var(--text-4); font-size: 12px; }
+.orch-settings input[type="number"] { width: 56px; color-scheme: dark; }
+.orch-settings select { cursor: pointer; }
+.orch-settings select:hover { background: var(--s4); }
+.orch-settings input[type="number"]:focus-visible { outline: none; box-shadow: var(--ring-inset); }
+.orch-note { color: var(--text-4); font-size: var(--fs-sm); }
 /* "All limits": one threshold per window, indented under the line that chose it. */
-.orch-limits { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-left: 24px; }
-.orch-limits label { display: flex; align-items: center; gap: 6px; }
+.orch-limits { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-7); padding-left: var(--sp-9); }
+.orch-limits label { display: flex; align-items: center; gap: var(--sp-3); }
 .orch-limits .orch-note { flex-basis: 100%; }
 .orch-wake { opacity: 0.85; }
 
 .orch-worker-line {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 7px 12px;
+    gap: var(--sp-5);
+    padding: var(--sp-4) var(--sp-6);
     color: var(--text-3);
-    font: 400 12.5px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .orch-dock, .orch-sec-head .twist { transition: none; }
+    .orch-dock, .orch-paused button, .orch-x { transition: none; }
 }
 
-/* The stand-in drawn while a conversation's orchestrator payload loads — see
-   holdOrchestrator. Four lines at the height of four collapsed section heads, so
-   the dock opens at roughly its real size and does not jump when it lands. */
-.orch-loading { padding: 8px 14px; }
-.orch-skel-line { height: 12px; width: 38%; margin: 12px 0; }
+/* The stand-in drawn while a worker's or a plain conversation's orchestrator
+   payload loads — see holdOrchestrator. One line, the height of the line it
+   stands in for. */
+.orch-loading { padding: var(--sp-4) var(--sp-6); }
+.orch-skel-line { height: 12px; width: 38%; margin: var(--sp-6) 0; }
 .orch-skel-line:nth-child(2n) { width: 26%; }
+
+
+/* ── the page: #conv-main as three columns ────────────────────────────── */
+/* The page, a splitter, and the conversation. The conversation's column holds
+   the real transcript (#conv-body), the ask dock and the composer, each placed
+   in it by row, so nothing about them is rebuilt for this. Its ground is the
+   window's (--bg) rather than the pane's: the column reads as a surface the
+   page sits beside, which is also what the splitter is felt to move. Its width
+   is the user's (`--orch-convo-w`, written by the splitter), held between a
+   floor and whatever leaves the page its own. */
+
+.orch-seg[hidden], .orch-page[hidden], .orch-split[hidden], .orch-peek[hidden] { display: none; }
+
+.conv-main[data-orch-page] {
+    --orch-split-w: 12px;
+    display: grid;
+    grid-template-columns:
+        minmax(0, 1fr)
+        var(--orch-split-w)
+        clamp(320px, var(--orch-convo-w, 420px), calc(100% - 440px - var(--orch-split-w)));
+    grid-template-rows: minmax(0, 1fr) auto auto auto;
+    /* The conversation column is narrow, so it is laid out the way a narrow
+       window lays one out (narrow.css): no time gutter. */
+    --gutter: 0px;
+}
+.conv-main[data-orch-page]::before {
+    content: "";
+    grid-column: 3;
+    grid-row: 1 / -1;
+    background: var(--bg);
+    border-radius: var(--r-lg) 0 0 0;
+}
+.conv-main[data-orch-page] > .orch-page  { grid-column: 1; grid-row: 1 / -1; }
+.conv-main[data-orch-page] > .orch-split { grid-column: 2; grid-row: 1 / -1; }
+/* The transcript is clipped to the column's corner. Its top fade (.scroll::before,
+   below) is a square strip of --bg, and unclipped it laid that over the outside
+   of the curve: the wedge there went dark at the top and the pane's --s1 below,
+   so the corner read as a smudge rather than the column's edge. */
+.conv-main[data-orch-page] > .conv-body  { grid-column: 3; grid-row: 1; min-width: 0; border-radius: var(--r-lg) 0 0 0; overflow: hidden; }
+.conv-main[data-orch-page] > .ask-dock   { grid-column: 3; grid-row: 2; margin: 0 var(--sp-6) var(--sp-3); }
+.conv-main[data-orch-page] > .orch-dock  { display: none; }
+.conv-main[data-orch-page] > .composer   { grid-column: 3; grid-row: 4; min-width: 0; padding: var(--sp-2) var(--sp-6) var(--sp-6); }
+.conv-main[data-orch-page] > .orch-peek  { grid-column: 3; grid-row: 1 / -1; }
+
+/* The side columns are the conversation's tools, and the page is where the
+   orchestrator's are; in a column this narrow they would only crowd it. */
+.conv-main[data-orch-page] :is(#checklist, #tasks, #changes, #reviews, #turns) { display: none; }
+.conv-main[data-orch-page] .ev { grid-template-columns: 1fr; column-gap: 0; }
+.conv-main[data-orch-page] .ev-time { display: none; }
+.conv-main[data-orch-page] .log { padding: var(--sp-6) var(--sp-7) var(--sp-10); }
+.conv-main[data-orch-page] .scroll::before { background: linear-gradient(var(--bg), transparent); }
+.conv-main[data-orch-page] .find { right: var(--sp-4); }
+/* The composer in a column this narrow: the field takes a line of its own and
+   its buttons sit under it, right-aligned, rather than squeezing it to a word
+   per line; the options wrap, and the keyboard hint, which only repeats what
+   Settings says, goes. */
+.conv-main[data-orch-page] .input-row { flex-wrap: wrap; justify-content: flex-end; padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-7); }
+.conv-main[data-orch-page] .input-row textarea { flex: 1 1 100%; }
+.conv-main[data-orch-page] .opts { flex-wrap: wrap; row-gap: var(--sp-3); }
+.conv-main[data-orch-page] #composer-hint { display: none; }
+
+/* ── the switch in the header ─────────────────────────────────────────── */
+
+.orch-seg { display: inline-flex; align-self: center; }
+.op-seg { display: inline-flex; padding: var(--sp-1); border-radius: var(--pill); background: var(--s2); }
+.op-seg button {
+    height: 30px;
+    padding: 0 var(--sp-7);
+    border-radius: var(--pill);
+    color: var(--text-3);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+.op-seg button:hover { color: var(--text); }
+.op-seg button[aria-pressed="true"] { background: var(--blue-cont); color: var(--on-blue-cont); }
+
+/* ── the splitter ─────────────────────────────────────────────────────── */
+/* A strip the width of the gap, with a line that shows itself under the
+   pointer and turns blue while held or focused — the one place on the page
+   that moves something by hand. */
+
+.orch-split { position: relative; cursor: col-resize; touch-action: none; }
+.orch-split::after {
+    content: "";
+    position: absolute;
+    top: var(--sp-9);
+    bottom: var(--sp-9);
+    left: 50%;
+    width: 2px;
+    translate: -50% 0;
+    border-radius: var(--pill);
+    background: transparent;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.orch-split:hover::after { background: var(--s6); }
+.orch-split:focus-visible::after, .orch-split[data-dragging]::after { background: var(--blue); }
+.orch-split[data-dragging] { cursor: col-resize; }
+
+/* ── the page ─────────────────────────────────────────────────────────── */
+
+.orch-page {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    container: orchpage / inline-size;
+}
+.op { display: flex; flex-direction: column; min-height: 100%; }
+.op-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-8); align-content: start; padding: var(--sp-4) var(--sp-8) var(--sp-10) var(--pane-x); }
+
+/* Never wider than its column. Whatever the overview holds — a goal, a question,
+   a worker's title, a path in a plan — can be longer than the column is wide,
+   and the column can be as narrow as the splitter allows (or narrower: in a
+   window too small for both floors the conversation keeps its own). So every
+   long token breaks rather than pushing the page sideways — `overflow-wrap` is
+   inherited, so this one line covers text that has no rule of its own — and
+   the few things that read better on one line (a worker's name, its branch on
+   the row, a PR's title in the merge order) truncate with the whole text in a
+   title. Grid tracks are `minmax(0, …)` and flex children `min-width: 0` for
+   the same reason: an `auto` minimum is the content's, which is what overflows. */
+.op, .op-peek { overflow-wrap: anywhere; }
+/* Buttons whose label is somebody else's words — a decision's options, a
+   question's answers — wrap inside themselves rather than running out of the
+   card. Short labels are unchanged: one line, 28px. */
+.op .lbtn, .op-peek .lbtn {
+    flex: 0 1 auto;
+    max-width: 100%;
+    height: auto;
+    min-height: 28px;
+    padding-block: var(--sp-2);
+    line-height: var(--lh-snug);
+    text-align: start;
+}
+/* Markdown in the brief, a plan and a worker's last message: code and tables
+   wrap too, rather than being boxes that scroll sideways. */
+:is(.op, .op-peek) .md :is(pre, code) { white-space: pre-wrap; overflow-wrap: anywhere; }
+:is(.op, .op-peek) .md pre { overflow-x: hidden; }
+:is(.op, .op-peek) .md .table-wrap { overflow-x: hidden; }
+:is(.op, .op-peek) .md table { width: 100%; table-layout: fixed; }
+
+.op-h {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 var(--sp-4);
+    margin: 0;
+    font: 500 var(--fs-md)/var(--lh-snug) var(--sans);
+    color: var(--text-2);
+}
+.op-h span { color: var(--text-4); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
+.op-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-width: 0; }
+.op-empty { color: var(--text-4); font-size: var(--fs-md); }
+.op-quiet { color: var(--text-4); }
+.op-text-btn { color: var(--blue); }
+
+/* The head: the goal, then the readings — a strip with one segment per task,
+   the counts, and the usage meters with the cutoff marked. */
+.op-head { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); padding: var(--sp-2) var(--sp-8) var(--sp-4) var(--pane-x); }
+.op-goal-row { display: flex; align-items: flex-start; gap: var(--sp-6); min-width: 0; }
+.op-goal {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    max-width: 78ch;
+    color: var(--text-2);
+    font: 400 var(--fs-base)/var(--lh-snug) var(--sans);
+    text-wrap: pretty;
+}
+.op-goal[data-empty="true"] { color: var(--text-4); font-size: var(--fs-md); }
+.op-settings-wrap { position: relative; flex: none; margin-top: calc(-1 * var(--sp-3)); }
+.op-settings-btn[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+.op-pop {
+    position: absolute;
+    top: calc(100% + var(--sp-2));
+    right: 0;
+    z-index: var(--z-pop);
+    width: min(440px, 80vw, calc(100cqi - var(--sp-8)));
+    max-width: calc(100cqi - var(--sp-8));
+    padding: var(--sp-6) var(--sp-7);
+    border-radius: var(--r);
+    background: var(--s3);
+    box-shadow: var(--shadow-pop);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+    color: var(--text-2);
+}
+.op-pop .orch-settings input[type="number"], .op-pop .orch-settings select { background: var(--s4); }
+
+.op-readings { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4) var(--sp-9); min-width: 0; }
+.op-progress { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3) var(--sp-6); min-width: 0; }
+.op-strip { display: flex; flex-wrap: wrap; gap: var(--sp-1); min-width: 0; max-width: 360px; }
+.op-strip i {
+    width: 20px;
+    height: 8px;
+    border-radius: var(--r-2xs);
+    background: var(--s4);
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.op-strip i[data-s="merged"] { background: var(--purple); }
+.op-strip i[data-s="pr"]     { background: color-mix(in srgb, var(--purple) 55%, var(--s2)); }
+.op-strip i[data-s="done"]   { background: var(--text-3); }
+.op-strip i[data-s="run"]    { background: var(--green); }
+.op-strip i[data-s="wait"]   { background: var(--yellow); }
+.op-strip i[data-s="fail"]   { background: var(--red); }
+.op-strip i[data-s="idle"]   { background: var(--s6); }
+.op-strip i[data-s="queued"] { background: transparent; box-shadow: inset 0 0 0 1px var(--s6); }
+.op-count { min-width: 0; color: var(--text-3); font-size: var(--fs-md); font-variant-numeric: tabular-nums; }
+.op-count b { color: var(--text); font-weight: var(--fw-medium); }
+.op-count span { color: var(--text-4); }
+
+.op-meters { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-8); min-width: 0; margin-left: auto; }
+.op-meter {
+    display: grid;
+    grid-template-columns: auto 88px auto;
+    align-items: center;
+    gap: var(--sp-4);
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.op-meter b { color: var(--text); font-weight: var(--fw-medium); }
+.op-bar { position: relative; height: 6px; border-radius: var(--pill); background: var(--s4); }
+.op-bar > i { position: absolute; inset: 0 auto 0 0; border-radius: var(--pill); background: var(--text-3); }
+.op-meter[data-tone="near"] .op-bar > i { background: var(--yellow); }
+.op-meter[data-tone="over"] .op-bar > i { background: var(--red); }
+.op-meter[data-tone="near"] b { color: var(--yellow); }
+.op-meter[data-tone="over"] b { color: var(--red); }
+/* The cutoff: a tick the fill runs towards. */
+.op-bar > u { position: absolute; top: -3px; bottom: -3px; width: 2px; translate: -1px 0; border-radius: var(--pill); background: var(--text); }
+
+/* Status dots, in the app's vocabulary: green and breathing is working, yellow
+   is waiting on somebody, hollow is queued, red failed. */
+.op-dot { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: var(--pill); background: var(--s6); }
+.op-dot[data-s="run"]    { background: var(--green); animation: breathe var(--dur-loop) var(--ease-standard) infinite; }
+.op-dot[data-s="wait"]   { background: var(--yellow); }
+.op-dot[data-s="idle"]   { background: var(--text-4); }
+.op-dot[data-s="done"]   { background: var(--text-4); }
+.op-dot[data-s="fail"]   { background: var(--red); }
+.op-dot[data-s="queued"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-4); }
+
+/* PR chips, on the rail's PR colours. */
+.op-pr {
+    --pr: var(--text-3);
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    height: 20px;
+    padding: 0 var(--sp-3);
+    border-radius: var(--r-xs);
+    background: color-mix(in srgb, var(--pr) 14%, var(--s2));
+    color: var(--pr);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--mono);
+    max-width: 100%;
+    white-space: nowrap;
+    text-decoration: none;
+}
+a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 24%, var(--s2)); }
+.op-pr em { min-width: 0; overflow: hidden; font: 400 var(--fs-xs)/var(--lh-none) var(--sans); font-style: normal; color: var(--text-3); text-overflow: ellipsis; }
+.op-pr em:empty { display: none; }
+.op-pr[data-status="open"]           { --pr: var(--blue); }
+.op-pr[data-status="approved"]       { --pr: var(--green); }
+.op-pr:is([data-status="changes"], [data-status="checks-failed"]) { --pr: var(--red); }
+.op-pr:is([data-status="checks-pending"], [data-status="conflicting"]) { --pr: var(--yellow); }
+.op-pr[data-status="merged"]         { --pr: var(--purple); }
+.op-pr:is([data-status="draft"], [data-status="closed"], [data-status="unknown"]) { --pr: var(--text-4); }
+
+/* ── needs you ────────────────────────────────────────────────────────── */
+
+.op-needs { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
+/* Text on the left, its one or two buttons on the right — but the buttons'
+   column is capped, so a long label wraps inside it rather than taking the
+   card's width from the question. A decision with options stacks instead
+   (`data-stack`): its options are answers to read after the question, not
+   buttons beside it, and four of them side by side squeezed the question to a
+   word per line. */
+.op-need {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) fit-content(40%);
+    align-items: center;
+    gap: var(--sp-1) var(--sp-7);
+    padding: var(--sp-5) var(--sp-5) var(--sp-5) var(--sp-7);
+    border-radius: var(--r);
+    background: var(--yellow-tint);
+    box-shadow: inset var(--edge-w) 0 0 var(--yellow);
+}
+.op-need[data-tone="error"] { background: var(--red-cont); box-shadow: inset var(--edge-w) 0 0 var(--red); }
+.op-need[data-answered="true"] { background: var(--s2); box-shadow: inset var(--edge-w) 0 0 var(--s6); }
+.op-need[data-answered="true"] .op-need-q { color: var(--text-2); }
+.op-need[data-busy="true"] { opacity: 0.7; }
+.op-need-q { grid-column: 1; color: var(--text); font: 400 var(--fs-base)/var(--lh-snug) var(--sans); text-wrap: pretty; }
+.op-need-from { grid-column: 1; color: var(--text-3); font-size: var(--fs-sm); }
+.op-need-act { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); min-width: 0; }
+.op-need[data-stack="true"] { grid-template-columns: minmax(0, 1fr); }
+.op-need[data-stack="true"] .op-need-act { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: var(--sp-3); }
+.op-need .lbtn:not(.ok) { background: var(--yellow-cont); color: var(--text-2); }
+.op-need .lbtn:not(.ok):hover { background: var(--yellow-cont-hover); color: var(--text); }
+.op-need .lbtn.op-text-btn { background: none; color: var(--blue); }
+.op-reply { grid-column: 1 / -1; display: flex; gap: var(--sp-3); min-width: 0; margin-top: var(--sp-3); }
+.op-reply input {
+    flex: 1;
+    text-overflow: ellipsis;
+    min-width: 0;
+    height: 32px;
+    padding: 0 var(--sp-6);
+    border-radius: var(--pill);
+    background: var(--s2);
+    color: var(--text);
+    font: 400 var(--fs-md)/var(--lh-none) var(--sans);
+}
+.op-reply .lbtn { flex: none; }
+.op-reply input:focus-visible { outline: none; box-shadow: var(--ring-inset); }
+
+/* ── the brief's prose ────────────────────────────────────────────────── */
+
+.op-brief-text {
+    max-width: 78ch;
+    color: var(--text-2);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+}
+.op-brief-text p { margin: 0 0 var(--sp-4); }
+.op-brief-text p:last-child { margin-bottom: 0; }
+.op-brief[data-open="false"] .op-brief-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+}
+.op-more { justify-self: start; padding: 0; color: var(--blue); font: 500 var(--fs-sm)/var(--lh-snug) var(--sans); }
+.op-more:hover { text-decoration: underline; }
+
+/* ── the stage matrix ─────────────────────────────────────────────────── */
+/* One row per worker over six stage columns. The track is drawn only as far as
+   the worker has come; the stages ahead are empty, and that is where the line
+   saying what it is doing goes. `--at` is the stage it is on, 1–6. */
+
+.op-matrix { --who: minmax(0, 240px); display: grid; grid-template-columns: minmax(0, 1fr); }
+.op-cols, .op-row { display: grid; grid-template-columns: var(--who) minmax(0, 1fr); column-gap: var(--sp-6); align-items: center; }
+.op-cols { padding: 0 var(--sp-6) var(--sp-2); }
+.op-col-names > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-col-names { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); color: var(--text-4); font-size: var(--fs-sm); text-align: center; }
+
+.op-row {
+    --row: var(--s1);
+    width: 100%;
+    min-height: 48px;
+    padding: 0 var(--sp-6);
+    border-radius: var(--r-sm);
+    background: var(--row);
+    text-align: left;
+    color: inherit;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+button.op-row:hover { --row: var(--s2); }
+.op-row[aria-pressed="true"] { --row: var(--s3); }
+.op-row[data-closed="true"] { min-height: 38px; }
+.op-row[data-closed="true"] .op-name { color: var(--text-2); font-size: var(--fs-md); }
+
+.op-who { display: flex; align-items: center; gap: var(--sp-5); min-width: 0; }
+.op-who-text { display: grid; min-width: 0; }
+.op-name { overflow: hidden; color: var(--text); font: 400 var(--fs-base)/var(--lh-tight) var(--sans); white-space: nowrap; text-overflow: ellipsis; }
+.op-branch { overflow: hidden; color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); white-space: nowrap; text-overflow: ellipsis; }
+
+.op-track { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-width: 0; align-items: center; min-height: inherit; }
+.op-track::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: calc(100% / 12);
+    width: calc((var(--at) - 1) * 100% / 6);
+    height: 2px;
+    translate: 0 -50%;
+    border-radius: var(--pill);
+    background: var(--s5);
+}
+.op-track > i { position: relative; z-index: 1; justify-self: center; width: 8px; height: 8px; border-radius: var(--pill); }
+.op-track > i[data-s="done"]    { background: var(--s6); }
+.op-track > i[data-s="unknown"] { background: var(--s5); }
+.op-track > i[data-s="skip"]    { background: var(--row); box-shadow: inset 0 0 0 1.5px var(--s6); }
+.op-track > i[data-s="todo"]    { visibility: hidden; }
+.op-track > i[data-s="now"]     { width: 14px; height: 14px; background: var(--text-3); box-shadow: 0 0 0 4px var(--row); }
+.op-row[data-tone="run"]    .op-track > i[data-s="now"] { background: var(--green); animation: breathe var(--dur-loop) var(--ease-standard) infinite; }
+.op-row[data-tone="wait"]   .op-track > i[data-s="now"] { background: var(--yellow); }
+.op-row[data-tone="you"]    .op-track > i[data-s="now"] { background: var(--row); box-shadow: inset 0 0 0 2.5px var(--yellow), 0 0 0 4px var(--row); }
+.op-row:is([data-tone="pr"], [data-tone="merged"]) .op-track > i[data-s="now"] { background: var(--purple); }
+.op-row:is([data-tone="fail"], [data-tone="error"]) .op-track > i[data-s="now"] { background: var(--red); }
+
+.op-say {
+    position: absolute;
+    top: 50%;
+    left: calc((var(--at) - 0.5) * 100% / 6 + 18px);
+    right: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    overflow: hidden;
+    translate: 0 -50%;
+    color: var(--text-2);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
+    white-space: nowrap;
+}
+.op-say b { flex: 0 1 auto; min-width: 0; overflow: hidden; font-weight: var(--fw-regular); text-overflow: ellipsis; }
+/* The chip gives way after the words have: its status word first, then the chip. */
+.op-say .op-pr { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.op-row:is([data-tone="wait"], [data-tone="you"]) .op-say b { color: var(--yellow); font-weight: var(--fw-medium); }
+.op-row[data-tone="error"] .op-say b { color: var(--red-soft); }
+/* The detail gives way first: the lead says what it is doing, the detail only
+   says more about it. */
+.op-say-detail { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--text-4); font-size: var(--fs-sm); text-overflow: ellipsis; }
+/* The last column has nothing to its right, so a merged row's chip reads left. */
+.op-row[data-at="6"] .op-say { left: auto; right: calc(100% / 12 + 18px); justify-content: flex-end; }
+
+.op-queued { min-height: 36px; cursor: default; }
+.op-queued .op-track::after { display: none; }
+.op-queued .op-say { left: calc(100% / 12 - var(--sp-2)); color: var(--text-3); }
+.op-queued .op-name { color: var(--text-2); }
+
+.op-fold {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    width: 100%;
+    min-height: 40px;
+    padding: 0 var(--sp-6);
+    border-radius: var(--r-sm);
+    color: var(--text-3);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
+    text-align: left;
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.op-fold:hover { background: var(--s2); color: var(--text-2); }
+.op-fold b { color: var(--text-4); font-weight: var(--fw-regular); }
+.op-fold .twist { display: grid; place-items: center; width: 12px; height: 12px; color: var(--text-4); transition: transform var(--dur-fast) var(--ease-standard); }
+.op-fold[aria-expanded="true"] .twist { transform: rotate(90deg); }
+.op-fold-names { min-width: 0; overflow: hidden; color: var(--text-4); text-overflow: ellipsis; }
+
+/* ── merge order: a real sequence, so numbered ───────────────────────── */
+
+.op-order { display: grid; margin: 0; padding: 0; list-style: none; }
+.op-order li {
+    display: grid;
+    grid-template-columns: 22px minmax(0, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: var(--sp-6);
+    min-height: 36px;
+    padding: 0 var(--sp-6);
+    border-radius: var(--r-sm);
+}
+.op-order li:hover { background: var(--s2); }
+.op-num {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--mono);
+    font-variant-numeric: tabular-nums;
+}
+.op-order li[data-merged="true"] .op-num { background: color-mix(in srgb, var(--purple) 22%, var(--s2)); color: var(--purple); }
+.op-order-t { min-width: 0; overflow: hidden; padding: 0; color: var(--text); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); text-align: left; white-space: nowrap; text-overflow: ellipsis; }
+button.op-order-t:hover { color: var(--blue); }
+.op-order-t.op-quiet { color: var(--text-4); font-size: var(--fs-sm); }
+.op-order li[data-merged="true"] .op-order-t { color: var(--text-3); }
+.op-order-rest { padding: var(--sp-2) var(--sp-6) 0 calc(var(--sp-6) + 22px + var(--sp-6)); color: var(--text-4); font-size: var(--fs-sm); }
+
+.op-activity-body .orch-item-head { flex-wrap: wrap; row-gap: var(--sp-1); }
+.op-activity-body .orch-item-head > * { min-width: 0; }
+.op-activity-body { padding: 0 var(--sp-6); font: 400 var(--fs-md)/var(--lh-base) var(--sans); color: var(--text-2); }
+
+/* The page's stand-in while its payload is on the wire. */
+.op-loading { display: grid; gap: var(--sp-6); padding: var(--sp-4) var(--sp-8) var(--sp-8) var(--pane-x); }
+.op-skel { height: 12px; }
+.op-skel-row { height: 36px; border-radius: var(--r-sm); }
+
+/* ── the drawer ───────────────────────────────────────────────────────── */
+/* Over the conversation column only: the matrix stays readable beside it, and
+   the row it came from stays lit. Slides in from the column's own edge (the
+   `drawer` preset in motion.js). */
+
+.orch-peek {
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: var(--r-lg) 0 0 0;
+    background: var(--s2);
+    box-shadow: var(--shadow-pop);
+}
+.op-peek { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
+.op-peek-head { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-7) var(--sp-6) var(--sp-4) var(--sp-8); }
+.op-peek-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-3); }
+.op-peek-top .op-peek-title { flex-basis: 12ch; }
+.op-peek-top > :not(.op-peek-title) { flex: none; }
+.op-peek-title { flex: 1; min-width: 0; margin: 0; padding-top: var(--sp-2); color: var(--text); font: 400 var(--fs-xl)/var(--lh-tight) var(--sans); text-wrap: balance; }
+.op-peek-title:focus-visible { outline: none; }
+.op-peek-top .lbtn { margin-top: var(--sp-2); background: var(--s3); color: var(--text-2); }
+.op-peek-top .lbtn:hover { background: var(--s4); color: var(--text); }
+.op-peek-top .icon-btn:hover { background: var(--s3); }
+.op-peek-facts > * { min-width: 0; }
+/* In the drawer the branch has room for all of it, so it wraps rather than truncating. */
+.op-peek-facts .op-branch { overflow: visible; white-space: normal; }
+.op-peek-facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-6); color: var(--text-3); font-size: var(--fs-sm); }
+.op-peek-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--sp-8); padding: var(--sp-2) var(--sp-8) var(--sp-10); }
+.op-peek-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-width: 0; }
+
+.op-ask {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-5);
+    padding: var(--sp-6) var(--sp-7);
+    border-radius: var(--r);
+    background: var(--yellow-tint);
+    box-shadow: inset var(--edge-w) 0 0 var(--yellow);
+}
+.op-ask[data-busy="true"] { opacity: 0.7; }
+.op-ask p { margin: 0; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); }
+.op-ask p b { color: var(--yellow); font-weight: var(--fw-medium); }
+.op-ask p.op-ask-q { color: var(--text); }
+.op-ask-btns { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+.op-ask .lbtn:not(.ok):not(.op-text-btn) { background: var(--yellow-cont); color: var(--text-2); }
+.op-ask .lbtn:not(.ok):not(.op-text-btn):hover { background: var(--yellow-cont-hover); color: var(--text); }
+.op-ask-what {
+    margin: 0;
+    max-height: 200px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    color: var(--text);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.op-ask-what b { color: var(--yellow); font-weight: var(--fw-medium); }
+.op-plan {
+    max-height: 46vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: var(--sp-6) var(--sp-7);
+    border-radius: var(--r-sm);
+    background: var(--s1);
+    color: var(--text-2);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+}
+.op-note { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
+.op-note textarea {
+    width: 100%;
+    padding: var(--sp-4) var(--sp-6);
+    border-radius: var(--r-sm);
+    background: var(--s2);
+    color: var(--text);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+    resize: vertical;
+}
+.op-note textarea:focus-visible { outline: none; box-shadow: var(--ring-inset); }
+
+.op-steps { display: grid; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.op-steps li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-5); color: var(--text-2); font-size: var(--fs-sm); }
+.op-steps i { width: 8px; height: 8px; border-radius: var(--pill); background: var(--s6); }
+.op-steps li[data-s="now"] i { background: var(--yellow); }
+.op-steps li[data-s="todo"] { color: var(--text-4); }
+.op-steps li[data-s="todo"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--s5); }
+.op-steps-at { color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); font-variant-numeric: tabular-nums; }
+
+.op-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2) var(--sp-6); margin: 0; font-size: var(--fs-sm); }
+.op-facts dt { color: var(--text-4); }
+.op-facts dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.op-files { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+/* Wrapped, not truncated: a path cut at the end loses the file's own name. */
+.op-files li { color: var(--text-2); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
+.op-stat {
+    margin: 0;
+    max-height: 160px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--r-sm);
+    background: var(--s1);
+    color: var(--text-3);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
+}
+.op-last { display: grid; gap: var(--sp-2); }
+.op-last-text { max-height: 260px; overflow-x: hidden; overflow-y: auto; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-base) var(--sans); }
+.op-reports { display: grid; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
+.op-reports li { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-base); }
+
+/* ── a narrow page ────────────────────────────────────────────────────── */
+/* Keyed to the page's own width — the splitter, the rail and the window all
+   change it — not the window's. The stage columns go; each row keeps a short
+   run of pips for how far it has come and says the stage in words. */
+
+@container orchpage (max-width: 760px) {
+    .op-body { padding-right: var(--sp-6); }
+    .op-head { padding-right: var(--sp-6); }
+    .op-matrix { --who: minmax(0, 42%); }
+    .op-cols { display: none; }
+    .op-track { display: flex; align-items: center; gap: var(--sp-2); min-height: 0; }
+    .op-track::after { display: none; }
+    .op-track > i, .op-track > i[data-s="now"] { width: 6px; height: 6px; box-shadow: none; }
+    .op-track > i[data-s="todo"] { display: none; }
+    .op-row[data-tone="you"] .op-track > i[data-s="now"] { box-shadow: inset 0 0 0 1.5px var(--yellow); }
+    .op-say, .op-row[data-at="6"] .op-say, .op-queued .op-say {
+        position: static;
+        translate: none;
+        min-width: 0;
+        margin-left: var(--sp-3);
+        justify-content: flex-start;
+    }
+    .op-say-detail, .op-branch, .op-fold-names { display: none; }
+    .op-need { grid-template-columns: minmax(0, 1fr); }
+    .op-need-act { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: var(--sp-3); }
+    .op-meter { grid-template-columns: auto 56px auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .op-dot[data-s="run"], .op-row[data-tone="run"] .op-track > i[data-s="now"] { animation: none; }
+    .op-seg button, .orch-split::after, .op-strip i, .op-row, .op-fold, .op-fold .twist { transition: none; }
+}

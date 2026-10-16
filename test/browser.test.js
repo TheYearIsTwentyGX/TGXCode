@@ -133,6 +133,17 @@ function check(name, got, want) {
         // the uncatalogued keys should be.
         check('  …and the keys it has no control for', Array.isArray(body.unknown), true);
     }
+    // The Hooks page's other read. Read-only by design, so safe against the
+    // real HOME; the script write is covered in test/hook-scripts.test.js.
+    {
+        const r = await call('/api/claude-config/hook-sources');
+        check('GET /api/claude-config/hook-sources', r.status, 200);
+        const body = JSON.parse(r.body || '{}');
+        check('  …carries plugins, skills and agents',
+            [body.plugins, body.skills, body.agents].every(Array.isArray), true);
+        const bad = await call('/api/claude-config/hook-script?path=%2Fetc%2Fpasswd');
+        check('  …and a script nobody hooks is refused', bad.status, 403);
+    }
     // And what the Memory group reads: one row per CLAUDE.md. The read alone,
     // for the same reason as the block above and rather more so — a write on
     // that route replaces the whole of the user's own instructions to Claude,

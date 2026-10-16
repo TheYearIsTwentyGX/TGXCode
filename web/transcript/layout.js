@@ -183,7 +183,7 @@ export function syncPaneInsets({ instant = false, live = false } = {}) {
 
 const LOG_MAX = 1000;     // the 1000px `.log` and the composer inner share
 const LOG_STEP = 48;      // a drag is at most this much narrow, centred, briefly
-const LOG_SETTLE = 180;   // past --t-fast (110ms), with a frame in hand
+const LOG_SETTLE = 180;   // past --t-fast (120ms), with a frame in hand
 
 /**
  * The width to lay the log out at, given the space it has. Pure, and separate
