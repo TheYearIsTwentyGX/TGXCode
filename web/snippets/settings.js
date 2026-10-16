@@ -170,7 +170,9 @@ function snipSettingsRow(s) {
             <div class="snip-set-title">${s.title}</div>
             <div class="snip-set-preview">${snipPreview(s)}</div>
         </div>
-        <div class="snip-set-badges">${badges.map(b => html`<span class="snip-badge">${b}</span>`)}</div>
+        <div class="snip-set-badges">${s.trigger
+            ? html`<span class="snip-trigger" title="Type this then press Tab in the composer">${s.trigger}</span>`
+            : null}${badges.map(b => html`<span class="snip-badge">${b}</span>`)}</div>
         ${snipMoveButtons('snippet', s.id)}
         <button class="btn small" type="button" onClick=${() => openSnipEditor(s)}>Edit</button>
         <${DeleteButton} label="Delete this snippet" go=${() => deleteSnippet(s)} />

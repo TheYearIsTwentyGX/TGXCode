@@ -14,6 +14,7 @@ import { get } from '../api.js';
 import { el } from '../dom.js';
 import { state } from '../state.js';
 import { closeMenu, drawMenu, live } from './slash.js';
+import { revealCaret } from './caret.js';
 
 // ── @ mentions ───────────────────────────────────────────────────────────
 //
@@ -235,12 +236,37 @@ export function insertMention(name) {
  * construction instead of by a second copy of the logic that can drift. It is
  * also what makes a second composer work for nothing: the dialog's box has its
  * own input listener, which sizes it, and this runs that too.
+ *
+ * **Through `execCommand('insertText')` where it can be**, so the splice is an
+ * edit the browser knows about and Ctrl+Z takes it back out. Writing `.value`
+ * is invisible to the undo stack, so Ctrl+Z after a snippet or a mention could
+ * not take it back. `insertText` fires the `input` event itself. It acts on
+ * whatever has focus, so it is only tried once this box demonstrably has it, and
+ * the result is checked: anywhere it does not land exactly, the old assignment
+ * runs instead.
+ *
+ * **Then the caret is scrolled into view**, last, once the `input` listener has
+ * sized the box. Nothing else does it for a splice, so a snippet longer than the
+ * box used to land with its end, and the caret, out of sight below — see
+ * composer/caret.js.
  */
 export function insertAt(c, from, to, text) {
-    const v = c.input.value;
-    c.input.value = v.slice(0, from) + text + v.slice(to);
+    const box = c.input;
+    const v = box.value;
+    const want = v.slice(0, from) + text + v.slice(to);
     const caret = from + text.length;
-    c.input.setSelectionRange(caret, caret);
-    c.input.dispatchEvent(new Event('input'));
-    c.input.focus();
+    box.focus();
+    let done = false;
+    if (document.activeElement === box && text) {
+        box.setSelectionRange(from, to);
+        try { done = document.execCommand('insertText', false, text); } catch { done = false; }
+        done = done && box.value === want;
+    }
+    if (!done) {
+        box.value = want;
+        box.dispatchEvent(new Event('input'));
+    }
+    box.setSelectionRange(caret, caret);
+    box.focus();
+    revealCaret(box);
 }

@@ -255,7 +255,10 @@ function pluginRoots() {
             const dir = rec && rec.installPath;
             if (!dir || seen.has(dir)) continue;
             seen.add(dir);
-            out.push([dir, name]);
+            // The full `name@marketplace` key rides along third, for the
+            // caller that has to check it against `enabledPlugins` —
+            // bridge/hook-sources.js. The commands here only want the name.
+            out.push([dir, name, key]);
         }
     }
     return out;
@@ -341,4 +344,4 @@ function readDoc(file) {
     return (out.description || out.argumentHint) ? out : null;
 }
 
-module.exports = { SlashCommandCache, SLASH_CACHE_FILE };
+module.exports = { SlashCommandCache, SLASH_CACHE_FILE, pluginRoots };

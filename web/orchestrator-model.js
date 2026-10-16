@@ -83,7 +83,10 @@ export function workerTimeline(w, inbox) {
     const plans = items.filter(i => i.kind === 'plan');
     const firstPlan = plans[plans.length - 1] || null;
     const lastPlan = plans[0] || null;
-    const approved = plans.find(p => settled(p) && APPROVED.has(p.outcome)) || null;
+    // Only the newest plan says whether the worker is through: an older plan
+    // that was approved does not cover a second one filed since, and a plan sent
+    // back is not an approval however many came before it.
+    const approved = lastPlan && settled(lastPlan) && APPROVED.has(lastPlan.outcome) ? lastPlan : null;
     const doneItem = items.find(i => i.kind === 'done') || null;
     const pr = w.pr || null;
     const finished = !!doneItem || !!pr || !!w.closedAt;
@@ -201,18 +204,21 @@ export function workerStage(w, inbox, { prStatus = null, mode = null, decision =
     const status = w.pr ? prStatusOf(w, prStatus) : null;
     const word = workerStateWord(w);
     const planFiled = tl.plan === 'done' || tl.plan === 'unknown';
+    // In plan mode, a plan that was sent back leaves the worker planning again.
+    const planningAgain = mode === 'plan' && tl.plan === 'done' && tl.approved === 'todo' && !w.closedAt;
 
     let at;
     if (w.pr && status === 'merged') at = 6;
     else if (w.pr) at = 5;
     else if (tl.done === 'done') at = 4;
     else if (tl.approved === 'now') at = 2;
-    else if (tl.plan === 'now' || (mode === 'plan' && !planFiled && !w.closedAt)) at = 1;
+    else if (tl.plan === 'now' || planningAgain || (mode === 'plan' && !planFiled && !w.closedAt)) at = 1;
     else at = 3;
 
     const passed = {
         plan: tl.plan === 'skipped' ? 'skip' : tl.plan === 'unknown' ? 'unknown' : 'done',
-        approved: tl.approved === 'skipped' ? 'skip' : tl.approved === 'unknown' ? 'unknown' : 'done',
+        approved: tl.approved === 'skipped' ? 'skip' : tl.approved === 'unknown' ? 'unknown'
+            : tl.approved === 'todo' ? 'todo' : 'done',
         building: 'done',
         done: tl.done === 'unknown' || tl.done === 'todo' ? 'unknown' : 'done',
         pr: 'done',
@@ -299,7 +305,7 @@ export function progress(p, { prStatusOf: fresh = () => null } = {}) {
         else if (finished(w)) s = 'done';
         else if (workerStateWord(w) === 'error') s = 'fail';
         else s = 'idle';
-        return { id: w.id, title: w.title || 'worker', s };
+        return { id: w.id, title: w.title || 'worker', s, status: st };
     });
     for (const q of (p && p.pendingSpawns) || []) segments.push({ id: q.id, title: q.title || 'queued', s: 'queued' });
     return {
@@ -364,25 +370,35 @@ export function needsYou(p, { orchRunner = null, now = Date.now(), stuckMs = STU
  * were started. `rest` is the open workers with no PR yet, which will join the
  * end as they open one.
  *
- * Each row is `{n, number, title, workerId, url, status}`; a number the brief
- * names that no worker owns is still listed, with a null title and workerId.
+ * Each row is `{n, key, number, repo, title, workerId, url, status}`, `key` being
+ * `repo#number` — a number alone is not unique once workers open PRs in more than
+ * one repository. A number the brief names that no worker owns is still listed,
+ * with a null title and workerId; one it names twice is listed once.
  */
 export function mergeOrder(p, { prStatusOf: fresh = () => null } = {}) {
     const workers = ((p && p.workers) || []).slice().sort((a, b) => (a.spawnedAt || 0) - (b.spawnedAt || 0));
     const byNumber = new Map(workers.filter(w => w.pr).map(w => [w.pr.number, w]));
     const listed = (p && p.summary && p.summary.mergeOrder) || [];
-    const numbers = listed.length ? listed : workers.filter(w => w.pr).map(w => w.pr.number);
-    const rows = numbers.map((number, i) => {
-        const w = byNumber.get(number) || null;
-        return {
-            n: i + 1, number, workerId: w ? w.id : null,
+    // From the brief, each number resolved to the worker that opened it; with no
+    // brief, each worker's own PR, so two repositories' #12s stay two rows.
+    const picks = listed.length ? listed.map(number => ({ number, w: byNumber.get(number) || null }))
+        : workers.filter(w => w.pr).map(w => ({ number: w.pr.number, w }));
+    const seen = new Set();
+    const rows = [];
+    for (const { number, w } of picks) {
+        const repo = w ? w.pr.repo || null : null;
+        const key = `${repo || ''}#${number}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+            n: rows.length + 1, key, number, repo, workerId: w ? w.id : null,
             // A number the brief names that no worker here opened: kept, with no
             // title to give it rather than its own number twice.
             title: w ? w.pr.title || w.title || `#${number}` : null,
             url: w ? w.pr.url : null,
             status: w ? prStatusOf(w, fresh(w.id)) : 'unknown',
-        };
-    });
+        });
+    }
     const rest = workers.filter(w => !w.closedAt && !w.pr).map(w => ({ id: w.id, title: w.title || 'worker' }));
     return { rows, rest, fromBrief: listed.length > 0 };
 }

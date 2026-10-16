@@ -1,15 +1,21 @@
-// The hooks editor inside the Claude Code group: a draft of the `hooks` block,
-// its review, and the save.
+// The hooks editor: a draft of one settings file's `hooks` block, its review,
+// and the save. Drawn on the Hooks page (page.js), which owns the state it
+// reads — `state.hooks` — and the redraw it calls.
 //
-// Preact, as part of the Claude Code group (claude-config.js). It used to be
-// built with el() and rebuilt with the group on every renderSettings, which is
-// why typing here patched the footer and the problem marks by hand rather than
-// redrawing. Now the row is a component, HooksRow, and what it decided:
+// It used to be a row inside Settings › Claude Code (web/settings/hooks.js),
+// sharing `state.claudeCfg` with the rest of that group and redrawing the whole
+// panel on every structural change. The move kept the editor as it was and cut
+// those two ties: the draft lives in `state.hooks`, so there is only ever one
+// of it, and renderHooks() redraws the page rather than a panel that is
+// probably closed — renderHooks() returns early when it is, which is why a
+// lift-and-mount would have looked fine and then silently stopped redrawing.
 //
-// - **A keystroke redraws the row, not the panel.** hkDirtied() marks the
-//   draft edited and asks HooksRow to redraw itself — the footer, the problem
-//   marks and the review are all drawn from state. A structural change (a hook
-//   added, moved or removed) still goes through renderSettings.
+// What the editor decided, unchanged by the move:
+//
+// - **A keystroke redraws the editor, not the page.** hkDirtied() marks the
+//   draft edited and asks HooksEditor to redraw itself — the footer, the
+//   problem marks and the review are all drawn from state. A structural change
+//   (a hook added, moved or removed) still goes through renderHooks.
 // - **The draft's boxes are uncontrolled**, keyed by the hook's `_k`, its type
 //   and the field. Several of them normalise what is typed — a timeout of `0`
 //   is dropped, `a, ` becomes `["a"]`, half-typed JSON is not applied — so a
@@ -18,10 +24,8 @@
 // - **Events, groups and hooks are keyed by `_k`**, so moving one moves its
 //   nodes, focus and all.
 //
-// Imports from app.js, which imports this — safe because nothing here reads an
-// app.js binding while the module evaluates, only when a function is called.
-// Keep it that way: a module-level `const` built from an app.js `const` throws,
-// because every module under web/settings/ evaluates before app.js's body runs.
+// Imports from page.js, which imports this — safe because nothing here reads a
+// page.js binding while the module evaluates, only when a function is called.
 
 import { html, useState } from '../vendor/preact.js';
 import { put } from '../api.js';
@@ -30,37 +34,34 @@ import { shortPath } from '../format.js';
 import { icon } from '../boards/parts.js';
 import { DeleteButton } from '../snippets/settings.js';
 import { grow } from '../composer/send.js';
-import {
-    CLAUDE_SCOPES, claudeDir, claudeFlashClass, claudeJsonLink, claudeSavedNote, claudeState,
-    claudeTargetRow, loadClaudeConfig,
-} from './claude-config.js';
-import { foldLabelV, isOpen, setFold } from './fold.js';
-import { renderSettings } from './index.js';
-import { clone, hasOwn } from './project-commands.js';
+import { CLAUDE_SCOPES } from '../settings/claude-config.js';
+import { foldLabelV, isOpen, setFold } from '../settings/fold.js';
+import { clone, hasOwn } from '../settings/project-commands.js';
+import { hkJsonLink, hkState, hkTargetRow, loadHooks, renderHooks } from './page.js';
+import { ScriptPane, scriptToggle } from './script.js';
 
 // ── the hooks editor ───────────────────────────────────────────────────────
 //
-// The one control in this group that is a draft rather than save-on-change,
-// and for the reason the group note gives: a hook `command` is an arbitrary
-// shell string run on every matching event. A half-typed one reaching disk is
-// a hook that fires, so nothing is written until Save — and Save shows what
-// will run before it writes it. That review step is what reversed the old
-// decision to keep this read-only (docs/plans/20-claude-config.md): the JSON
-// tab could always write hooks, so a form adds no capability, only a better
-// place to read one before arming it.
+// The one control for Claude Code's settings that is a draft rather than
+// save-on-change: a hook `command` is an arbitrary shell string run on every
+// matching event. A half-typed one reaching disk is a hook that fires, so
+// nothing is written until Save — and Save shows what will run before it
+// writes it. That review step is what reversed the old decision to keep this
+// read-only (docs/plans/20-claude-config.md): the JSON tab could always write
+// hooks, so a form adds no capability, only a better place to read one before
+// arming it.
 //
 // Seeded from the target file's own `hooks` and never from anything merged.
-// That one is not the list lesson claudeRow() carries so much as its sharper
-// cousin: hooks from every scope all run, so copying the user's hooks into a
-// project file would make each of them fire twice.
+// Hooks from every scope all run, so copying the user's hooks into a project
+// file would make each of them fire twice.
 
 let hkKeySeq = 0;
-const hkKey = () => (hkKeySeq += 1);
+export const hkKey = () => (hkKeySeq += 1);
 
 /** The file whose hooks the editor is showing — the target, or Managed read-only. */
 function hkFileRow() {
-    const s = claudeState();
-    return claudeTargetRow() || (s.data && s.data.files.find(f => f.scope === s.scope)) || null;
+    const s = hkState();
+    return hkTargetRow() || (s.data && s.data.files.find(f => f.scope === s.scope)) || null;
 }
 
 /** The hooks block as the file has it, or undefined. */
@@ -75,8 +76,8 @@ const hkOnDisk = () => {
  * on the object as it is — including ones this page has no control for — and
  * only `_k` and `_script` are ours, stripped by hkForWire().
  */
-function hkDraft() {
-    const s = claudeState();
+export function hkDraft() {
+    const s = hkState();
     if (s.hooksDraft === null) {
         const block = hkOnDisk();
         const scripts = new Map();
@@ -122,30 +123,29 @@ function hkForWire() {
 }
 
 /**
- * How the hooks row redraws itself — set by HooksRow each time it draws. There
- * is one hooks row on the page, and until it has drawn there is nothing of its
- * to redraw, so the fallback is the whole panel.
+ * How the editor redraws itself — set by HooksEditor each time it draws. Until
+ * it has drawn there is nothing of its to redraw, so the fallback is the page.
  */
-let hkRedraw = () => renderSettings();
+let hkRedraw = () => renderHooks();
 
 /**
- * Mark the draft edited, and redraw the row. Only the row: the panel around it
- * has nothing that depends on the draft, and a keystroke should cost a diff of
- * the editor, not of sixty controls.
+ * Mark the draft edited, and redraw the editor. Only the editor: the rail and
+ * the head have nothing that depends on a keystroke, and a keystroke should
+ * cost a diff of the editor, not of the page.
  */
-function hkDirtied() {
+export function hkDirtied() {
     hkMark();
     hkRedraw();
 }
 
-/** Structural change: the draft moved, so the panel is redrawn. */
-function hkChanged() {
+/** Structural change: the draft moved, so the page is redrawn — the rail counts it. */
+export function hkChanged() {
     hkMark();
-    renderSettings();
+    renderHooks();
 }
 
 function hkMark() {
-    const s = claudeState();
+    const s = hkState();
     s.hooksDirty = true;
     s.hooksReview = false;
     // The problems belong to the draft that was checked, not this one.
@@ -162,14 +162,14 @@ export function hkClearDraft(s) {
 
 /** Has this file's hooks block moved since the draft was seeded from it? */
 function hkIsStale() {
-    const s = claudeState();
+    const s = hkState();
     if (!s.hooksDirty || s.hooksSeed === null) return false;
     const onDisk = hkOnDisk();
     return JSON.stringify(onDisk === undefined ? null : onDisk) !== s.hooksSeed;
 }
 
-const hkEventInfo = (name) => (claudeState().data.hookEvents || []).find(e => e.name === name) || null;
-const hkTypeInfo = (type) => (claudeState().data.hookTypes || []).find(t => t.type === type) || null;
+const hkEventInfo = (name) => (hkState().data.hookEvents || []).find(e => e.name === name) || null;
+const hkTypeInfo = (type) => (hkState().data.hookTypes || []).find(t => t.type === type) || null;
 
 /** What a hook does, in one line — the same field the bridge's summary picks. */
 function hkTarget(h) {
@@ -238,7 +238,7 @@ function hkChanges() {
         }
         return rows;
     };
-    const before = flat(JSON.parse(claudeState().hooksSeed || 'null'));
+    const before = flat(JSON.parse(hkState().hooksSeed || 'null'));
     const after = flat(hkForWire());
     const take = (from, key) => {
         const i = from.findIndex(r => r.key === key);
@@ -255,32 +255,25 @@ function hkChanges() {
 }
 
 /**
- * The Hooks row — the editor, with the facts around it.
+ * The editor, for one event or for every event in the file.
  *
- * Not claudeRow()'s shape: that row has a Clear button in its side column that
- * saves on click, and a one-click "remove every hook in this file" is exactly
- * the save-without-looking this editor exists not to have. Clearing is
+ * `event` is what the page's rail has selected; `null` is "All events", which
+ * is the editor as it was in Settings. Filtering is drawing only: the draft is
+ * always the whole file's block, and Save always writes all of it, because the
+ * block is one key and the review compares all of it.
+ *
+ * There is no Clear button: a one-click "remove every hook in this file" is
+ * exactly the save-without-looking this editor exists not to have. Clearing is
  * deleting the events and saving, through the same review as everything else.
  */
-export function claudeHooksRow(row) {
-    return html`<${HooksRow} key=${row.path} row=${row} />`;
-}
-
-function HooksRow({ row }) {
+export function HooksEditor({ event }) {
     const [, redraw] = useState(0);
     hkRedraw = () => redraw(n => n + 1);
 
-    const s = claudeState();
+    const s = hkState();
     const fileRow = hkFileRow();
-    const target = claudeTargetRow();
-    const editable = !!target && target.writable && !target.symlink && !(target.exists && !target.parsed);
+    const editable = hkEditable();
     const off = s.data.effective.disableAllHooks;
-
-    const text = html`<div class="settings-row-text">
-        <div class="settings-row-label">${row.label}<code class="cfg-path">${row.path}</code></div>
-        <div class="settings-row-note">${'Each event holds groups; a group’s matcher picks what it fires for, and '
-            + 'its hooks run in order. Nothing here is written until you save.'}</div>
-    </div>`;
 
     const body = [];
     if (off && off.value === true) {
@@ -293,23 +286,23 @@ function HooksRow({ row }) {
     if (fileRow && fileRow.exists && !fileRow.parsed) {
         body.push(html`<div key="broken" class="cfg-broken">
             <p><strong>This file does not parse, so its hooks cannot be shown.</strong>${
-                ' The JSON tab has it exactly as it is on disk.'}</p>
-            ${claudeJsonLink('hooks', 'Open the JSON tab')}
+                ' The JSON tab in Settings has it exactly as it is on disk.'}</p>
+            ${hkJsonLink('Open the JSON tab')}
         </div>`);
-        return hkWrap(row, text, body);
+        return html`<div class="hk">${body}</div>`;
     }
     if (onDisk !== undefined && !isPlainObj(onDisk)) {
         body.push(html`<div key="not-object" class="cfg-broken">
             <p><strong>hooks here is not an object.</strong>${
                 ' Claude Code will ignore it, and the editor will not guess what it meant.'}</p>
-            ${claudeJsonLink('hooks', 'Fix it as JSON')}
+            ${hkJsonLink('Fix it as JSON')}
         </div>`);
-        return hkWrap(row, text, body);
+        return html`<div class="hk">${body}</div>`;
     }
 
     const draft = hkDraft();
     // The file moved under a draft. The draft is kept — see claudeStaleBanner()
-    // for why — and Save stays refused until the reader has looked.
+    // in Settings for why — and Save stays refused until the reader has looked.
     const now = JSON.stringify(onDisk === undefined ? null : onDisk);
     if (hkIsStale()) {
         body.push(html`<div key="stale" class="cfg-stale">
@@ -320,28 +313,60 @@ function HooksRow({ row }) {
                 JSON.stringify(onDisk ?? null, null, 2)}</pre></details>
             <div class="hk-actions">
                 <button class="btn small" type="button"
-                    onClick=${() => { s.hooksSeed = now; s.hooksReview = false; renderSettings(); }}>Keep my edits</button>
+                    onClick=${() => { s.hooksSeed = now; s.hooksReview = false; renderHooks(); }}>Keep my edits</button>
                 <button class="btn quiet small" type="button"
-                    onClick=${() => { hkClearDraft(s); renderSettings(); }}>Take what is on disk</button>
+                    onClick=${() => { hkClearDraft(s); renderHooks(); }}>Take what is on disk</button>
             </div>
         </div>`);
     }
 
-    if (!draft.length) body.push(html`<div key="none" class="cfg-list-none">No hooks in this file.</div>`);
     const problems = s.hooksProblems || [];
-    for (const [i, ev] of draft.entries()) body.push(hkEventCard(ev, i, editable, problems));
-    if (editable) body.push(hkAddEvent(draft));
-    body.push(hkElsewhere());
+    const shown = event ? draft.filter(ev => ev.event === event) : draft;
+    if (!shown.length) {
+        body.push(html`<div key="none" class="cfg-list-none">${event
+            ? `No ${event} hooks in this file.` : 'No hooks in this file.'}</div>`);
+        if (event && editable) {
+            body.push(html`<div key="add-here" class="cfg-list-add"><button class="linkish" type="button"
+                onClick=${() => hkAddEventNamed(event)}>${`Add a hook on ${event}`}</button></div>`);
+        }
+    }
+    for (const ev of shown) body.push(hkEventCard(ev, draft.indexOf(ev), editable, problems));
+    if (editable && !event) body.push(hkAddEvent(draft));
+    body.push(hkElsewhere(event));
     if (editable || s.hooksDirty) body.push(hkFoot());
-    body.push(html`<div key="json" class="cfg-list-add">${claudeJsonLink('hooks', 'Edit as JSON')}</div>`);
-    return hkWrap(row, text, body);
+    return html`<div class="hk">${body}</div>`;
 }
 
-function hkWrap(row, text, body) {
-    return html`<div class=${`settings-row is-wide${claudeFlashClass(row.path)}`} data-path=${row.path}>
-        <div class="settings-row-head">${text}</div>
-        <div class="settings-row-wide"><div class="hk">${body}</div></div>
-    </div>`;
+/** Can the scope the page is on be written at all? */
+export function hkEditable() {
+    const target = hkTargetRow();
+    return !!target && target.writable && !target.symlink && !(target.exists && !target.parsed);
+}
+
+/**
+ * Put an event in the draft, open, with one group — or say it is there.
+ * Used by the add-event select, the "Add a hook on X" link and the recipes,
+ * which pass `append` to add their group to an event the file already has.
+ *
+ * @returns {object|null} the event's draft entry, or null when it was refused
+ */
+export function hkAddEventNamed(name, { group = hkNewGroup(), append = false } = {}) {
+    const draft = hkDraft();
+    if (!name) return null;
+    let ev = draft.find(e => e.event === name);
+    if (ev && !append) {
+        toast(`${name} is already here — add a matcher to it instead.`, 'warn');
+        return null;
+    }
+    if (ev) ev.groups.push(group);
+    else {
+        ev = { _k: hkKey(), event: name, groups: [group] };
+        draft.push(ev);
+    }
+    // Open, or the event you just added would arrive folded shut.
+    setFold(`hook:${name}`, true);
+    hkChanged();
+    return ev;
 }
 
 /** A small text button — ↑, ↓, duplicate — in the style of the list's ×. */
@@ -371,7 +396,7 @@ function hkEventCard(ev, i, editable, problems) {
     const hooks = ev.groups.reduce((n, g) => n + g.hooks.length, 0);
     return html`<div key=${ev._k} class=${`cmd-card hk-event${bad.length ? ' bad' : ''}${open ? '' : ' is-folded'}`}>
         <div class="cmd-card-head">
-            ${foldLabelV(key, open, html`<code class="cmd-card-id">${ev.event}</code>`, 'set-fold is-card')}
+            ${foldLabelV(key, open, html`<code class="cmd-card-id">${ev.event}</code>`, 'set-fold is-card', renderHooks)}
             ${info
                 ? html`<span class="cmd-card-name">${info.blurb.replace(/`/g, '')}</span>`
                 : html`<span class="cfg-tab-tag"
@@ -400,8 +425,8 @@ function hkEventCard(ev, i, editable, problems) {
     </div>`;
 }
 
-const hkNewHook = () => ({ _k: hkKey(), _script: null, type: 'command', command: '' });
-const hkNewGroup = () => ({ _k: hkKey(), hooks: [hkNewHook()] });
+export const hkNewHook = () => ({ _k: hkKey(), _script: null, type: 'command', command: '' });
+export const hkNewGroup = () => ({ _k: hkKey(), hooks: [hkNewHook()] });
 
 /**
  * One matcher group.
@@ -414,7 +439,7 @@ function hkGroup(ev, g, gi, info, editable, problems) {
     const takesMatcher = !info || info.matcher !== null || typeof g.matcher === 'string';
     const listId = `hk-m-${g._k}`;
     const options = !info ? [] : info.matcher === 'tool'
-        ? (claudeState().data.toolNames || [])
+        ? (hkState().data.toolNames || [])
         : (info.values || []);
     const removeGroup = () => {
         const at = ev.groups.indexOf(g);
@@ -468,7 +493,7 @@ function hkGroup(ev, g, gi, info, editable, problems) {
  * leftover `command` is a file that says two things.
  */
 function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
-    const types = claudeState().data.hookTypes || [];
+    const types = hkState().data.hookTypes || [];
     const known = !!hkTypeInfo(h.type);
     const bad = problems.filter(p => p.k === h._k);
     const tool = (hkEventInfo(ev.event) || {}).matcher === 'tool';
@@ -493,10 +518,7 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
             ${types.map(t => html`<option key=${t.type} value=${t.type}>${t.label}</option>`)}
             ${!known ? html`<option key="unknown" value=${h.type || ''}>${`${h.type || 'no type'} (unknown)`}</option>` : null}
         </select>
-        ${h._script
-            ? html`<span class=${`cfg-script${h._script.exists ? '' : ' bad'}`} title=${h._script.file}>${
-                h._script.exists ? 'script present' : `script missing — ${h._script.file}`}</span>`
-            : null}
+        ${h._script ? hkScriptTag(h) : null}
         <div class="cmd-card-spacer"></div>
         ${editable && g.hooks.length > 1
             ? hkMini('↑', 'Run this one earlier', hi === 0, () => hkMove(g.hooks, hi, -1)) : null}
@@ -520,6 +542,8 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
     if (!known) {
         return html`<div key=${h._k} class=${cls}>${head}${marks}${hkJsonField(h, dis)}</div>`;
     }
+    const script = h._script && hkState().script && hkState().script.k === h._k
+        ? html`<${ScriptPane} key="script" />` : null;
 
     // Fields by type. `str` edits one string key and deletes it when emptied,
     // so the file never collects `"statusMessage": ""`.
@@ -616,6 +640,7 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
         ${head}
         ${marks}
         ${fields}
+        ${script}
         <${HkMore} key=${fk('more')} open=${anyMore}>${more}</${HkMore}>
         ${extra.length
             ? html`<p key="extra" class="cmd-field-note">${'Also in the file, kept as it is: '}${
@@ -750,16 +775,8 @@ function hkJsonField(h, dis) {
  */
 function hkAddEvent(draft) {
     const have = new Set(draft.map(e => e.event));
-    const events = (claudeState().data.hookEvents || []).filter(e => !have.has(e.name));
-    const add = (name) => {
-        if (!name) return false;
-        if (have.has(name)) { toast(`${name} is already here — add a matcher to it instead.`, 'warn'); return false; }
-        draft.push({ _k: hkKey(), event: name, groups: [hkNewGroup()] });
-        // Open, or the event you just added would arrive folded shut.
-        setFold(`hook:${name}`, true);
-        hkChanged();
-        return true;
-    };
+    const events = (hkState().data.hookEvents || []).filter(e => !have.has(e.name));
+    const add = (name) => !!hkAddEventNamed(name);
     return html`<div key="add" class="cfg-list-add hk-add">
         <select class="settings-select" value=""
             onChange=${(e) => {
@@ -770,7 +787,7 @@ function hkAddEvent(draft) {
                     const name = (window.prompt('The event’s name, exactly as Claude Code spells it:') || '').trim();
                     done = add(name);
                 } else done = add(v);
-                if (!done) renderSettings();
+                if (!done) renderHooks();
             }}>
             <option key="" value="">Add a hook on…</option>
             ${events.map(e => html`<option key=${e.name} value=${e.name}>${`${e.name} — ${e.blurb.replace(/`/g, '')}`}</option>`)}
@@ -786,15 +803,15 @@ function hkAddEvent(draft) {
  * fires" is what the old one-scope summary made likely: it showed the
  * strongest file's hooks and nothing else.
  */
-function hkElsewhere() {
-    const s = claudeState();
-    const rows = (s.data.hooks || []).filter(h => h.scope !== s.scope);
+function hkElsewhere(event) {
+    const s = hkState();
+    const rows = (s.data.hooks || []).filter(h => h.scope !== s.scope && (!event || h.event === event));
     if (!rows.length) return null;
     const open = isOpen('hook:elsewhere', true);
     return html`<div key="elsewhere" class="cfg-inherit">
         <div class="cfg-inherit-head">${foldLabelV('hook:elsewhere', open,
             `${rows.length} more ${rows.length === 1 ? 'hook runs' : 'hooks run'} from other files — these add to yours`,
-            'set-fold is-quiet')}</div>
+            'set-fold is-quiet', renderHooks)}</div>
         ${!open ? null : rows.map((h, n) => html`<div key=${n} class="cfg-inherit-row hk-inherit-row">
             <span class="hk-inherit-scope">${CLAUDE_SCOPES[h.scope] || h.scope}</span>${
                 ` ${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.target || h.type || '—'}`}${
@@ -807,8 +824,8 @@ function hkElsewhere() {
 
 /** The footer: where the draft stands, and Save — or the review Save opens. */
 function hkFoot() {
-    const s = claudeState();
-    const target = claudeTargetRow();
+    const s = hkState();
+    const target = hkTargetRow();
     const editable = !!target && target.writable && !target.symlink;
     const problems = s.hooksProblems;
 
@@ -846,7 +863,7 @@ function hkFoot() {
             : (s.hooksDirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</span>
         <div class="cmd-card-spacer"></div>
         <button class="btn quiet small" type="button" disabled=${!s.hooksDirty}
-            onClick=${() => { hkClearDraft(s); renderSettings(); }}>Revert</button>
+            onClick=${() => { hkClearDraft(s); renderHooks(); }}>Revert</button>
         <button class="btn primary small" type="button"
             disabled=${!editable || !s.hooksDirty || !!s.saving}
             onClick=${() => {
@@ -866,12 +883,41 @@ function hkFoot() {
     </div>`;
 }
 
-/** The sentence claudeReachNote() says, for the review. */
+/** The sentence Settings' claudeReachNote() says, for the review. */
 function claudeReachLine() {
-    const running = claudeState().data.running || 0;
+    const running = hkState().data.running || 0;
     return running
         ? `New sessions pick these up. The ${running} already running will not.`
         : 'New sessions pick these up.';
+}
+
+/** The toast after a save — the same caveat, as Settings' claudeSavedNote() says it. */
+function hkSavedNote() {
+    const running = hkState().data.running || 0;
+    return running
+        ? `Hooks saved. ${running} session${running === 1 ? '' : 's'} already running will not see them — new ones will.`
+        : 'Hooks saved. New sessions will pick them up.';
+}
+
+/**
+ * Whether the hook's script is there — and the way into it.
+ *
+ * A button rather than the old tag, because the answer to "script missing" is
+ * usually to write it, and the answer to "script present" is often to read it.
+ * Not executable is its own state: a hook whose script lost its x bit fails as
+ * quietly as one whose script was deleted.
+ */
+function hkScriptTag(h) {
+    const sc = h._script;
+    const open = hkState().script && hkState().script.k === h._k;
+    const label = !sc.exists ? `script missing — ${sc.file}`
+        : sc.executable === false ? 'script not executable' : 'script present';
+    const bad = !sc.exists || sc.executable === false;
+    return html`<button class=${`cfg-script hk-script-btn${bad ? ' bad' : ''}${open ? ' on' : ''}`} type="button"
+        title=${`${sc.file} — ${open ? 'close the editor' : (sc.exists ? 'open it here' : 'create it here')}`}
+        aria-expanded=${open ? 'true' : 'false'}
+        onClick=${() => scriptToggle(h._k, sc.path || sc.file)}>${label}${
+            open ? '' : (sc.exists ? ' · edit' : ' · create')}</button>`;
 }
 
 /**
@@ -883,31 +929,31 @@ function claudeReachLine() {
  * from, and a change there is a conflict even when the stamp would pass.
  */
 async function saveClaudeHooks() {
-    const s = claudeState();
-    const row = claudeTargetRow();
+    const s = hkState();
+    const row = hkTargetRow();
     if (!row) return;
     s.saving = true;
-    renderSettings();
+    renderHooks();
     try {
         const answer = await put('/api/claude-config', {
-            scope: s.scope, cwd: claudeDir(), stamp: row.stamp, patch: { hooks: hkForWire() },
+            scope: s.scope, cwd: hkState().dir, stamp: row.stamp, patch: { hooks: hkForWire() },
         });
         s.data = answer.config;
         hkClearDraft(s);
         s.stale = null;
-        toast(claudeSavedNote('hooks'), 'ok');
+        toast(hkSavedNote(), 'ok');
     } catch (err) {
         s.hooksReview = false;
         if (err.status === 409) {
-            // The draft is kept: loadClaudeConfig() leaves a dirty one alone,
+            // The draft is kept: loadHooks() leaves a dirty one alone,
             // and the editor draws its own banner once the file it now holds
             // differs from the one the draft started from.
             toast('That file changed on disk. Your edits are kept — look, then save again.', 'warn');
-            await loadClaudeConfig();
+            await loadHooks();
         } else {
             toast(`Could not save the hooks: ${err.message}`, 'error');
         }
     }
     s.saving = false;
-    renderSettings();
+    renderHooks();
 }

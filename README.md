@@ -429,6 +429,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/claude-version.js` | Installed Claude Code against the registry, and which live sessions are on an older binary |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
 | `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
+| `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |
+| `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
@@ -492,15 +494,19 @@ Two rules worth knowing before you send a patch:
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
 | `web/snippets/index.js` | The list — loading it, the `snippets-changed` push that repaints every surface — the rules they share (project scoping, filling placeholders), and `wireSnippets` |
-| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides), and the fill-in dialog |
+| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides, a trigger then Tab), and the fill-in dialog |
 | `web/snippets/pins.js` | The pinned buttons beside the composer's snippets icon |
 | `web/snippets/settings.js` | The Snippets group in Settings — groups, rows, drag and arrow reordering held in `state.snippets.order` — and the arm-then-confirm delete button other Settings groups borrow |
 | `web/snippets/editor.js` | One snippet in the editor dialog, as a component whose state is the form |
+| `web/snippets/trigger.js` | Which snippet the word before the caret names, for Tab-to-expand — pure, no imports, so `test/snippet-trigger.test.js` loads it under node |
 | `web/settings/` | The Settings panel, one module per group. Drawn with Preact on web/rail.js's pattern, except the editor groups (Claude Code, hooks, Memory, Project commands) and the groups written out in index.html, which are still built with `el()` and hung in the tree as foreign DOM. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
 | `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents, and `Foreign` — how a hand-built group sits in the Preact body |
 | `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control (Preact vnodes; typed-into boxes are uncontrolled and keyed on the stored value) |
-| `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON |
-| `web/settings/hooks.js` | The hooks editor inside the Claude Code group |
+| `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON; its Hooks row links to the Hooks page |
+| `web/hooks/page.js` | The Hooks page — project and scope, the rail of events, and the hooks from plugins, skills and agents |
+| `web/hooks/editor.js` | The hooks editor on that page — a draft of one file's `hooks` block, its review and the save |
+| `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
+| `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
 | `web/settings/review-types.js` | The Code reviews group — which skills count as reviews, edited as a list and saved whole |
@@ -530,6 +536,7 @@ Two rules worth knowing before you send a patch:
 | `web/composer/` | The message boxes — the one under a conversation and the Start-a-session dialog's — and everything that sends from them. Like `transcript/`, none may read an imported binding at top level; load-time listeners are in a `wire*()` that app.js calls |
 | `web/composer/slash.js` | `makeComposer`, the live composer (`live`), the popover machinery `/` and `@` share — selection, paging, the capture-phase keyboard map — and `/` completion |
 | `web/composer/mentions.js` | `@` completion over the other running sessions, and inserting a mention |
+| `web/composer/caret.js` | Scrolling a composer to its caret after an insertion from code — a mirror measures the line, `revealTop` (pure, `test/caret.test.js`) decides the scroll |
 | `web/composer/send.js` | Sizing the box, enabling the send controls, the optimistic chip a message shows until the transcript has it, and whether Enter sends |
 | `web/composer/branch.js` | Doing an earlier turn over: Edit and resend, and Edit and branch — `state.branchFrom`, the banner above the box, and the turn-1 case that starts a new session instead |
 | `web/composer/queue.js` | The send queue's chips — messages typed while a turn runs — reordered, edited back or dropped |
@@ -576,6 +583,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
 | `web/css/analytics.css` | The analytics board and the header's cost |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
+| `web/css/hooks.css` | The Hooks page and its editor. Right after `settings.css`, whose controls the editor is built from and overrides |
 | `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
