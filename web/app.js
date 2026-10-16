@@ -3620,7 +3620,7 @@ dom.planPane.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // While the feedback box is open it owns the keyboard: Enter sends it, Esc
     // closes it, and Y/A/F/N are letters somebody is in the middle of typing.
-    if (dom.planFoot.querySelector('.perm-feedback')) return;
+    if (state.planFeedback) return;
     if (e.key === 'Escape') { e.preventDefault(); setPlanAside(true); return; }
     if (isTyping(e.target)) return;
     // Setting a plan aside is about this window. Answering one is not ours to do
@@ -3629,8 +3629,8 @@ dom.planPane.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     if (k === 'y') { e.preventDefault(); answerAsk({ decision: 'allow', mode: 'auto' }); }
     else if (k === 'a') { e.preventDefault(); answerAsk({ decision: 'allow', mode: 'acceptEdits' }); }
-    else if (k === 'f') { e.preventDefault(); openFeedback(dom.planFoot, 'approve'); }
-    else if (k === 'n') { e.preventDefault(); openFeedback(dom.planFoot, 'reject'); }
+    else if (k === 'f') { e.preventDefault(); openFeedback('approve'); }
+    else if (k === 'n') { e.preventDefault(); openFeedback('reject'); }
 });
 
 // A mode is picked for the conversation in front of you, so it is remembered
