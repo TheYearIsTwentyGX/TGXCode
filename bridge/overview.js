@@ -95,7 +95,13 @@ function build(index, pool, registry, { includeTest = false } = {}) {
     const since = recentSince();
     const warm = idle.filter(s => !s.archived && activityAt(s) >= since)
         .sort((a, b) => activityAt(b) - activityAt(a));
-    const recent = warm.slice(0, MAX_RECENT).map(s => card(index, s, null, 'recent'));
+    // With the runner this bridge holds, not null. A session whose turn has just
+    // ended is idle but still has its `claude` process, so the registry reports
+    // it running; a card carrying `live.running` and no runner is exactly what
+    // every client reads as "running somewhere that is not us", and the board
+    // told the user their own session was in another TGXCode window.
+    const recent = warm.slice(0, MAX_RECENT)
+        .map(s => card(index, s, statuses[s.sessionId] || null, 'recent'));
 
     // Only the sessions actually on screen keep their caches alive — both
     // groups of them. Left at `shown` alone, every recent card's task progress
