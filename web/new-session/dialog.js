@@ -20,7 +20,7 @@
 // same reason: a `const` read at load has to be this file's own.
 
 import { get } from '../api.js';
-import { closeOnClickOutside, dom, el, toast } from '../dom.js';
+import { dom, closeModal, closeOnClickOutside, el, openModal, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
 import { homely } from '../term-pane.js';
@@ -36,6 +36,7 @@ import {
 } from './picker.js';
 import { describeCronSoon, paintGateFields, paintNewAttach, setWhen } from './trigger.js';
 import { openPublish } from '../github/publish.js';
+import { prepareTemplates } from './templates.js';
 
 // ── new session ──────────────────────────────────────────────────────────
 
@@ -155,7 +156,7 @@ function onRecentKey(e, i) {
  * brand-new session, having been asked for once, about something else.
  */
 export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
-    schedule = null, seed = null } = {}) {
+    schedule = null, seed = null, template = null } = {}) {
     // `schedule: true` means "a new one"; a row means "edit that one". The two
     // have to be told apart because only the second has fields to prefill, and
     // both have to put the dialog in schedule mode.
@@ -165,7 +166,9 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // local stands in for whichever is being edited and the prefill below reads
     // from it once instead of branching on every line. A `seed` joins them as a
     // third: the same fields again, from something that is not a stored row.
-    const src = sched || seed || draft;
+    // A template being edited is a fourth: the same fields again, with two of
+    // its own (worktree and orchestrator) that prepareTemplates() writes below.
+    const src = sched || seed || draft || template;
 
     state.drafts.editing = draft ? draft.id : null;
     // A seed is prefill, not an edit — the schedule it describes does not exist
@@ -179,7 +182,7 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // debris on screen.
     closeMenus(live);
 
-    dom.newScrim.hidden = false;
+    openModal(dom.newScrim);
     dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
     // Written on every open in both directions, the rule this docstring states:
@@ -260,16 +263,26 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // Painted again now because setNewCwd above painted it under the last open's
     // mode; the repo-state answer it is waiting on paints it once more.
     wt.offered = !schedMode && !draft;
+    // A template keeps both Start-only options, so editing one offers them too.
     wt.named = false;
     dom.newWt.checked = false;
+    // Starting as an orchestrator, on the worktree box's terms: Start only, reset
+    // on every open so the last session's choice is not carried into this one.
+    // The two share a line (see index.html), so the line goes with them.
+    dom.newStartRow.hidden = !wt.offered;
+    dom.newOrch.checked = false;
+    paintNewOrch();
     dom.newWtName.value = '';
     dom.newWtBase.value = '';
     paintNewWorktree();
+    // The picker and Save as template… are plain Start only. Editing a template
+    // writes its worktree and orchestrator over the resets just above.
+    prepareTemplates({ plain: !schedMode && !draft && !template, template });
 
     dom.newTitle.textContent = schedMode
         ? (sched ? 'Edit schedule'
             : (state.sched.fromDraft ? 'Schedule this draft' : 'Schedule a session'))
-        : (draft ? 'Edit draft' : 'Start a session');
+        : (template ? 'Edit template' : (draft ? 'Edit draft' : 'Start a session'));
     dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
     // A filter left over from the last open would hide rows for no reason you
@@ -370,8 +383,8 @@ function paintNewGh() {
  * What the worktree row knows. `root` is the repository a new worktree would go
  * under, or null when the directory is not one it can be made from; `offered` is
  * whether this open of the dialog is plain Start (see openNew); `named` is
- * whether somebody has typed in the name box, after which the prompt stops
- * writing it.
+ * whether the name box holds something somebody typed, after which the prompt
+ * stops writing it.
  */
 const wt = { root: null, offered: false, named: false };
 
@@ -407,6 +420,15 @@ export function worktreeSlug(text) {
         .slice(0, 40).replace(/-+$/, '');
 }
 
+/**
+ * Write the name from the prompt, unless somebody has typed one of their own.
+ * Only ticking the box and editing the prompt call this — never a paint, or
+ * clearing the name box to type a new one would refill it on the same keystroke.
+ */
+function fillWtName() {
+    if (!wt.named) dom.newWtName.value = worktreeSlug(dom.newPrompt.value);
+}
+
 /** Show, hide and describe the worktree row. Cheap; called on every change. */
 export function paintNewWorktree() {
     const show = wt.offered && !!wt.root;
@@ -416,12 +438,19 @@ export function paintNewWorktree() {
     dom.newWtNote.hidden = !on;
     if (!on) return;
 
-    if (!wt.named) dom.newWtName.value = worktreeSlug(dom.newPrompt.value);
     const name = dom.newWtName.value.trim();
     const base = dom.newWtBase.value.trim() || 'HEAD';
     if (!name) {
         dom.newWtNote.replaceChildren('Name the worktree — it becomes the folder and the branch.');
         dom.newWtNote.classList.add('warn');
+        return;
+    }
+    // A placeholder is a name the template fills in when it is used, which is
+    // only something to save while editing one. Anywhere else it is unfilled.
+    if (state.templates.editing && /\{\{\s*\w+\s*\}\}/.test(name)) {
+        dom.newWtNote.classList.remove('warn');
+        dom.newWtNote.replaceChildren('Filled in from the template\u2019s answers, then made into a name '
+            + 'when the template is used.');
         return;
     }
     if (!wtNameOk(name)) {
@@ -435,6 +464,31 @@ export function paintNewWorktree() {
         'Starts in ', el('code', {}, homely(`${wt.root}/.claude/worktrees/${name}`)),
         ' on a new branch ', el('code', {}, `worktree-${name}`),
         ' from ', el('code', {}, base), '.');
+}
+
+const ORCH_NOTE = 'It starts worker sessions and reads what they report from an inbox, '
+    + 'rather than doing the work itself.';
+
+/**
+ * The orchestrator box's note: only while it is ticked, so an unticked box adds
+ * no height, and saying so when the mode will fight it.
+ */
+function paintNewOrch() {
+    dom.newOrchNote.hidden = !dom.newOrch.checked;
+    const clash = dom.newOrch.checked && dom.newPerm.value === 'plan';
+    dom.newOrchNote.classList.toggle('warn', clash);
+    dom.newOrchNote.textContent = clash
+        ? `${ORCH_NOTE} In plan mode every worker it starts waits on your approval first.`
+        : ORCH_NOTE;
+}
+
+/**
+ * The `orchestrator` field of `POST /api/sessions`: true when the row is offered
+ * and ticked. Not part of `newDialogValues`, for `newDialogWorktree`'s reason
+ * below — neither the drafts nor the schedules store has the field.
+ */
+export function newDialogOrchestrator() {
+    return !dom.newStartRow.hidden && dom.newOrch.checked;
 }
 
 /**
@@ -459,13 +513,43 @@ export function newDialogWorktree() {
     return base ? { name, base } : { name };
 }
 
+/**
+ * The Start-only options as a template stores them: the worktree name exactly as
+ * typed (placeholders and all) rather than checked the way newDialogWorktree()
+ * checks it, because a template's name is a pattern.
+ */
+export function newDialogStartOptions() {
+    const on = !dom.newWtRow.hidden && dom.newWt.checked && dom.newWtName.value.trim();
+    const base = dom.newWtBase.value.trim();
+    return {
+        worktree: on ? { name: dom.newWtName.value.trim(), base: base || null } : null,
+        orchestrator: newDialogOrchestrator(),
+    };
+}
+
+/**
+ * Write the worktree and orchestrator boxes, from a template or a filled one. A
+ * name set here counts as typed, so editing the prompt afterwards does not
+ * overwrite it. The worktree row may still be hidden until the repository
+ * check comes back, and it shows with these values when it does.
+ */
+export function setNewStartOptions({ worktree = null, orchestrator = false } = {}) {
+    dom.newWt.checked = !!worktree;
+    dom.newWtName.value = worktree && worktree.name ? worktree.name : '';
+    dom.newWtBase.value = worktree && worktree.base ? worktree.base : '';
+    wt.named = !!(worktree && worktree.name);
+    dom.newOrch.checked = !!orchestrator;
+    paintNewOrch();
+    paintNewWorktree();
+}
+
 /** Open Publish to GitHub over this dialog, for `cwd`, and look again afterwards. */
 export function publishFromNew(cwd) {
     openPublish(cwd, { onDone: () => paintNewGh() });
 }
 
 export function closeNew() {
-    dom.newScrim.hidden = true;
+    closeModal(dom.newScrim);
     // Hiding the scrim does not blur the box inside it, so the blur-to-close
     // never fires and a popover would still be up — fixed to the viewport, over
     // nothing — the next time the dialog opened.
@@ -479,6 +563,7 @@ export function closeNew() {
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
     state.sched.editing = null;
+    state.templates.editing = null;
     // Otherwise a schedule saved later in this window would consume a draft that
     // an earlier, abandoned conversion had named.
     state.sched.fromDraft = null;
@@ -650,8 +735,19 @@ export function wireNewDialog() {
     dom.newGh.addEventListener('click', () => publishFromNew(dom.newCwd.value.trim()));
 
     // The worktree row. The prompt writes the name until somebody types in the
-    // name box; clearing that box hands it back to the prompt.
+    // name box; clearing that box hands it back to the prompt's next edit, and
+    // leaves it empty until then.
+    // Ticking it moves Permissions off `plan`, the dialog's default: an
+    // orchestrator's whole job is calling its tools, and in plan mode each spawn
+    // would stop for approval. Only off `plan`, and only on the way in — any
+    // other mode was a choice, and so is putting it back.
+    dom.newOrch.addEventListener('change', () => {
+        if (dom.newOrch.checked && dom.newPerm.value === 'plan') dom.newPerm.value = 'auto';
+        paintNewOrch();
+    });
+    dom.newPerm.addEventListener('change', paintNewOrch);
     dom.newWt.addEventListener('change', () => {
+        if (dom.newWt.checked) fillWtName();
         paintNewWorktree();
         if (dom.newWt.checked) dom.newWtName.focus();
     });
@@ -660,7 +756,11 @@ export function wireNewDialog() {
         paintNewWorktree();
     });
     dom.newWtBase.addEventListener('input', paintNewWorktree);
-    dom.newPrompt.addEventListener('input', () => { if (!wt.named) paintNewWorktree(); });
+    dom.newPrompt.addEventListener('input', () => {
+        if (wt.named) return;
+        fillWtName();
+        paintNewWorktree();
+    });
     dom.newMkdir.addEventListener('click', startMkdir);
     dom.newMkdirGo.addEventListener('click', submitMkdir);
     dom.newMkdirName.addEventListener('keydown', (e) => {

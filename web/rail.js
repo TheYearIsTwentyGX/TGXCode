@@ -48,10 +48,11 @@ import {
     projectColor,
     elsewhere, awayWords, prWords, prUnknownWhy, inProjectCard, groupKeyOf, rankOf,
     setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
-    showProjMenu, closeProjMenu, renderRail,
+    showProjMenu, closeProjMenu, showStripMenu, renderRail,
 } from './app.js';
 import { openSession } from './transcript/conversation.js';
-import { StopButton } from './boards/parts.js';
+import { stalledBadge, StopButton } from './boards/parts.js';
+import { flipAll } from './motion.js';
 
 /**
  * Draw the rail into #rail. Called only by renderRail() in app.js, which paints
@@ -61,7 +62,15 @@ import { StopButton } from './boards/parts.js';
  */
 export function drawRail() {
     const { tree, finished } = railTree();
-    render(tree, dom.rail);
+    // A session that moves — new activity lifting it, a pin, a drop — slides to
+    // its place, and one that appears fades in. Web Animations only, so nothing
+    // Preact owns is written to. Not mid-drag: the order there follows the
+    // pointer, and sliding behind it would lag.
+    if (state.railDrag) render(tree, dom.rail);
+    else {
+        flipAll(dom.rail, () => dom.rail.querySelectorAll('[data-id]'), (n) => n.dataset.id,
+            () => render(tree, dom.rail));
+    }
     return finished;
 }
 
@@ -82,9 +91,6 @@ function railTree() {
     // Scratch sessions gathered in one place, because the point of labelling one
     // is to be able to find it again and delete it. Only a development bridge
     // sends any, so the everyday window never grows this card.
-    const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
-    const rest = ordered.filter(inProjectCard);
-
     // `hideDone`: drop the rows whose work has landed. Only from the project
     // cards — pinning is something you did on purpose, archived is already out of
     // the way, and the test card exists to be emptied by hand.
@@ -95,17 +101,65 @@ function railTree() {
     // for the reason `isOpen` gives for forcing groups open: a filter must not hide
     // its own results, and somebody typing the title of a merged session is looking
     // for exactly that.
+    //
+    // Nor is an orchestrator, finished or not. It outlives any one pull request —
+    // a merged PR is a batch of its work landing, not the orchestrator being
+    // done — and its row carries the inbox badge and the Workers card, so hiding
+    // it would hide the very thing you come back to. Left out of the count too,
+    // since the count is what the button would hide.
     const hiding = state.hideDone && !state.query;
-    const finished = rest.filter(prDone);
+    // Workers nested under an orchestrator included: they are hidden like any
+    // other finished session, so the button that hides them counts them too.
+    const finished = ordered.filter(s => inProjectCard(s) && !s.orchestrator && prDone(s));
     const gone = new Set(hiding
         ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
             .map(s => s.sessionId)
         : []);
 
+    // An orchestrator's workers are drawn under it rather than among the
+    // project's rows: they are its work, they come in batches, and they usually
+    // live in worktrees of their own that would otherwise scatter them. Only
+    // while the orchestrator's own row is drawn — every card can carry the
+    // nested Workers card, and Hide finished never takes an orchestrator, so that
+    // is any orchestrator in the list. A worker whose orchestrator was deleted is
+    // drawn where any other session would be, rather than nowhere.
+    const hosts = new Set(ordered.filter(s => s.orchestrator).map(s => s.sessionId));
+    const workersOf = new Map();
+    const nestedWorker = (s) => !!s.worker && hosts.has(s.worker.orchestratorId)
+        && !s.pinned && !s.archived;
+    for (const s of ordered) {
+        if (!nestedWorker(s) || gone.has(s.sessionId)) continue;
+        const id = s.worker.orchestratorId;
+        if (!workersOf.has(id)) workersOf.set(id, []);
+        workersOf.get(id).push(s);
+    }
+    // And only while you are looking at that orchestrator — or at one of its own
+    // workers, so the card does not vanish the moment you click into a worker
+    // from it. Elsewhere its workers are not in the rail at all: they are its
+    // business, a dozen of them under every orchestrator is the clutter this
+    // nesting exists to prevent, and the orchestrator's dock lists them all. A
+    // filter shows every Workers card, for the reason `isOpen` gives: a search
+    // must not hide its own results.
+    const here = state.current
+        ? state.sessions.find(s => s.sessionId === state.current.sessionId) || state.current
+        : null;
+    const focused = !here ? null
+        : here.orchestrator ? here.sessionId
+        : here.worker ? here.worker.orchestratorId
+        : null;
+    const after = new Map([...workersOf]
+        .filter(([id]) => state.query || id === focused)
+        .map(([id, list]) => [id,
+            groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
+    const rest = ordered.filter(s => inProjectCard(s) && !nestedWorker(s));
+    // A test orchestrator's workers are test sessions too, and belong under it
+    // like any other's rather than a second time in this card.
+    const test = ordered.filter(s => s.test && !s.pinned && !s.archived && !nestedWorker(s));
+
     const cards = [];
 
     // Pinned first, across every project — that is the point of pinning.
-    if (pinned.length) cards.push(groupCard('pinned', 'Pinned', pinned));
+    if (pinned.length) cards.push(groupCard('pinned', 'Pinned', pinned, { after }));
 
     const groups = new Map();
     for (const s of rest) {
@@ -154,14 +208,15 @@ function railTree() {
             // rows are counted for the same reason — the project has them, and
             // the button in the rail head is where the hiding is accounted for.
             all: list,
+            after,
             lead: sched.length
-                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
+                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true, after })
                 : null,
         }));
     }
 
-    if (test.length) cards.push(groupCard('test', 'Test sessions', test));
-    if (archived.length) cards.push(groupCard('archived', 'Archived', archived));
+    if (test.length) cards.push(groupCard('test', 'Test sessions', test, { after }));
+    if (archived.length) cards.push(groupCard('archived', 'Archived', archived, { after }));
 
     // Said out loud rather than left to look like a rail that has lost its
     // sessions — the same promise the live board makes when `hideElsewhere`
@@ -234,6 +289,13 @@ function isOpen(key, nested) {
     return nested ? state.schedOpen.has(key) : !state.collapsed.has(key);
 }
 
+/**
+ * Whether a group's open state lives in `schedOpen` (default shut) rather than
+ * `collapsed` (default open). A nested card is shut until asked for, except an
+ * orchestrator's Workers, which are the thing you came to look at.
+ */
+const shutByDefault = (opts) => !!opts.nested && !opts.defaultOpen;
+
 /** One of web/icons.js's ICON glyphs, as a vnode. Its icon() is the DOM twin. */
 function icon(name, size = 15) {
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none"
@@ -251,7 +313,7 @@ function icon(name, size = 15) {
  * `isOpen`.
  */
 function groupCard(key, label, list, opts = {}) {
-    const open = isOpen(key, opts.nested);
+    const open = isOpen(key, shutByDefault(opts));
     const counted = opts.all || list;
     const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
     const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
@@ -287,7 +349,7 @@ function groupCard(key, label, list, opts = {}) {
                 aria-controls=${bodyId}
                 draggable=${drag ? 'true' : null}
                 title=${drag ? 'Drag to reorder projects' : null}
-                onClick=${() => { toggleGroup(key, open, opts.nested); renderRail(); }}
+                onClick=${() => { toggleGroup(key, open, shutByDefault(opts)); renderRail(); }}
                 onDragStart=${drag ? (e) => onRailDragStart(e, opts.project.cwd) : null}
                 onDragEnd=${drag ? onRailDragEnd : null}>
                 ${drag ? html`<span class="group-grip">${icon('grip', 13)}</span>` : null}
@@ -308,7 +370,8 @@ function groupCard(key, label, list, opts = {}) {
             ${open ? html`
                 <div class="group-body" id=${bodyId}>
                     ${opts.lead || null}
-                    ${list.map(strip)}
+                    ${list.map(s => (opts.after && opts.after.has(s.sessionId)
+                        ? [strip(s), opts.after.get(s.sessionId)] : strip(s)))}
                 </div>` : null}
         </section>`;
 }
@@ -322,6 +385,7 @@ function strip(s) {
     const away = elsewhere(s);
     const when = ago(s.lastUserTs || s.lastTs);
     const renaming = !!state.railRename && state.railRename.id === s.sessionId;
+    const compact = !!BOOT_PREFS.projects.compactActions;
 
     // A row, not a button: it holds its own pin and archive controls, and
     // nesting buttons is not allowed.
@@ -335,11 +399,14 @@ function strip(s) {
     // are the two things this line is allowed to squeeze out; the time is the one
     // the list is ordered by, so the order reads as sorted. A queue count goes
     // ahead of the activity because the activity is the one part of the row that
-    // may be cut short — it is the least specific thing on it.
+    // may be cut short — it is the least specific thing on it. A stalled badge goes up
+    // with the tags rather than where the pulse was, for the opposite reason:
+    // it is the one thing on the line that must not be cut.
     const meta = html`
                 <span class="strip-meta">
                     ${s.pinned ? html`<span class="tag-pin" title="Pinned">${icon('pin', 11)}</span>` : null}
                     ${s.test ? html`<span class="tag-test">test</span>` : null}
+                    ${orchestratorBadge(s)}
                     ${(s.live && s.live.kind === 'bg')
                         ? html`<span class="tag-bg" title="A background agent">bg</span>` : null}
                     ${stalled ? stalledBadge() : null}
@@ -369,12 +436,13 @@ function strip(s) {
             ${renaming
                 ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
                 : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
-                    <span class="strip-title">${s.title}</span>${standingLine(s, running)}${meta}</button>`}
+                    <span class="strip-title" title=${s.title}>${s.title}</span>${standingLine(s, running)}${meta}</button>`}
+            ${compact ? stripMenuButton(s) : null}
             <div class="strip-actions">
                 ${stalled ? html`<span class="strip-stop" onClick=${(e) => e.stopPropagation()}>
                     <${StopButton} cls="mini stop" sessionId=${s.sessionId} hard=${true}
                         reset=${s.runner.activity} /></span>` : null}
-                <button class="mini" type="button" title="Rename"
+                ${compact ? null : html`<button class="mini" type="button" title="Rename"
                     onClick=${(e) => { e.stopPropagation(); startRename(s); }}
                 >${icon('pencil')}</button>
                 <button class=${'mini' + (s.pinned ? ' on' : '')} type="button"
@@ -388,9 +456,41 @@ function strip(s) {
                 >${icon(s.archived ? 'unarchive' : 'archive')}</button>
                 <button class="mini danger" type="button" title="Delete permanently"
                     onClick=${(e) => { e.stopPropagation(); askDelete(s); }}
-                >${icon('trash')}</button>
+                >${icon('trash')}</button>`}
             </div>
         </div>`;
+}
+
+/**
+ * An orchestrator's tag: how many inbox items it has not read, or that the usage
+ * cutoff paused it. Up with the other tags, which are the part of the line that
+ * is never cut short.
+ */
+function orchestratorBadge(s) {
+    const o = s.orchestrator;
+    if (!o) return null;
+    if (o.paused) return html`<span class="tag-orch paused" title="Paused by the usage cutoff">paused</span>`;
+    return html`<span class="tag-orch" title=${o.inbox
+        ? `Orchestrator — ${o.inbox} inbox item${o.inbox === 1 ? '' : 's'} unread`
+        : 'Orchestrator'}>${o.inbox ? `orch · ${o.inbox}` : 'orch'}</span>`;
+}
+
+/**
+ * The row's ⋮, with `projects.compactActions` on: the four buttons above as a
+ * menu, which showStripMenu() in app.js draws into the project cards' menu
+ * element. A sibling of `.strip-main` for `group-menu-btn`'s reason — that is a
+ * <button>, and a button inside a button is not a thing the browser will build.
+ */
+function stripMenuButton(s) {
+    const open = !!state.projMenu && state.projMenu.sessionId === s.sessionId;
+    return html`<button class="strip-menu-btn" type="button"
+        aria-haspopup="menu" aria-expanded=${String(open)}
+        aria-label=${`More for ${s.title}`} title="More"
+        onClick=${(e) => {
+            e.stopPropagation();
+            if (open) closeProjMenu();
+            else showStripMenu(s, e.currentTarget);
+        }}>${icon('dots', 15)}</button>`;
 }
 
 /**
@@ -478,19 +578,6 @@ function activityBits(runner) {
     ];
 }
 
-/**
- * In place of the pulse rather than beside it: a breathing "Working" next to
- * a badge saying nothing is happening is two claims, and only one is true. And
- * up with the tags rather than where the pulse was, because the end of the line
- * is what a narrow row cuts, and this is the one thing on it that must not be.
- */
-function stalledBadge() {
-    const mins = BOOT_PREFS.live.stalledAfterMinutes;
-    return html`<span class="tag-stalled"
-        title=${`Working, but nothing for ${mins} min or more: no output, no tool running`}
-        >stalled</span>`;
-}
-
 /** The rail's copy of web/boards/parts.js's queuedBadge(); keep the two saying the same thing. */
 function queuedBadge(queued) {
     return html`<span class="wait"
@@ -553,7 +640,7 @@ function prDone(s) {
  * `prLink` does in the header. A session with no PRs draws nothing at all, which
  * is not the same as one whose PRs could not be reached: that one is grey.
  */
-function prBadge(s) {
+export function prBadge(s) {
     if (!s.prs || !s.prs.length) return null;
     const agg = state.railPrs.get(s.sessionId) || null;
     const status = (agg && agg.status) || 'unknown';

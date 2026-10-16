@@ -131,7 +131,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 function onUser(m) {
     // The answer to an ASK below. The result follows after a pause, so a case can
     // restart the bridge between the answer and the end of the turn.
-    if (m.type === 'control_response' && m.response && m.response.request_id === 'ask1') {
+    if (m.type === 'control_response' && m.response
+        && (m.response.request_id === 'ask1' || m.response.request_id === 'ask2')) {
         const how = (m.response.response || {}).behavior;
         return setTimeout(() => out({ type: 'result', subtype: 'success', is_error: false,
             result: 'answered:' + how, duration_ms: 1, num_turns: 1, total_cost_usd: 0,
@@ -193,6 +194,13 @@ function onUser(m) {
             request: { subtype: 'can_use_tool', tool_name: 'Write',
                 input: { file_path: 'x' }, tool_use_id: 'tu1' } }), 150);
     }
+    // A worker filing a report in plan mode, which asks like any MCP call would.
+    // The answer is logged, so a case can see it was allowed without a window.
+    if (/\\bREPORTASK\\b/.test(text)) {
+        return setTimeout(() => out({ type: 'control_request', request_id: 'ask2',
+            request: { subtype: 'can_use_tool', tool_name: 'mcp__tgxcode__report_to_orchestrator',
+                input: { kind: 'update', text: 'x' }, tool_use_id: 'tu2' } }), 150);
+    }
     out({ type: 'result', subtype: 'success', is_error: false, result: text,
           duration_ms: 1, num_turns: 1, total_cost_usd: 0, session_id: sessionId });
 }
@@ -206,7 +214,7 @@ process.env.FAKE_CLAUDE_LOG = logFile;
 // the stub ignores, and sessionEnv() strips it from the child anyway.
 process.env.TGXCODE_PORT = '45939';
 
-const { Runner, RunnerPool } = require('../bridge/runner.js');
+const { Runner, RunnerPool, sessionEnv } = require('../bridge/runner.js');
 const hostClient = require('../bridge/host-client.js');
 
 let pass = 0;
@@ -266,6 +274,22 @@ function runner() {
     const r = new Runner({ sessionId: randomUUID(), cwd: root, isNew: true });
     made.push(r);
     return r;
+}
+
+// --- the agent's browser: headless only when asked -----------------------
+// Playwright MCP is started by `claude` and reads its flags from the environment,
+// so this variable is the whole of the setting. `visible` must add nothing, or
+// the bridge's own environment could no longer choose for itself.
+{
+    delete process.env.PLAYWRIGHT_MCP_HEADLESS;
+    assert.strictEqual(sessionEnv({ browser: 'headless' }).PLAYWRIGHT_MCP_HEADLESS, 'true');
+    assert.ok(!('PLAYWRIGHT_MCP_HEADLESS' in sessionEnv({ browser: 'visible' })));
+    assert.ok(!('PLAYWRIGHT_MCP_HEADLESS' in sessionEnv()));
+    assert.ok(!('TGXCODE_PORT' in sessionEnv({ browser: 'headless' })), 'the port must still be stripped');
+    const pool = new RunnerPool();
+    assert.strictEqual(pool.agentBrowser(root), 'visible', 'a pool without a server shows the window');
+    pool.shutdown({ force: true });
+    ok('sessionEnv sets PLAYWRIGHT_MCP_HEADLESS for headless and nothing for visible');
 }
 
 (async () => {
@@ -552,6 +576,77 @@ function runner() {
         await r.stop({ hard: true });
         await once(r, 'exit');
         ok('a pending ask is not stalled');
+    }
+
+    // --- orchestration: a worker's asks wait for its orchestrator ------------
+    // With no window open an ask is denied on the spot, which is right for a
+    // session nobody is watching and wrong for a worker, whose asks go to its
+    // orchestrator's inbox. `delegated` is what tells the two apart.
+    {
+        reset();
+        const r = runner();
+        r.hasViewer = () => false;
+        r.delegated = () => true;
+        r.send('ASK delegated');
+        await until(() => r.pendingPermission, 5000, 'the ask');
+        await sleep(200);
+        assert.ok(r.pendingPermission, 'still waiting: nobody auto-denied it');
+        assert.strictEqual(r._autoDenies, 0);
+        const out = r.answerPermission(r.pendingPermission.id, 'allow');
+        assert.ok(out.ok);
+        await until(() => r.lastResultText === 'answered:allow', 3000, 'the turn to carry on');
+        await r.stop({ hard: true });
+        ok('a delegated ask with no window open waits for an answer instead of being denied');
+    }
+
+    {
+        reset();
+        const r = runner();
+        r.hasViewer = () => false;
+        r.send('REPORTASK in plan mode');
+        await until(() => r.lastResultText === 'answered:allow', 3000, 'the report to be allowed');
+        assert.strictEqual(r.pendingPermission, null);
+        await r.stop({ hard: true });
+        ok('report_to_orchestrator is allowed without asking anybody');
+    }
+
+    {
+        reset();
+        const r = runner();
+        r.roleOf = (id) => (id === r.sessionId ? { role: 'orchestrator', brief: 'BRIEF-TEXT' } : null);
+        r.send('hello');
+        await until(() => turns().length === 1, 5000, 'the turn');
+        const argv = turns()[0].argv;
+        const cfg = JSON.parse(argv[argv.indexOf('--mcp-config') + 1]);
+        assert.deepStrictEqual(cfg.mcpServers.tgxcode.args.slice(-2), ['--role', 'orchestrator']);
+        assert.strictEqual(argv[argv.indexOf('--append-system-prompt') + 1], 'BRIEF-TEXT');
+        assert.ok(argv.includes('mcp__tgxcode__spawn_worker'), 'its tools are auto-approved');
+        await r.stop({ hard: true });
+
+        reset();
+        const plain = runner();
+        plain.send('hello');
+        await until(() => turns().length === 1, 5000, 'the turn');
+        const argv2 = turns()[0].argv;
+        assert.ok(!argv2.includes('--append-system-prompt'), 'no role, no brief');
+        assert.ok(!argv2.includes('mcp__tgxcode__spawn_worker'));
+        await plain.stop({ hard: true });
+        ok('a role reaches the argv: --role on the MCP server, the brief, and the tools');
+    }
+
+    {
+        const pool = bridge();
+        const id = randomUUID();
+        const r = pool.ensure(id, { cwd: root, isNew: true });
+        made.push(r);
+        r.send('SLOW600 busy');
+        await until(() => r.state === 'busy', 3000, 'the turn to start');
+        assert.strictEqual(pool.recycle(id), false, 'a busy session waits');
+        assert.strictEqual(pool.get(id), r);
+        await until(() => pool.get(id) !== r, 5000, 'the recycle after the turn');
+        assert.strictEqual(pool.get(id).state, 'stopped', 'replaced, not started');
+        assert.strictEqual(pool.recycle(id), true, 'an idle one is replaced at once');
+        ok('recycle replaces a session\'s process once it is free, so its role is read again');
     }
 
     {

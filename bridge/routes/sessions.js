@@ -20,7 +20,9 @@
 // so their order, their fall-through and their status codes are what they were.
 
 const path = require('path');
+const { randomUUID } = require('crypto');
 const cfg = require('../config');
+const orchestration = require('../orchestration');
 const { broadcast } = require('../events');
 const { stateOf: handoffState } = require('../handoff');
 const { NEXT, readJson, send } = require('../http');
@@ -224,8 +226,13 @@ async function handle(req, res, url, pathname, seg, who) {
             startIn = worktree.path;
         }
 
+        // An orchestrator is marked before its process starts, because the role
+        // decides the argv — its tools and its brief. See bridge/orchestration.js.
+        const sessionId = randomUUID();
         try {
+            if (body.orchestrator === true) orchestration.enable(sessionId, null);
             const out = pool.create({
+                sessionId,
                 cwd: startIn,
                 prompt,
                 model: body.model || null,
@@ -273,11 +280,16 @@ async function handle(req, res, url, pathname, seg, who) {
             const from = typeof body.fromDraft === 'string' ? body.fromDraft : null;
             if (from && drafts.remove(from)) broadcast('drafts-changed', draftsPayload());
 
-            return send(res, 200, { ...out, test: !!body.test, ...(worktree ? { worktree } : {}) });
+            return send(res, 200, {
+                ...out, test: !!body.test, orchestrator: body.orchestrator === true,
+                ...(worktree ? { worktree } : {}),
+            });
         } catch (err) {
             // A worktree made above is left where it is. It is on disk under a
             // name the caller chose, so a retry gets a 409 that names it rather
             // than a second copy — and removing one is never this route's call.
+            // An orchestrator marked for a session that never started is not.
+            if (body.orchestrator === true) orchestration.disable(sessionId);
             return send(res, 400, { error: err.message, ...(worktree ? { worktree } : {}) });
         }
     }

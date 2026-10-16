@@ -16,8 +16,8 @@
 // whole repository. Settled PRs were kept forever but only in memory, so every
 // restart paid a `gh pr view` for each one. And nothing bounded the maps at all.
 //
-// No bridge and no network: `pulls.openPulls` and `pulls.pullState` are stubbed on
-// the module object, which is the seam that exists precisely because the store
+// No bridge and no network: `pulls.openPulls`, `pulls.pullState` and
+// `pulls.remoteHeads` are stubbed on the module object, which is the seam that exists precisely because the store
 // asks gh through them rather than shelling out itself.
 
 const assert = require('assert');
@@ -63,9 +63,14 @@ let listCalls = [];
 let viewCalls = [];
 let listAnswer = () => ({ ok: true, error: null, pulls: [] });
 let viewAnswer = () => ({ ok: false, error: 'not stubbed', terminal: false, pull: null });
+let headCalls = [];
+// Failing by default, which is the answer that changes nothing: every case that
+// is not about the base watcher behaves exactly as it did before it existed.
+let headAnswer = () => ({ ok: false, error: 'not stubbed', shas: {} });
 
 pulls.openPulls = async (repo) => { listCalls.push(repo); return listAnswer(repo); };
 pulls.pullState = async (repo, number) => { viewCalls.push(`${repo}#${number}`); return viewAnswer(repo, number); };
+pulls.remoteHeads = async (repo, bases) => { headCalls.push(`${repo}:${bases.join(',')}`); return headAnswer(repo, bases); };
 // Every session in these tests names its own repository, so this must never run.
 pulls.repoOf = async () => { throw new Error('repoOf should not be needed'); };
 
@@ -73,6 +78,8 @@ const reset = () => {
     store.reset();
     listCalls = [];
     viewCalls = [];
+    headCalls = [];
+    headAnswer = () => ({ ok: false, error: 'not stubbed', shas: {} });
     try { fs.unlinkSync(store.STORE_FILE); } catch { /* not there yet */ }
 };
 
@@ -165,6 +172,158 @@ const session = (over = {}) => ({
     assert.strictEqual(store.interval(done, false), store.IDLE_MS,
         'and it stops the moment the check does');
     ok('the four intervals, including the one resolveStatus would have hidden');
+
+    // -- a conflict shows in seconds, not on the idle floor ------------------
+    //
+    // GitHub computes `mergeable` lazily: the first list after the base moves
+    // reads UNKNOWN. Waiting twenty minutes for the real answer is what made a
+    // conflict caused by another PR's merge take that long to appear.
+
+    reset();
+    const pending = { ...quiet, pulls: [pull({ mergeable: 'UNKNOWN' })] };
+    assert.strictEqual(store.interval(pending, false), store.UNKNOWN_MS,
+        'an UNKNOWN is asked about again within the next pass or so');
+    assert.strictEqual(store.interval({ ...pending, unknownStreak: store.UNKNOWN_TRIES + 1 }, false),
+        store.CHECKS_MS,
+        'but one GitHub never settles must not pin the repository to a gh every tick');
+    const draftUnknown = { ...quiet, pulls: [pull({ draft: true, mergeable: 'UNKNOWN' })] };
+    assert.strictEqual(store.interval(draftUnknown, false), store.IDLE_MS,
+        'a draft\'s mergeability is not what the rail shows for it');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'UNKNOWN' })] });
+    for (let i = 0; i < store.UNKNOWN_TRIES + 1; i++) {
+        store.invalidate('o/r');
+        await store.tick({ sessions: [session()] });
+    }
+    assert.strictEqual(store.snapshot().repos['o/r'].unknownStreak, store.UNKNOWN_TRIES + 1,
+        'every list that still reads UNKNOWN counts towards the cap');
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull()] });
+    store.invalidate('o/r');
+    await store.tick({ sessions: [session()] });
+    assert.strictEqual(store.snapshot().repos['o/r'].unknownStreak, 0,
+        'and a settled answer resets it');
+    ok('UNKNOWN is retried soon, and not forever');
+
+    // The last real answer is held while GitHub recomputes — otherwise the
+    // conflict colour vanishes for a pass exactly when somebody is looking for it.
+    reset();
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'CONFLICTING' })] });
+    await store.tick({ sessions: [session()] });
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'UNKNOWN' })] });
+    store.invalidate('o/r');
+    let res = await store.tick({ sessions: [session()] });
+    let held = store.openPulls('o/r').pulls[0];
+    assert.strictEqual(held.mergeable, 'CONFLICTING', 'the conflict survives an UNKNOWN read');
+    assert.strictEqual(held.mergeableStale, true, 'and says it is carried over');
+    assert.strictEqual(res.changed, true, 'going stale is a change, so the windows hear of it');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'CONFLICTING' })] });
+    store.invalidate('o/r');
+    res = await store.tick({ sessions: [session()] });
+    held = store.openPulls('o/r').pulls[0];
+    assert.strictEqual(held.mergeableStale, undefined, 'a fresh answer replaces the carried one');
+    assert.strictEqual(res.changed, true, 'and that is pushed too, even with the same value');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'UNKNOWN', headSha: 'def456' })] });
+    store.invalidate('o/r');
+    await store.tick({ sessions: [session()] });
+    assert.strictEqual(store.openPulls('o/r').pulls[0].mergeable, 'UNKNOWN',
+        'a new push is exactly when a conflict may have been fixed, so nothing is carried');
+    ok('a known conflict is held through UNKNOWN, but not across a push');
+
+    // A PR leaving the open list — merged, most likely — moves the base its
+    // siblings are measured against. They are asked about soon, for a while.
+    reset();
+    const sibling = pull({ number: 2, url: 'https://github.com/o/r/pull/2' });
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull(), sibling] });
+    await store.tick({ sessions: [session()] });
+    assert.strictEqual(store.snapshot().repos['o/r'].baseMovedAt, 0, 'nothing has left yet');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [sibling] });
+    store.invalidate('o/r');
+    await store.tick({ sessions: [session()] });
+    const moved = store.snapshot().repos['o/r'];
+    assert.ok(moved.baseMovedAt > 0, 'a PR leaving the list marks the base as moved');
+    assert.strictEqual(store.interval(moved, false), store.UNKNOWN_MS,
+        'and the rest of the repository is asked about at the short interval');
+    assert.strictEqual(store.interval(moved, false, moved.baseMovedAt + store.MERGED_WINDOW_MS), store.IDLE_MS,
+        'until the window closes, when it goes back to the idle floor');
+    ok('a merge keeps its siblings on a short interval for a few minutes');
+
+    // -- a merge made somewhere else -----------------------------------------
+    //
+    // Merged in the GitHub UI, or by another developer: no list this store ran
+    // ever saw the PR leave, so only the base branch's head says anything moved.
+
+    reset();
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull()] });
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'aaa' } });
+    store.seed('o/r', { checkedAt: Date.now(), pulls: [pull()] });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    let watched = store.snapshot().repos['o/r'];
+    assert.deepStrictEqual(headCalls, ['o/r:main'], 'the base its open PRs target is asked about');
+    assert.strictEqual(watched.baseShas.main, 'aaa', 'and its head written down');
+    assert.strictEqual(watched.baseMovedAt, 0, 'a head seen for the first time is not a merge');
+    assert.strictEqual(listCalls.length, 0, 'so nothing is listed');
+
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'bbb' } });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    assert.strictEqual(headCalls.length, 1, 'ls-remote is asked at most once a minute per repository');
+    assert.strictEqual(listCalls.length, 0, 'and a move it has not looked for yet lists nothing');
+
+    const lastMinute = Date.now() - store.BASE_WATCH_MS - 1;
+    store.seed('o/r', {
+        checkedAt: Date.now(), pulls: [pull()], baseShas: { main: 'aaa' }, baseCheckedAt: lastMinute,
+    });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    watched = store.snapshot().repos['o/r'];
+    assert.strictEqual(listCalls.length, 1,
+        'a moved base lists the repository on the same pass, not on the idle floor');
+    assert.ok(watched.baseMovedAt > 0, 'and opens the merged window');
+    assert.strictEqual(watched.baseShas.main, 'bbb',
+        'with the new head kept through the list that followed');
+    assert.strictEqual(store.interval(watched, false), store.UNKNOWN_MS,
+        'so its siblings are asked about at the short interval');
+    ok('a base branch that moved elsewhere opens the merged window');
+
+    // ls-remote failing is not a move, and must not lose the head it compares to.
+    reset();
+    headAnswer = () => ({ ok: false, error: 'could not read Username', shas: {} });
+    store.seed('o/r', {
+        checkedAt: Date.now(), pulls: [pull()], baseShas: { main: 'aaa' }, baseCheckedAt: lastMinute,
+    });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    watched = store.snapshot().repos['o/r'];
+    assert.strictEqual(headCalls.length, 1, 'the base was asked about');
+    assert.strictEqual(listCalls.length, 0, 'a failed ls-remote lists nothing');
+    assert.strictEqual(watched.baseShas.main, 'aaa', 'and keeps the head it last read');
+    assert.ok(watched.baseCheckedAt > lastMinute,
+        'but still counts as asked, so a private repo is not retried every tick');
+
+    // A repository gh cannot list is on its backoff, and a moved base must not
+    // cut that short — asking harder is how a rate limit becomes a ban.
+    reset();
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'bbb' } });
+    store.seed('o/r', {
+        ok: false, attempts: 2, checkedAt: Date.now(), pulls: [pull()],
+        baseShas: { main: 'aaa' }, baseCheckedAt: lastMinute,
+    });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    assert.strictEqual(headCalls.length, 0, 'a failing repository is not watched');
+    assert.strictEqual(listCalls.length, 0, 'and stays on its backoff');
+    ok('the base watcher neither invents a move nor overrides a backoff');
+
+    // The heads survive a restart, or the first watch after one is blind.
+    reset();
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'aaa' } });
+    store.seed('o/r', { checkedAt: Date.now(), pulls: [pull()] });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    store.flush();
+    store.reset();
+    watched = store.snapshot().repos['o/r'];
+    assert.deepStrictEqual(watched.baseShas, { main: 'aaa' }, 'the heads are read back from the file');
+    assert.ok(watched.baseCheckedAt > 0, 'and so is when they were asked');
+    ok('base heads survive a restart');
 
     // -- activity is what the conversation moving means ----------------------
     //

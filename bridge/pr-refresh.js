@@ -15,15 +15,20 @@
 const cfg = require('./config');
 const pulls = require('./pulls');
 const prStore = require('./pr-store');
+const prReviews = require('./pr-reviews');
 const { mapLimit } = require('./memo');
 const { broadcast } = require('./events');
 
 // Handed over by server.js; see the header.
 let index = null;
 let pool = null;
+// Told when a pass moved something, for whoever needs more than the broadcast —
+// the orchestrators, whose payload carries their workers' PR status.
+let onChanged = null;
 
 function init(deps) {
     ({ index, pool } = deps);
+    onChanged = deps.onChanged || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +97,18 @@ async function runPrPass(force) {
     // against the one it had, so a pass that re-lists a quiet repository and finds
     // it unchanged tells nobody — otherwise this would be a heartbeat with a
     // payload, waking every open window every thirty seconds.
-    if (result.changed) broadcast('prs-changed', await prsPayload(sessions));
+    if (result.changed) {
+        broadcast('prs-changed', await prsPayload(sessions));
+        if (onChanged) {
+            try { onChanged(); } catch (err) { console.error(`[tgxcode] after a PR pass: ${err.message}`); }
+        }
+    }
+
+    // The nightly review's comment, for a labelled PR this bridge did not review
+    // itself — read here, on the clock, so the route that shows it never has to.
+    // Its own broadcast; a failure is a missing review, not a failed pass.
+    await prReviews.refreshRemote().catch(err => console.error(
+        `[tgxcode] PR review read failed: ${err.message}`));
     return result;
 }
 

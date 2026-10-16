@@ -16,6 +16,7 @@ const dashboard = require('../dashboard');
 const { NEXT, send } = require('../http');
 const pulls = require('../pulls');
 const { prsPayload, tickPrs } = require('../pr-refresh');
+const { ownersPayload } = require('../pr-owners');
 
 // Handed over by server.js — see the note above ROUTES there.
 let index = null;
@@ -72,6 +73,12 @@ async function handle(req, res, url, pathname, seg, who) {
     // a client that has not received an event yet needs somewhere to start.
     if (pathname === '/api/prs' && req.method === 'GET') {
         return send(res, 200, await prsPayload());
+    }
+
+    // Which conversation raised each pull request, keyed `owner/name#N` — what a
+    // `#151` in the transcript needs to say whose PR it is. See bridge/pr-owners.js.
+    if (pathname === '/api/pr-owners' && req.method === 'GET') {
+        return send(res, 200, await ownersPayload());
     }
 
     // Where a project's `origin` lives, as a page to open — the rail's ⋮ menu.

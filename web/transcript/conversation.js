@@ -11,6 +11,13 @@
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 //
+// The line under the title, `#conv-sub`, is drawn with Preact (renderHeader
+// here, renderAgentHeader in subagents.js — both, because they share the
+// container). It is redrawn on every sessions and PR push, and a rebuild took
+// the PR link out from under a pointer on its way to it. Everything else in this
+// file still builds DOM with el(): the log's rows are detached and reattached by
+// window.js, which is not something Preact can own.
+//
 // One exception: SESSION_VIEW and AGENT_VIEW capture `state.*` at load. That is
 // safe because state.js imports nothing, so it has always finished evaluating
 // before this file runs. Do not extend the exception to any other import.
@@ -20,12 +27,19 @@ import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
 import { dom, el, toast } from '../dom.js';
 import { ago, clip, clockOf, dateOf, dur, shortModel } from '../format.js';
-import { icon, PR_ICON } from '../icons.js';
+import { PR_ICON } from '../icons.js';
+import { html, render } from '../vendor/preact.js';
+import { icon } from '../boards/parts.js';
 import * as keys from '../keys.js';
 import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
+import { notePrRepo } from '../pr-refs.js';
+import { renderHeaderReview, reviewChip, reviewKey, toggleHeaderReview } from '../pr-review.js';
 import { loadCommands } from '../commands.js';
+import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
+import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
+import { loadSessionSpend, spendBit } from '../boards/analytics.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
     paintPanels, prUnknownWhy, rememberView, renderRail, saveDraft, scrollToEnd,
@@ -38,6 +52,7 @@ import { paintBranch } from '../composer/branch.js';
 import { autoGrow, clearPendingSend } from '../composer/send.js';
 import { closeMenus, live } from '../composer/slash.js';
 import { loadChangesIfStale, renderChanges, resetChanges } from './changes.js';
+import { loadReviewsIfStale, renderReviews, resetReviews } from './reviews.js';
 import { renderChecklist, resetChecklist } from './checklist.js';
 import { findKey, markFindDirty, resetFind } from './find.js';
 import { paneUp } from './layout.js';
@@ -48,6 +63,7 @@ import { closeTaskDialog, loadTasks, loadTasksSoon, renderTasks } from './sugges
 import { fillTool } from './tools.js';
 import { hideTurnPop, renderTurns, REVIEWABLE } from './turn-rail.js';
 import { mountEarlier, OPEN_TURNS } from './earlier.js';
+import { resetWindow, scheduleSeal } from './window.js';
 
 // ── conversation ─────────────────────────────────────────────────────────
 
@@ -114,12 +130,16 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         state.runner = data.runner || null;
 
         renderHeader();
+        // Fetched alongside rather than carried on the summary: it reads the
+        // transcript's usage, which the rest of the open does not need to wait on.
+        loadSessionSpend(id);
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
         // still in flight, which is reachable because the composer is live over a
         // skeleton. Forget it rather than re-append it: the transcript that is about
         // to be drawn may already contain the message, and putting the row back
         // would be guessing about where in this fetch it belongs. The message is
         // safe either way, and the state has to agree with the log.
+        liftSkeleton();
         dom.log.replaceChildren();
         clearPendingSend();
         appendEvents(data.events);
@@ -129,6 +149,8 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         renderRail();
         applyRunner(data.runner);
         scrollToEnd(true);
+        // The transcript fades in under the skeleton fading out — see liftSkeleton.
+        if (veil) enter(dom.log, { as: 'reveal' });
         // After the scroll, not before: it would be undone by it.
         takePendingJump();
 
@@ -140,6 +162,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         // Only when the drawer is up. It shells out to git, and a window that
         // never opens it should not pay for it on every session it visits.
         loadChangesIfStale();
+        loadReviewsIfStale();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -178,10 +201,19 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     state.turnIndex = [];
     state.windowStart = 0;
     state.orphanResults.clear();
+    resetWindow();      // the log is about to be replaced; its chunks go with it
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
+    // And neither are its strips: they used to stay up until this session's own
+    // answers arrived, showing one conversation's subagents and dev servers under
+    // another's title. Shut now; loadAgents and loadChannels grow them back.
+    state.channels = [];
+    state.channelsElsewhere = 0;
+    fill(dom.agents, []);
+    fill(dom.channels, []);
     resetFind();
     state.prStatus = null;      // nor are its pull requests
+    state.prReviewOpen = null;  // nor the review panel one of them had open
     state.ask = null;   // approvals belong to the session that is blocked on them
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
@@ -204,6 +236,8 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     paintBranch();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
+    resetReviews();             // the reviews too, and the dialog over them
+    renderReviews();
     resetChecklist();           // as was the task list — the push will refill it
     renderChecklist();
     // The whole list is already here, so this only has to be re-filtered — but it
@@ -233,6 +267,11 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     paintPanels();
 
     renderHeader();
+    // Before the transcript is fetched rather than after: the dock below the log
+    // belongs to the session it was drawn for, and a switch used to leave the old
+    // one up until this session's events had loaded.
+    holdOrchestrator(summary);
+    loadOrchestrator();
     hideTurnPop();
     // Emptied, but keeping its 30px until renderTurns says whether the new
     // conversation has a rail — otherwise the column blinks out and back while
@@ -241,6 +280,11 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     // not gain a reserved strip.
     if (paneUp(dom.turns)) dom.turns.classList.add('holding');
     dom.turns.replaceChildren();
+    // Instantly, on purpose: everything else in the window moves, but the
+    // conversation you left is gone the moment you leave it. A skeleton that
+    // faded in over it would show the old transcript under the new header.
+    dropVeil();
+    settle(dom.log);
     dom.log.replaceChildren(skeleton());
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
@@ -280,7 +324,44 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     rememberView();
 }
 
+/** The skeleton, lifted off the log and fading out over it. */
+let veil = null;
+
+function dropVeil() {
+    if (veil) { settle(veil); veil.remove(); }
+    veil = null;
+}
+
+/**
+ * Take the skeleton out of the log and leave it fading over the transcript that
+ * replaces it, so the two cross rather than cut.
+ *
+ * It goes into a box laid exactly over `.scroll`, in `.conv-main` — which is
+ * positioned — and inside a `.log` of its own, so its rows keep the width and
+ * gutter they had. Under reduced motion there is nothing to cross and it is just
+ * dropped.
+ */
+function liftSkeleton() {
+    dropVeil();
+    const sk = dom.log.querySelector(':scope > .skeleton');
+    const host = dom.scroll.closest('.conv-main');
+    if (!sk || !host || motionMs('med') <= 0) return;
+    const a = host.getBoundingClientRect(), b = dom.scroll.getBoundingClientRect();
+    const v = el('div', { class: 'skel-veil', 'aria-hidden': 'true',
+        style: `left:${b.left - a.left}px;top:${b.top - a.top}px;width:${b.width}px;height:${b.height}px` },
+    el('div', { class: 'log' }, sk));
+    host.append(v);
+    veil = v;
+    // The pane can change height under it — the orchestrator's dock growing in
+    // below as the transcript arrives — and a veil left at the old height would
+    // lie over the dock.
+    const ro = new ResizeObserver(() => { v.style.height = `${dom.scroll.clientHeight}px`; });
+    ro.observe(dom.scroll);
+    exit(v, { as: 'reveal', onGone: () => { ro.disconnect(); if (veil === v) veil = null; } });
+}
+
 function showOpenFailed(id, err) {
+    dropVeil();
     dom.log.replaceChildren(el('div', { class: 'load-failed' },
         el('p', {}, `This conversation could not be loaded: ${err.message}`),
         el('button', { class: 'more-btn', type: 'button',
@@ -349,38 +430,46 @@ export function renderHeader() {
     const s = state.current;
     dom.convTitle.textContent = s.title;
 
+    // Keyed by what each bit is, so a PR that appears or goes does not shift
+    // the nodes after it into new ones.
     const bits = [];
-    bits.push(el('span', {}, s.projectName));
+    const sep = (key, mark = '·') => html`<span key=${`${key}-sep`} class="sep">${mark}</span>`;
+    bits.push(html`<span key="project">${s.projectName}</span>`);
     if (s.worktree) {
-        bits.push(el('span', { class: 'sep' }, '/'));
-        bits.push(el('span', { class: 'branch' }, s.worktree.name));
+        bits.push(sep('branch', '/'), html`<span key="branch" class="branch">${s.worktree.name}</span>`);
     } else if (s.gitBranch && s.gitBranch !== 'HEAD') {
-        bits.push(el('span', { class: 'sep' }, '/'));
-        bits.push(el('span', { class: 'branch' }, s.gitBranch));
+        bits.push(sep('branch', '/'), html`<span key="branch" class="branch">${s.gitBranch}</span>`);
     }
-    if (s.model) {
-        bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('span', {}, shortModel(s.model)));
-    }
+    if (s.model) bits.push(sep('model'), html`<span key="model">${shortModel(s.model)}</span>`);
     // Only when this session's process predates the installed binary, which is
     // the case where a feature somebody just read about is not here yet.
     const oldClaude = cvStaleFor(s.sessionId);
     if (oldClaude) {
-        bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('span', { class: 'cv-old', title: `This session's process is Claude Code `
-            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.` },
-        `Claude ${oldClaude.version} (older)`));
+        bits.push(sep('cv'), html`<span key="cv" class="cv-old" title=${`This session's process is Claude Code `
+            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.`}
+            >${`Claude ${oldClaude.version} (older)`}</span>`);
     }
-    bits.push(el('span', { class: 'sep' }, '·'));
-    bits.push(el('span', {}, `${s.userMessages} turns`));
-    for (const pr of headerPrs()) {
-        bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(prLink(pr));
+    bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
+    const spend = spendBit(sep);
+    if (spend) bits.push(...spend);
+    const prs = headerPrs();
+    for (const pr of prs) {
+        bits.push(sep(pr.url), prLink(pr));
+        // The nightly review's verdict, beside the PR it reviewed; opening it
+        // draws the findings in #pr-review-pop under the header.
+        const live = state.prStatus && state.prStatus.get(pr.url);
+        if (live && live.review && live.repo) {
+            const key = reviewKey(live.repo, live.number);
+            bits.push(reviewChip(live.review, {
+                key: `${pr.url}-review`, open: state.prReviewOpen === key,
+                onToggle: () => toggleHeaderReview(key, renderHeader),
+            }));
+        }
     }
-    bits.push(el('span', { class: 'sep' }, '·'));
-    bits.push(el('span', { class: 'cwd', title: s.cwd }, clip(s.cwd, 42)));
+    bits.push(sep('cwd'), html`<span key="cwd" class="cwd" title=${s.cwd}>${clip(s.cwd, 42)}</span>`);
 
-    dom.convSub.replaceChildren(...bits);
+    render(bits, dom.convSub);
+    renderHeaderReview(state.prStatus ? [...state.prStatus.values()] : [], s.cwd, renderHeader);
     renderHeaderActions();
 }
 
@@ -434,10 +523,9 @@ function prLink(pr) {
             .filter(Boolean).join(' · '),
     ].filter(Boolean).join('\n');
 
-    return el('a', {
-        class: 'pr', 'data-status': status, title: tip,
-        href: pr.url, target: '_blank', rel: 'noreferrer',
-    }, icon(PR_ICON[status] || 'pr', 13), `PR #${pr.number}`);
+    return html`<a key=${pr.url} class="pr" data-status=${status} title=${tip}
+        href=${pr.url} target="_blank" rel="noreferrer"
+        >${icon(PR_ICON[status] || 'pr', 13)}${`PR #${pr.number}`}</a>`;
 }
 
 /**
@@ -460,11 +548,12 @@ export async function loadPrStatus() {
     // bridge answers a session with none from its index without asking GitHub.
     const id = state.current.sessionId;
     try {
-        const { prs, gh } = await get(`/api/sessions/${id}/prs`);
+        const { prs, gh, repo } = await get(`/api/sessions/${id}/prs`);
         if (!state.current || state.current.sessionId !== id) return;
         state.prStatus = new Map((prs || []).map(pr => [pr.url, pr]));
         if (gh && gh.error) state.prsError = gh.error;
         renderHeader();
+        notePrRepo(id, repo);
     } catch {
         // Leaves whatever was known before, which is better than blanking it.
     }
@@ -473,6 +562,7 @@ export async function loadPrStatus() {
 export function renderHeaderActions() {
     const s = state.current;
     if (!s) return;
+    paintOrchestratorButton();
     dom.btnPin.classList.toggle('on', !!s.pinned);
     dom.btnPin.setAttribute('aria-pressed', String(!!s.pinned));
     dom.btnPin.title = s.pinned ? 'Unpin this session' : 'Pin this session to the top';
@@ -487,9 +577,13 @@ export function renderHeaderActions() {
     dom.btnChanges.setAttribute('aria-pressed', String(state.changes.on));
     dom.btnChanges.title = state.changes.on
         ? 'Hide what this session changed' : 'What this session changed';
+    dom.btnReviews.classList.toggle('on', state.reviews.on);
+    dom.btnReviews.setAttribute('aria-pressed', String(state.reviews.on));
+    dom.btnReviews.title = state.reviews.on
+        ? 'Hide this session’s code reviews' : 'The code reviews this session ran';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = keys.hint(
-        dom.termPane.hidden ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
+        !isUp(dom.termPane) ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
         'terminal.toggle');
 }
 
@@ -532,6 +626,10 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
     let newMark = false;
     let sawAgent = false;
     let newTasks = false;
+    // Rows that arrive on a live tail are played in; a transcript drawn whole on
+    // open, or a stretch loaded above, is not — that is history appearing, not
+    // something happening.
+    const arrived = live ? [] : null;
     for (const ev of events) {
         if (ev.kind === 'tool-result') { patchTool(ev, view); continue; }
         // A suggested follow-up is not part of the conversation, it is an offer
@@ -589,11 +687,15 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
             if (!view.isAgent && !view.prepend && state.pendingSend && state.current
                 && state.pendingSend.sessionId === state.current.sessionId) {
                 clearPendingSend();
+                frag.append(node);
+                continue;   // and not played in: the swap is meant to be invisible
             }
         }
         frag.append(node);
+        if (arrived) arrived.push(node);
     }
     flush();
+    if (arrived) for (const n of arrived) enter(n, { as: 'arrive' });
     // A transcript that ends in tool calls has no message coming to close the
     // last run — openSession replays a finished conversation in one call, and
     // that run would otherwise stay unfolded forever. Only when nothing is
@@ -610,6 +712,10 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
         // A Task call that has only just appeared belongs on the strip now, not
         // after the next poll.
         if (sawAgent) { renderAgents(); loadAgents(); }
+        // Rows that have stopped changing are wrapped into chunks the window can
+        // take out of the document — see window.js. The prepended stretch is
+        // sealed by earlier.js, once it is in the log and the offset is kept.
+        scheduleSeal();
     }
     markFindDirty();
 }
@@ -804,7 +910,6 @@ function paintRunSummary(det) {
             ),
             el('div', { class: 'ev-body' },
                 el('div', { class: 'trow', 'data-status': status },
-                    el('span', { class: 'caret' }, '\u25b6'),
                     el('span', { class: 'tname' },
                         `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
                     el('span', { class: 'targ' }, parts.join(' \u00b7 ')),

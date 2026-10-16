@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const changes = require('../changes');
+const codeReviews = require('../code-reviews');
 const cfg = require('../config');
 const devbrowser = require('../devbrowser');
 const devservers = require('../devservers');
@@ -28,6 +29,7 @@ const { isLaunchable, openFile, openInExplorer } = require('../explorer');
 const git = require('../git');
 const { NEXT, readJson, send } = require('../http');
 const prStore = require('../pr-store');
+const prReviews = require('../pr-reviews');
 const pulls = require('../pulls');
 const scratchpad = require('../scratchpad');
 
@@ -35,9 +37,11 @@ const scratchpad = require('../scratchpad');
 let index = null;
 let runs = null;
 let terminals = null;
+let pool = null;
+let prefs = null;
 
 function init(deps) {
-    ({ index, runs, terminals } = deps);
+    ({ index, runs, terminals, pool, prefs } = deps);
 }
 
 // How many working-tree files the changes panel is sent. Well past what anybody
@@ -317,12 +321,22 @@ async function handle(req, res, url, pathname, seg, who) {
 
             // A `pr-link` entry usually names its repository. Where one did not,
             // the session's own directory is the best guess available.
+            //
+            // Asked whether or not any PR needs it now: `repo` is also returned on
+            // its own, because it is the repository a `#N` in this conversation
+            // means by default (web/pr-refs.js) — and a session that has raised no
+            // PR yet still has one.
             const list = summary.prs || [];
-            const repo = list.some(pr => !pr.repo) && summary.cwd
-                ? await pulls.repoOf(summary.cwd)
-                : null;
+            const repo = summary.cwd ? await pulls.repoOf(summary.cwd) : null;
 
-            return send(res, 200, prStore.forSession(list, repo));
+            // Each PR also carries the nightly review's verdict and count, or null —
+            // bridge/pr-reviews.js, which answers from memory like the store does.
+            const out = prStore.forSession(list, repo);
+            for (const pr of out.prs || []) {
+                const open = pr.repo ? prStore.lookup(pr.repo, pr.number, pr.url) : null;
+                pr.review = prReviews.summaryFor(pr.repo, pr.number, open && open.headSha);
+            }
+            return send(res, 200, { ...out, repo: repo || null });
         }
 
         // Show the session's working directory in Windows File Explorer.
@@ -392,6 +406,27 @@ async function handle(req, res, url, pathname, seg, who) {
 
             const out = await openFile(file);
             return send(res, out.ok ? 200 : 502, { ...out, how: 'open', file });
+        }
+
+        // The code reviews this session ran — see bridge/code-reviews.js. Which
+        // skills count is the session's own project's `reviews.types`, so a
+        // repository that declares its reviewer sees it here.
+        if (tail === 'reviews' && req.method === 'GET' && seg.length <= 5) {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const got = index.skillRuns(sessionId);
+            if (!got) return send(res, 404, { error: 'transcript not readable' });
+            const types = prefs.forCwd(summary.cwd).reviews.types;
+            const runner = pool && pool.get(sessionId);
+            const busy = Boolean(runner && runner.state === 'busy');
+            const rec = index.get(sessionId);
+            if (seg[4]) {
+                const one = codeReviews.one(got, types, rec, sessionId, decodeURIComponent(seg[4]), busy);
+                if (!one) return send(res, 404, { error: 'no such review' });
+                return send(res, 200, { sessionId, review: one });
+            }
+            return send(res, 200, { sessionId, types,
+                reviews: codeReviews.list(got, types, rec, sessionId, busy) });
         }
 
         // Open (or come back to) a shell in the same directory reveal would

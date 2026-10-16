@@ -1,7 +1,24 @@
 // Send later: the popover under the clock button, the chips for messages held
-// back to a time, and the bridge calls behind them. Moved out of app.js as it
-// was. wireLater() registers the popover's listeners and is called by app.js
-// from the wiring block they used to sit in.
+// back to a time, and the bridge calls behind them. wireLater() registers the
+// popover's listeners and is called by app.js from the wiring block they used to
+// sit in.
+//
+// **Drawn with Preact**, the way web/rail.js settled: #later's chips and
+// #later-menu's rows are rendered into those two containers, and the containers
+// themselves — shown, hidden, grown and positioned by hand — are not Preact's.
+// The chips are redrawn on every `later-changed`, which any window or the
+// bridge's own clock can push while you are hovering one or have a click half
+// done; keyed by message id, a chip keeps its node across that. What it decided:
+//
+//   - **"Send now" in flight is state, not a disabled attribute written by hand.**
+//     `state.laterSending` holds the ids, and the render disables the button, so a
+//     push that lands mid-request redraws the chip still disabled.
+//   - **The popover's date field keeps its own text** (`PickTime`, a hook), being
+//     a form control nothing else reads. Everything else it shows comes from
+//     `state.laterPick` and the remembered mode. It is emptied when it closes, so
+//     reopening starts the picker fresh, as it always has.
+//   - Markup and class names are what el() built, so the CSS did not change; the
+//     morph, flip and grow around the chips are unchanged.
 //
 // Imports app.js and its siblings, which import it back. That is safe only
 // because nothing here reads an imported binding while the module evaluates —
@@ -12,7 +29,8 @@
 // reading those at load is fine; nothing else here is.
 
 import { del, get, post } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { html, render, useState } from '../vendor/preact.js';
+import { dom, toast } from '../dom.js';
 import { clip, hhmm, pad } from '../format.js';
 import { state } from '../state.js';
 import { lockedNow, renderRail, restoreToComposer, saveDraft } from '../app.js';
@@ -21,6 +39,7 @@ import { clearAttach, readyAttachments, revokePreviews } from './attachments.js'
 import { autoGrow } from './send.js';
 import { closeMenus, live } from './slash.js';
 import { closeWispr } from './wispr.js';
+import { flip, grow, isUp, morph, present } from '../motion.js';
 
 // ── send later ───────────────────────────────────────────────────────────
 // The same message, at a time you pick. A send held back rather than a schedule:
@@ -64,6 +83,9 @@ export function applyLater(payload) {
     for (const id of state.laterOpen) {
         if (!state.later.some(m => m.id === id)) state.laterOpen.delete(id);
     }
+    for (const id of state.laterSending) {
+        if (!state.later.some(m => m.id === id && m.state === 'pending')) state.laterSending.delete(id);
+    }
     renderLater();
     renderRail();
 }
@@ -101,58 +123,57 @@ export function renderLater() {
     // While a subagent is on screen the composer belongs to nothing you can send
     // to, so its chips are out of scope too — renderQueue's rule.
     const show = mine.length > 0 && !state.agent;
-    dom.later.hidden = !show;
-    if (!show) return dom.later.replaceChildren();
+    if (!show) {
+        grow(dom.later, false, { onGone: () => { if (dom.later.hidden) render(null, dom.later); } });
+        return;
+    }
+    const opening = !isUp(dom.later);
+    morph(dom.later, () => flip(dom.later, (n) => n.dataset.id,
+        () => render(mine.map(laterChip), dom.later)));
+    if (opening) grow(dom.later, true);
+}
 
-    dom.later.replaceChildren(...mine.map((m) => {
-        const open = state.laterOpen.has(m.id);
-        const done = m.state !== 'pending' && m.state !== 'delivering';
-        const bad = m.state === 'missed' || m.state === 'failed';
-        return el('div', {
-            class: `later-chip${open ? ' open' : ''}${done ? ' done' : ''}${bad ? ' bad' : ''}`,
-            'data-id': m.id,
-        },
-        el('span', { class: 'later-when', title: new Date(m.at).toLocaleString() },
-            laterWhen(m)),
-        el('span', {
-            class: `later-mode${m.permissionMode === 'bypassPermissions'
-                || m.permissionMode === 'dontAsk' ? ' loud' : ''}`,
-            title: `It will be delivered in ${m.permissionMode}`,
-        }, m.permissionMode),
-        m.attachments.length
-            ? el('span', { class: 'queue-files' }, `${m.attachments.length}📎`)
-            : null,
-        el('button', {
-            class: 'later-text', type: 'button',
-            title: open ? 'Collapse' : 'Show the whole message',
-            onclick: () => {
+function laterChip(m) {
+    const open = state.laterOpen.has(m.id);
+    const done = m.state !== 'pending' && m.state !== 'delivering';
+    const bad = m.state === 'missed' || m.state === 'failed';
+    const loud = m.permissionMode === 'bypassPermissions' || m.permissionMode === 'dontAsk';
+    // "Send now" only while it is still waiting. On a message already sent it
+    // would send it twice, and the bridge refuses that — better not to offer it.
+    const pending = m.state === 'pending';
+    return html`<div key=${m.id} data-id=${m.id}
+        class=${`later-chip${open ? ' open' : ''}${done ? ' done' : ''}${bad ? ' bad' : ''}`}>
+        <span class="later-when" title=${new Date(m.at).toLocaleString()}>${laterWhen(m)}</span>
+        <span class=${`later-mode${loud ? ' loud' : ''}`}
+            title=${`It will be delivered in ${m.permissionMode}`}>${m.permissionMode}</span>
+        ${m.attachments.length
+            ? html`<span class="queue-files">${`${m.attachments.length}📎`}</span>`
+            : null}
+        <button class="later-text" type="button"
+            title=${open ? 'Collapse' : 'Show the whole message'}
+            onClick=${() => {
                 if (open) state.laterOpen.delete(m.id); else state.laterOpen.add(m.id);
                 renderLater();
-            },
-        }, open ? m.text : clip(m.text, 120)),
-        el('span', { class: 'queue-acts' },
-            // Only while it is still waiting. "Send now" on a message already sent
-            // would send it twice, and the bridge refuses that — better not to
-            // offer it.
-            m.state === 'pending'
-                ? el('button', {
-                    class: 'queue-act', type: 'button',
-                    title: 'Deliver this message now instead of waiting',
-                    onclick: (e) => sendLaterNow(m, e.currentTarget),
-                }, 'Send now')
-                : null,
-            el('button', {
-                class: 'queue-act danger', type: 'button',
-                title: m.state === 'pending' ? 'Cancel this message' : 'Clear this row',
-                'aria-label': m.state === 'pending' ? 'Cancel this message' : 'Clear this row',
-                onclick: () => cancelLater(m),
-            }, '×')));
-    }));
+            }}>${open ? m.text : clip(m.text, 120)}</button>
+        <span class="queue-acts">
+            ${pending
+                ? html`<button class="queue-act" type="button"
+                    disabled=${state.laterSending.has(m.id)}
+                    title="Deliver this message now instead of waiting"
+                    onClick=${() => sendLaterNow(m)}>Send now</button>`
+                : null}
+            <button class="queue-act danger" type="button"
+                title=${pending ? 'Cancel this message' : 'Clear this row'}
+                aria-label=${pending ? 'Cancel this message' : 'Clear this row'}
+                onClick=${() => cancelLater(m)}>×</button>
+        </span>
+    </div>`;
 }
 
 /** Deliver one now. The bridge runs the same path its clock would. */
-async function sendLaterNow(m, btn) {
-    if (btn) btn.disabled = true;
+async function sendLaterNow(m) {
+    state.laterSending.add(m.id);
+    renderLater();
     try {
         await post(`/api/later/${m.id}/send`, {});
         toast('Sent.', 'ok');
@@ -160,7 +181,8 @@ async function sendLaterNow(m, btn) {
         // 409 is the wait-for-idle refusal and is not a failure — the message is
         // untouched and pressing again in a minute is the right thing to do.
         toast(`Could not send it yet: ${err.message}`, 'warn');
-        if (btn) btn.disabled = false;
+        state.laterSending.delete(m.id);
+        renderLater();
     }
 }
 
@@ -210,16 +232,15 @@ function showLater(on) {
     closeSnips(live);
     if (live.wispr) closeWispr(live.wispr);
     state.laterPick = false;
-    dom.laterMenu.hidden = false;
+    present(dom.laterMenu, true, { as: 'menu' });
     dom.btnLater.setAttribute('aria-expanded', 'true');
     drawLater();
     positionLater();
 }
 
 export function closeLater({ focus = false } = {}) {
-    if (dom.laterMenu.hidden) return;
-    dom.laterMenu.hidden = true;
-    dom.laterMenu.replaceChildren();
+    if (!isUp(dom.laterMenu)) return;
+    present(dom.laterMenu, false, { as: 'menu', onGone: () => render(null, dom.laterMenu) });
     dom.btnLater.setAttribute('aria-expanded', 'false');
     if (focus) dom.btnLater.focus();
 }
@@ -249,50 +270,54 @@ function positionLater() {
 }
 
 function drawLater() {
-    const rows = laterPresets().map(p => el('button', {
-        class: 'later-row', type: 'button', role: 'option',
-        onclick: () => scheduleMessage(p.at),
-    }, el('span', {}, p.label), el('span', { class: 'at' }, hhmm(p.at))));
+    render(laterMenuTree(), dom.laterMenu);
+}
 
-    rows.push(el('button', {
-        class: `later-row${state.laterPick ? ' on' : ''}`, type: 'button', role: 'option',
-        onclick: () => { state.laterPick = !state.laterPick; drawLater(); },
-    }, el('span', {}, 'Pick a time…')));
+function laterMenuTree() {
+    return html`
+        ${laterPresets().map(p => html`<button key=${p.label} class="later-row" type="button"
+            role="option" onClick=${() => scheduleMessage(p.at)}>
+            <span>${p.label}</span><span class="at">${hhmm(p.at)}</span>
+        </button>`)}
+        <button class=${`later-row${state.laterPick ? ' on' : ''}`} type="button" role="option"
+            onClick=${() => { state.laterPick = !state.laterPick; drawLater(); }}>
+            <span>Pick a time…</span>
+        </button>
+        <div class="later-sep"></div>
+        <div class="later-fields">
+            <label><span>Deliver as</span>
+                <select aria-label="Permission mode to deliver in" value=${laterMode}
+                    onChange=${(e) => {
+                        laterMode = e.target.value;
+                        try { localStorage.setItem('laterMode', laterMode); } catch { /* private mode */ }
+                    }}>
+                    ${LATER_MODES.map(m => html`<option key=${m} value=${m}>${m}</option>`)}
+                </select>
+            </label>
+            ${state.laterPick ? html`<${PickTime} />` : null}
+        </div>`;
+}
 
-    rows.push(el('div', { class: 'later-sep' }));
-
-    const modeSel = el('select', {
-        'aria-label': 'Permission mode to deliver in',
-        onchange: (e) => {
-            laterMode = e.target.value;
-            try { localStorage.setItem('laterMode', laterMode); } catch { /* private mode */ }
-        },
-    }, ...LATER_MODES.map(m => el('option', { value: m, selected: m === laterMode }, m)));
-
-    const fields = [el('label', {}, el('span', {}, 'Deliver as'), modeSel)];
-
-    if (state.laterPick) {
-        const when = el('input', {
-            type: 'datetime-local',
-            value: localInputValue(atInMinutes(60)),
-            min: localInputValue(Date.now()),
-        });
-        fields.push(el('label', {}, el('span', {}, 'At'), when));
-        fields.push(el('button', {
-            class: 'go', type: 'button',
-            onclick: () => {
-                // `datetime-local` gives wall-clock text with no zone; `new Date`
-                // reads it as local, which is what was typed and what is meant.
-                const at = new Date(when.value).getTime();
-                if (!Number.isFinite(at)) return toast('Pick a date and a time.', 'warn');
-                if (at <= Date.now()) return toast('That time has already passed.', 'warn');
-                scheduleMessage(at);
-            },
-        }, 'Schedule'));
-    }
-    rows.push(el('div', { class: 'later-fields' }, ...fields));
-
-    dom.laterMenu.replaceChildren(...rows);
+/**
+ * The pick-a-time fields. The text in the box is this component's own — nothing
+ * else reads it until Schedule is pressed — and it starts an hour out each time
+ * the fields are opened.
+ */
+function PickTime() {
+    const [when, setWhen] = useState(() => localInputValue(atInMinutes(60)));
+    return html`
+        <label><span>At</span>
+            <input type="datetime-local" value=${when} min=${localInputValue(Date.now())}
+                onInput=${(e) => setWhen(e.target.value)} />
+        </label>
+        <button class="go" type="button" onClick=${() => {
+            // `datetime-local` gives wall-clock text with no zone; `new Date`
+            // reads it as local, which is what was typed and what is meant.
+            const at = new Date(when).getTime();
+            if (!Number.isFinite(at)) return toast('Pick a date and a time.', 'warn');
+            if (at <= Date.now()) return toast('That time has already passed.', 'warn');
+            scheduleMessage(at);
+        }}>Schedule</button>`;
 }
 
 /**
@@ -362,7 +387,7 @@ export function wireLater() {
     // stopPropagation, so the click-outside rule below does not close what it opened.
     dom.btnLater.addEventListener('click', (e) => {
         e.stopPropagation();
-        showLater(dom.laterMenu.hidden);
+        showLater(!isUp(dom.laterMenu));
     });
     // A click inside the popover is not a click outside it. Needed because the fields
     // at the foot of it are things you interact with for a while — picking a date,

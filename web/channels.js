@@ -11,6 +11,7 @@ import { state } from './state.js';
 import { dom, el, toast } from './dom.js';
 import { icon } from './icons.js';
 import { openPreview, openTitle } from './app.js';
+import { fill } from './motion.js';
 
 // ── dev-server channel strip ─────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ export function renderChannels() {
                     + 'session started, so it is not shown here.',
         }, `${n} elsewhere`));
     }
-    dom.channels.replaceChildren(...chips);
+    fill(dom.channels, chips);
 }
 
 /**
@@ -150,10 +151,14 @@ async function stopChannel(p, chip, go) {
     }
 }
 
-async function openInDevBrowser(p, chip, go) {
-    chip.classList.add('busy');
-    const was = go.textContent;
-    go.textContent = 'Opening';
+/**
+ * Open a port the strip lists. `chip` and `go` are the chip's own nodes, for its
+ * busy state; the command palette calls this without them.
+ */
+export async function openInDevBrowser(p, chip = null, go = null) {
+    if (chip) chip.classList.add('busy');
+    const was = go ? go.textContent : '';
+    if (go) go.textContent = 'Opening';
     try {
         await openPreview({
             port: p.port,
@@ -162,11 +167,11 @@ async function openInDevBrowser(p, chip, go) {
             devbrowserTitle: !p.titled && p.title ? p.title : undefined,
             http: p.http,
         });
-        go.textContent = 'Open';
+        if (go) go.textContent = 'Open';
     } catch (err) {
-        go.textContent = was;
+        if (go) go.textContent = was;
         toast(`Could not open :${p.port}. ${err.message}`, 'error');
     } finally {
-        chip.classList.remove('busy');
+        if (chip) chip.classList.remove('busy');
     }
 }

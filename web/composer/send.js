@@ -21,6 +21,7 @@ import { live } from './slash.js';
 import { renderPins } from '../snippets/pins.js';
 import { openSessionSoon } from '../transcript/conversation.js';
 import { branchFor, cancelBranch } from './branch.js';
+import { enter } from '../motion.js';
 
 // ── composer ─────────────────────────────────────────────────────────────
 
@@ -97,6 +98,7 @@ function showPendingSend(sessionId, text, files, previews) {
     });
     node.dataset.pending = '1';
     dom.log.append(node);
+    enter(node, { as: 'arrive' });
     state.pendingSend = {
         sessionId, node, previews, timer: setTimeout(clearPendingSend, PENDING_MS),
     };
@@ -188,6 +190,10 @@ export async function sendMessage(opts = {}) {
 
     enableSend(false);
 
+    // Whether the bridge took it — sent or queued. Callers that need to know
+    // (the orchestrator page records a decision as answered only once its answer
+    // is on its way) read the return; everyone else ignores it.
+    let sent = false;
     try {
         const r = await post(`/api/sessions/${sessionId}/send`, {
             text,
@@ -208,6 +214,7 @@ export async function sendMessage(opts = {}) {
         // queue back on failure. Canned text is not worth holding at all — it is
         // a button press away, and it is long.
         if (!r.queued && !canned) state.unsent.set(sessionId, text);
+        sent = true;
         applyRunner(r.status);
         if (!r.queued) {
             state.pinned = true;
@@ -231,6 +238,7 @@ export async function sendMessage(opts = {}) {
     } finally {
         enableSend(Boolean(state.current));
     }
+    return sent;
 }
 
 /**

@@ -12,7 +12,7 @@
 
 import { HEADERS, get, post } from './api.js';
 import { state } from './state.js';
-import { dom, el, toast } from './dom.js';
+import { dom, closeModal, el, openModal, toast } from './dom.js';
 import { renderQuotaRestart, showQuota } from './quota.js';
 import { openSessionSoon } from './transcript/conversation.js';
 
@@ -154,12 +154,12 @@ function openRestartDialog(payload) {
     // outside-click listener only closes that on a click outside .quota-wrap —
     // which the scrim is. Without this it sits open behind the modal.
     showQuota(false);
-    dom.restartScrim.hidden = false;
+    openModal(dom.restartScrim);
     dom.restartGo.focus();
 }
 
 export function closeRestart() {
-    dom.restartScrim.hidden = true;
+    closeModal(dom.restartScrim);
     state.restart = null;
 }
 

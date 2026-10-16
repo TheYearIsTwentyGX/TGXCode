@@ -20,7 +20,9 @@ const os = require('os');
 const path = require('path');
 
 const {
-    handoffEnvelope, parseHandoff, isHandoff, scanMeta,
+    handoffEnvelope, parseHandoff, isHandoff, scanMeta, buildEvents, parseLines,
+    orchestratorInboxEnvelope, parseOrchestratorInbox, isOrchestratorInbox,
+    orchestratorMessageEnvelope, parseOrchestratorMessage,
 } = require('../bridge/transcript.js');
 const { HandoffLimit, stateOf, wakes, wakeFailure } = require('../bridge/handoff.js');
 
@@ -153,6 +155,55 @@ assert.strictEqual(discussed.userMessages, 1, 'quoting a handoff is a turn');
 assert.strictEqual(discussed.handoffs, 0, 'and is not an arrival');
 assert.strictEqual(discussed.lastUserTs, '2026-08-21T19:00:00.000Z');
 ok('quoting a handoff counts as the turn it is');
+
+// --- the orchestrator's wrappers -------------------------------------------
+// The same problem twice more: the bridge nudging an idle orchestrator, and an
+// orchestrator instructing a worker. Both arrive as plain user messages, and
+// before these parsers both drew as raw tags in a "You" bubble and counted as
+// turns — so every nudge pulled the orchestrator to the top of the rail.
+
+const nudged = orchestratorInboxEnvelope({
+    count: 3, counts: { plan: 1, turn: 2 }, summary: '1 plan to approve, 2 turn reports',
+});
+assert.ok(nudged.includes('Call next_message'), 'the model still gets the prose');
+assert.deepStrictEqual(parseOrchestratorInbox(nudged),
+    { count: 3, counts: { plan: 1, turn: 2 }, summary: '1 plan to approve, 2 turn reports' });
+ok('the inbox nudge round-trips, counts and all');
+
+// What every nudge on disk looks like from before `kinds` was written.
+const oldNudge = '<orchestrator-inbox count="1">\n1 item waiting in your inbox (1 done report). '
+    + 'Call next_message to read them.\n</orchestrator-inbox>';
+assert.deepStrictEqual(parseOrchestratorInbox(oldNudge),
+    { count: 1, counts: null, summary: '1 done report' });
+ok('a nudge from before the kinds attribute still parses');
+
+const instructed = orchestratorMessageEnvelope({
+    from: 'orch-1111', fromTitle: 'the "big" <refactor>', text: '  also fix the lint\n',
+});
+assert.deepStrictEqual(parseOrchestratorMessage(instructed),
+    { from: 'orch-1111', fromTitle: 'the big refactor', text: 'also fix the lint' });
+ok('an orchestrator message round-trips, and its title cannot break out of the tag');
+
+assert.strictEqual(parseOrchestratorInbox(`it said:\n${nudged}`), null);
+assert.strictEqual(parseOrchestratorMessage(`it said:\n${instructed}`), null);
+assert.strictEqual(isOrchestratorInbox(null), false);
+ok('a quoted wrapper is not an arriving one');
+
+const orchLines = [
+    said('run the refactor across the workers', '2026-08-21T10:00:00.000Z'),
+    said(nudged, '2026-08-21T11:00:00.000Z'),
+    said(instructed, '2026-08-21T11:05:00.000Z'),
+].map((l, i) => ({ ...l, uuid: `u${i}` }));
+const orchFile = transcript('orch', orchLines);
+
+const orchMeta = scanMeta(orchFile);
+assert.strictEqual(orchMeta.userMessages, 1, 'neither wrapper is a turn the user took');
+assert.strictEqual(orchMeta.lastUserTs, '2026-08-21T10:00:00.000Z', 'and neither reorders the rail');
+ok('the orchestrator\'s wrappers do not count as turns');
+
+const kinds = buildEvents(parseLines(fs.readFileSync(orchFile)).entries).events.map(e => e.kind);
+assert.deepStrictEqual(kinds, ['user', 'orchestrator-inbox', 'orchestrator-message']);
+ok('and they reach the transcript as their own events, not as yours');
 
 // --- the loop guard --------------------------------------------------------
 // The case this exists for: two agents that each think the other should know

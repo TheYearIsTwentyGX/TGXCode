@@ -1,0 +1,15 @@
+/* Session templates in the Start-a-session dialog — web/new-session/templates.js.
+   Layout only, on the existing variables: dialogs are due a restyle, so this is
+   kept to what the rows need to sit on one line. */
+
+.tpl-line { display: flex; align-items: center; gap: 8px; }
+.tpl-line select, .tpl-line input[type="text"] { flex: 1; min-width: 0; }
+.tpl-line #new-tpl-scope { flex: 0 1 auto; }
+.tpl-line .btn { flex: none; }
+.tpl-line .btn.armed { color: var(--red); border-color: var(--red); }
+
+.tpl-fill { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.tpl-fill[hidden] { display: none; }
+.tpl-ask { display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 0; }
+.tpl-ask span { font: 400 12px/1 var(--mono); color: var(--text-4); }
+.tpl-ask input { flex: 1; min-width: 0; padding: 7px 12px; }

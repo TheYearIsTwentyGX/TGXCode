@@ -16,6 +16,8 @@ import { SESSION_VIEW } from './conversation.js';
 import { loadEarlier } from './earlier.js';
 import { markOutcome, openReview } from './review.js';
 import { toolSummary } from './tools.js';
+import { ensureAttached, layoutTop } from './window.js';
+import { present } from '../motion.js';
 
 // ── turn rail ────────────────────────────────────────────────────────────
 // A tick per thing you said, down the right edge of the transcript, and one for
@@ -152,7 +154,7 @@ function showTurnPop(tick, m) {
         ),
         el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') }, clipLines(body, 460)),
     );
-    pop.hidden = false;
+    present(pop, true, { as: 'menu' });
 
     // Sits to the left of the rail, centred on its tick, kept on screen.
     const r = tick.getBoundingClientRect();
@@ -163,7 +165,7 @@ function showTurnPop(tick, m) {
 }
 
 export function hideTurnPop() {
-    dom.turnPop.hidden = true;
+    present(dom.turnPop, false, { as: 'menu' });
 }
 
 export async function jumpToTurn(t) {
@@ -208,6 +210,9 @@ async function materialize(t) {
 export function revealNode(node, { view = SESSION_VIEW, range = null,
     instant = false, flash = true } = {}) {
     const sc = view.scroll;
+    // A row the window took out of the document has no box at all. Put it back
+    // first; its spacer was exactly its height, so nothing above it moves.
+    if (view === SESSION_VIEW) ensureAttached(node);
     // A row inside a folded run has no box to measure, so the jump would land
     // near the top of the pane instead of on it. Turns are never in a fold —
     // a message is what ends one — but the notification history jumps to tool
@@ -294,7 +299,9 @@ export function markActiveTurn() {
     let active = lo;
     while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (state.turns[mid].node.getBoundingClientRect().top > edge) {
+        // layoutTop, because a turn in a detached chunk has no box: it answers
+        // with the chunk's top, which keeps the search monotonic.
+        if (layoutTop(state.turns[mid].node) > edge) {
             hi = mid - 1;
         } else {
             active = mid;

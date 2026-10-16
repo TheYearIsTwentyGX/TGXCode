@@ -7,6 +7,8 @@
 // something in passing; modalUp() and closeOnClickOutside() the rules every
 // modal dialog shares.
 
+import { enter, exit, isUp, pose, present } from './motion.js';
+
 const $ = (id) => document.getElementById(id);
 export const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
@@ -24,17 +26,19 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'set-g-wispr', 'wispr-list', 'wispr-add',
     'model', 'effort', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
     'rail-sort', 'sort-menu',
-    'db-status', 'db-label', 'toasts',
+    'db-status', 'db-label', 'toasts', 'digest',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
     'cv-wrap', 'cv-pill', 'cv-menu', 'cv-changelog', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
-    'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
-    'turns', 'turn-pop',
+    'btn-pin', 'btn-orch', 'orch-dock', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
+    'turns', 'turn-pop', 'pr-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
     'find-subs', 'find-subs-row', 'find-close',
     'changes', 'changes-strip', 'changes-strip-count', 'changes-open', 'changes-count',
     'changes-refresh', 'changes-collapse', 'changes-body',
+    'btn-reviews', 'reviews', 'reviews-strip', 'reviews-strip-count', 'reviews-open', 'reviews-count',
+    'reviews-run', 'reviews-collapse', 'reviews-body',
     'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
     'conv-main', 'conv-body',
@@ -48,10 +52,13 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
+    'btn-analytics', 'analytics', 'an-sub', 'an-range', 'an-body',
+    'btn-hooks', 'hooks', 'hkp-sub', 'hkp-body',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'tb-search', 'tb-unfocus',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
+    'sx', 'sx-input', 'sx-tools', 'sx-sub', 'sx-body',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap', 'set-notes',
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
@@ -71,13 +78,18 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'branch', 'branch-text', 'branch-cancel',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
+    'palette-scrim',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-effort', 'new-perm',
     'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title', 'new-name',
     'new-tab-recent', 'new-tab-browse', 'new-recent', 'new-recent-filter', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'new-mkdir-gh', 'new-mkdir-gh-row', 'new-gh',
+    'new-start-row', 'new-orch-row', 'new-orch', 'new-orch-note',
     'new-wt-row', 'new-wt', 'new-wt-fields', 'new-wt-name', 'new-wt-base', 'new-wt-note',
+    'new-tpl-row', 'new-tpl', 'new-tpl-edit', 'new-tpl-del', 'new-tpl-fill', 'new-tpl-save',
+    'new-tpl-save-row', 'new-tpl-name', 'new-tpl-scope', 'new-tpl-save-go', 'new-tpl-save-cancel',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
+    'wt-scrim', 'wt-title', 'wt-body', 'wt-foot',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
@@ -85,6 +97,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'bar-more-wrap', 'bar-more', 'bar-more-badge', 'bar-more-menu',
     'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
     'review-outcome', 'review-body', 'review-jump',
+    'creview-scrim', 'creview-modal', 'creview-kind', 'creview-title', 'creview-when',
+    'creview-body', 'creview-jump', 'creview-fixall',
+    'img-scrim', 'img-title', 'img-copy', 'img-save', 'img-view',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go', 'preview']) {
@@ -124,20 +139,23 @@ export function toast(text, kind = 'info', opts = {}) {
     const { ms = 4200, action = null } = typeof opts === 'number' ? { ms: opts } : opts;
     const t = el('div', { class: 'toast', 'data-kind': kind },
         el('span', { class: 'toast-text' }, text));
+    // Fades and closes its gap, so the toasts under it slide up rather than jump.
+    const gone = () => exit(t, { as: 'toast', collapse: true });
 
     if (action) {
         t.append(el('button', {
             class: 'toast-action', type: 'button',
-            onclick: () => { t.remove(); action.onClick(); },
+            onclick: () => { gone(); action.onClick(); },
         }, action.label));
     }
     t.append(el('button', {
         class: 'toast-close', type: 'button', 'aria-label': 'Dismiss',
-        onclick: () => t.remove(),
+        onclick: () => gone(),
     }, '✕'));
 
     dom.toasts.append(t);
-    if (!action) setTimeout(() => t.remove(), ms);
+    enter(t, { as: 'toast' });
+    if (!action) setTimeout(gone, ms);
     return t;
 }
 
@@ -158,33 +176,93 @@ export function toast(text, kind = 'info', opts = {}) {
  * from a drag; see closeOnClickOutside().
  */
 export function modalUp() {
-    return !dom.newScrim.hidden || !dom.delScrim.hidden
-        || !dom.restartScrim.hidden || !dom.taskScrim.hidden
+    return isUp(dom.newScrim) || isUp(dom.delScrim)
+        || isUp(dom.restartScrim) || isUp(dom.taskScrim)
         // Both snippet dialogs hold work that only exists in the page — typed
         // parameter values, and a whole snippet body — so the rule above covers
         // them for the reason it covers Start-a-session. The parameter one can
         // also be up *over* Start-a-session, which is why it is a second term
         // rather than a case: Escape must be swallowed either way.
-        || !dom.snipFillScrim.hidden || !dom.snipEditScrim.hidden
+        || isUp(dom.snipFillScrim) || isUp(dom.snipEditScrim)
         // And the full-height CLAUDE.md editor, which is the plainest case on
         // this list: what it holds is a whole file somebody is part-way through
         // writing. Closing it keeps the draft, so Escape here would not have
         // *lost* anything — but six dialogs swallow the key and a seventh that
         // answered it would be the special case this function exists to stop.
-        || !dom.memoScrim.hidden
+        || isUp(dom.memoScrim)
         // The diff viewer is the one on this list that holds no work at all — it
         // is a read-only view and closing it loses nothing, so the paragraph
         // above is not what puts it here. The sentence after it is: six dialogs
         // swallow the key and a seventh that answered it would be exactly the
         // special case this function exists to stop.
-        || !dom.diffScrim.hidden
+        || isUp(dom.diffScrim)
         // The plan/question review, which is the diff viewer's case exactly: a
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
-        || !dom.reviewScrim.hidden
+        || isUp(dom.reviewScrim)
+        // A code review's findings: the same read-only case as the line above.
+        || isUp(dom.creviewScrim)
+        // The image preview: read-only again, and here for the same reason.
+        || isUp(dom.imgScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
-        || !dom.ghScrim.hidden;
+        || isUp(dom.ghScrim)
+        // The worktree janitor holds no work, which is the diff viewer's case:
+        // it is here so that no dialog is the one that answers Escape.
+        || isUp(dom.wtScrim);
+}
+
+/**
+ * Put a modal up: the scrim fades in and the dialog in it grows from just under
+ * its size. Every `.scrim` dialog opens and closes through these two, so they
+ * all move alike.
+ */
+export function openModal(scrim) {
+    present(scrim, true, { as: 'scrim' });
+    const box = scrim.querySelector(':scope > .modal');
+    if (!box) return;
+    pose(box, 'in', { as: 'dialog' });
+    watchScroll(box);
+}
+
+/**
+ * `data-scrolled` on a `.modal` while its body is scrolled off the top, which is
+ * what draws the line under the head (dialogs.css). Without it a field cut off at
+ * the top edge reads as a clipped label rather than as "more above".
+ *
+ * One capturing listener on the box rather than one on the body: the snippet
+ * editor's body is Preact's and is built afresh on every open, so a listener on
+ * the body would be on a node that is gone by the next one. The box is markup in
+ * every dialog, so the attribute on it is nobody else's to undo.
+ */
+const scrollWatched = new WeakSet();
+function watchScroll(box) {
+    const mark = () => {
+        const body = box.querySelector('.modal-body');
+        box.toggleAttribute('data-scrolled', Boolean(body && body.scrollTop > 0));
+    };
+    if (!scrollWatched.has(box)) {
+        scrollWatched.add(box);
+        box.addEventListener('scroll', (e) => {
+            if (e.target.classList && e.target.classList.contains('modal-body')) mark();
+        }, { capture: true, passive: true });
+    }
+    // Whatever the last open left behind, and again once the opener has filled
+    // the dialog and moved the focus, which can scroll the body by itself.
+    mark();
+    requestAnimationFrame(mark);
+}
+
+/**
+ * Take a modal down, playing the opening backwards. A scrim on its way out no
+ * longer counts in modalUp(). `onGone` runs once it has gone — the place to
+ * empty a dialog whose content should stay up while it fades.
+ */
+export function closeModal(scrim, onGone) {
+    if (!isUp(scrim)) { if (scrim.hidden && onGone) onGone(); return; }
+    const box = scrim.querySelector(':scope > .modal');
+    if (box) pose(box, 'out', { as: 'dialog' });
+    present(scrim, false, { as: 'scrim', onGone });
 }
 
 /**

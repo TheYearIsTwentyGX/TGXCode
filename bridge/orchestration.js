@@ -1,0 +1,1011 @@
+'use strict';
+
+// Orchestrator sessions, in motion: the half of the feature that acts. The store
+// — who is an orchestrator, who works for whom, what is in the inbox — is
+// bridge/orchestrators.js, and is deliberately inert; this is what moves things
+// between it and the runner pool.
+//
+// Five jobs, each small:
+//
+//   **Roles at spawn.** `roleOf` tells a starting `claude` whether it is an
+//   orchestrator or a worker, which decides the MCP tools it lists and the
+//   brief appended to its system prompt (with the user's addendum from
+//   Settings). See RunnerPool#recycle for why a role change waits for a restart.
+//
+//   **Filing.** A worker's turn ending, a worker's report, and a worker's ask —
+//   a plan, a question, a permission prompt — become inbox items instead of
+//   reaching the orchestrator's conversation. A worker's asks are *also* still
+//   pending on its runner exactly as before, so a window can answer them too;
+//   the first answer wins, as between two windows.
+//
+//   **Nudging.** The one thing that does reach the orchestrator's conversation:
+//   a single line saying how many items are waiting, sent only while it is idle
+//   (`shouldNudge`), debounced so a burst of reports is one nudge, and not again
+//   until something newer arrives. Never mid-turn, which is the whole point.
+//
+//   **The cap.** At most `maxRunning` workers mid-turn at once. A spawn over it
+//   is queued and started when a worker's turn ends.
+//
+//   **The cutoff.** Past a usage threshold every busy worker and the
+//   orchestrator itself are soft-stopped, and the orchestrator is paused — no
+//   nudges, no spawns — until somebody presses Resume. Usage is account-wide,
+//   and an orchestrator is the one thing in this app that can spend it with
+//   nobody watching.
+//
+// **Only this bridge's pool is acted on.** The store is shared with every other
+// bridge on the machine; a dev bridge's orchestrator is in the everyday
+// bridge's file too. Nothing here starts or stops a session unless the event
+// came from this pool or the runner is in it.
+
+const { randomUUID } = require('crypto');
+
+const cfg = require('./config');
+const { broadcast } = require('./events');
+const { resolveWorkdir } = require('./runner');
+const { createWorktree } = require('./worktree');
+const {
+    shouldNudge, usageTrips, resumeAtFor, describeCounts, cleanSettings, DEFAULT_SETTINGS,
+} = require('./orchestrators');
+const workerRead = require('./worker-read');
+const pulls = require('./pulls');
+const prStore = require('./pr-store');
+const {
+    orchestratorInboxEnvelope, orchestratorMessageEnvelope, isOrchestratorMessage, parseOrchestratorMessage,
+} = require('./transcript');
+
+// Handed over by server.js.
+let store = null;
+let pool = null;
+let index = null;
+let flags = null;
+let prefs = null;
+let usage = null;
+let normalizeMode = null;
+let sessionCwd = null;
+let tooManyCreates = null;
+
+const NUDGE_DEBOUNCE_MS = 2000;
+const nudgeTimers = new Map();
+// Request ids an orchestrator answered through `answer_worker`, so the resolve
+// that follows can say who answered it.
+const answeredByOrchestrator = new Set();
+
+// How long after a window's reset a paused orchestrator wakes. A minute, so the
+// first turn after it lands on the new window rather than racing the reset.
+let resumeGraceMs = 60_000;
+
+function init(deps) {
+    ({ store, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates } = deps);
+    if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
+    pool.roleOf = roleOf;
+    pool.delegateFor = (id) => store.roleOf(id) === 'worker';
+}
+
+function userPrefs() {
+    try { return prefs.forCwd().orchestrator || {}; } catch { return {}; }
+}
+
+/** The settings a new orchestrator starts with: the user's defaults from Settings. */
+function defaultSettings() {
+    const p = userPrefs();
+    return cleanSettings({
+        maxRunning: p.maxRunning,
+        worktree: p.worktree,
+        usageStop: {
+            enabled: p.usageStopEnabled, percent: p.usageStopPercent, window: p.usageStopWindow,
+            limits: { five_hour: p.usageStopAllFiveHour, seven_day: p.usageStopAllWeekly },
+            autoResume: p.usageStopAutoResume,
+        },
+    }, DEFAULT_SETTINGS);
+}
+
+// ---------------------------------------------------------------------------
+// Roles and briefs
+// ---------------------------------------------------------------------------
+
+function orchestratorBrief(id) {
+    const add = String(userPrefs().addendum || '').trim();
+    return [
+        '# You are an orchestrator',
+        '',
+        `You are an orchestrator session in TGXCode (session id ${id}). You coordinate`,
+        'worker sessions rather than doing the work yourself: break the task down, start',
+        'workers with spawn_worker (each gets its own git worktree by default), and steer',
+        'them to done.',
+        '',
+        'Workers do not talk to you directly. Everything they produce — reports, plans',
+        'waiting for approval, permission prompts, questions, and the final message of',
+        'each turn they finish — goes into your inbox. TGXCode tells you when items are',
+        'waiting with a one-line message, only while you are idle. Then call next_message',
+        '(pass max to take several), deal with each item, and end your turn. Do not poll',
+        'in a loop: when nothing is waiting, finish your turn and you will be told.',
+        '',
+        '- Items of kind plan, permission and ask mean a worker is blocked until somebody',
+        '  answers. Answer them with answer_worker. Approve a plan only if it does what you',
+        '  asked; deny with feedback to send it back. The user may answer one first — you',
+        '  will be told.',
+        '- send_to_worker gives a worker more instructions or an answer to its question.',
+        '- read_worker shows a worker\'s transcript. Start with mode digest; use tail or',
+        '  full only when you need detail, and ask to have the worker summarise itself.',
+        '- At most a few workers run at once; extra spawns are queued, not refused.',
+        '- get_usage shows the account\'s quota. If it passes the configured cutoff,',
+        '  TGXCode stops everything: you and your workers mid-turn. Depending on the',
+        '  settings it waits for the user, or wakes you once the window resets with a',
+        '  note listing the workers that were cut off — tell those to carry on.',
+        '- close_worker when a worker is finished with, so it stops counting.',
+        '',
+        'Keep a brief for the user with set_summary: one or two short paragraphs on',
+        'what has been done, what is in flight, and anything waiting on them. Rewrite it',
+        'after each batch of inbox items you handle and whenever you spawn or close a',
+        'worker. It is what the user reads to catch up — keep it current rather than',
+        'complete. Its structured fields are drawn on the orchestrator page, so fill them:',
+        '- goal: the overall task in one line.',
+        '- decisions: every question you need the user to answer, as a list — not asked',
+        '  in prose, where it scrolls away unanswered. Give options when there are a few',
+        '  obvious answers, and worker when it is about one worker. The user\'s answer',
+        '  arrives as a message starting "Re: <question>"; act on it, then leave that',
+        '  question out of the next set_summary.',
+        '- mergeOrder: the PR numbers in the order they should land, once there are any.',
+        ...(add ? ['', '## From the user', '', add] : []),
+    ].join('\n');
+}
+
+function workerBrief(orchId) {
+    const add = String(userPrefs().workerAddendum || '').trim();
+    return [
+        '# You are a worker',
+        '',
+        `You were started by an orchestrator session (${orchId}) in TGXCode, which`,
+        'hands you work and reads what you report. It is a model, not the user.',
+        '',
+        '- The final message of every turn you finish is forwarded to it automatically,',
+        '  so end each turn by saying plainly where things stand.',
+        '- report_to_orchestrator files something in its inbox: kind "question" when you',
+        '  are blocked on a decision (then end your turn — the answer comes as a message),',
+        '  "update" for progress worth knowing mid-turn, "done" when the work is finished,',
+        '  with what you did and where it is (branch, PR).',
+        '- Your plans and permission prompts go to the orchestrator for approval.',
+        '- Messages from it arrive wrapped in <orchestrator-message>.',
+        ...(add ? ['', '## From the user', '', add] : []),
+    ].join('\n');
+}
+
+function roleOf(sessionId) {
+    const role = store.roleOf(sessionId);
+    if (role === 'orchestrator') return { role, brief: orchestratorBrief(sessionId) };
+    if (role === 'worker') return { role, brief: workerBrief(store.orchestratorOf(sessionId).id) };
+    return null;
+}
+
+// ---------------------------------------------------------------------------
+// Read side
+// ---------------------------------------------------------------------------
+
+function workerRow(w) {
+    const r = pool.get(w.id);
+    const st = r ? r.status() : null;
+    const s = index.summary(w.id);
+    return {
+        id: w.id,
+        title: (s && s.title) || w.title,
+        cwd: w.cwd,
+        worktree: w.worktree,
+        spawnedAt: w.spawnedAt,
+        closedAt: w.closedAt,
+        state: st ? st.state : 'stopped',
+        pending: st && st.pendingPermission ? st.pendingPermission.kind : null,
+        pr: workerPr(s),
+    };
+}
+
+/**
+ * The newest pull request a worker's transcript links, with its status where
+ * pr-store already has one. Memory only, as pr-owners is: the payload is built
+ * on every filing, and a `gh` call there would put GitHub between a worker
+ * reporting and the window hearing about it. A PR the store has not seen yet
+ * comes back `status: "unknown"` with its number and url, which is still
+ * something to link to.
+ */
+function workerPr(s) {
+    const list = (s && s.prs) || [];
+    const last = list[list.length - 1];
+    if (!last || last.number == null) return null;
+    const [r] = pulls.resolveBatch([last], prStore.lookup);
+    return {
+        number: last.number, url: last.url || null, repo: r.repo || null,
+        title: r.title || null, status: r.status, label: r.label || null,
+    };
+}
+
+/** Everything a client draws an orchestrator from. Also the `orchestrator` event. */
+function payload(id) {
+    const o = store.get(id);
+    if (!o) return { orchestratorId: id, enabled: false };
+    const inbox = o.inbox.slice(-100).reverse();
+    return {
+        orchestratorId: id,
+        enabled: true,
+        settings: o.settings,
+        paused: o.paused,
+        summary: o.summary,
+        workers: o.workers.map(workerRow),
+        pendingSpawns: o.pendingSpawns.map(p => ({ id: p.id, title: p.title, at: p.at })),
+        unread: o.inbox.filter(i => i.status === 'new').length,
+        inbox,
+    };
+}
+
+// A burst of filings — six workers finishing at once — is one broadcast per
+// orchestrator and one `sessions-changed`, not one each: that event makes every
+// window and phone refetch the whole session list.
+const EMIT_DEBOUNCE_MS = 250;
+const emitTimers = new Map();
+let listTimer = null;
+
+function emit(id) {
+    if (emitTimers.has(id)) return;
+    const t = setTimeout(() => {
+        emitTimers.delete(id);
+        broadcast('orchestrator', payload(id));
+    }, EMIT_DEBOUNCE_MS);
+    t.unref();
+    emitTimers.set(id, t);
+    if (!listTimer) {
+        listTimer = setTimeout(() => {
+            listTimer = null;
+            broadcast('sessions-changed', { at: Date.now() });
+        }, EMIT_DEBOUNCE_MS);
+        listTimer.unref();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Nudging
+// ---------------------------------------------------------------------------
+
+function scheduleNudge(orchId) {
+    if (!store.get(orchId) || nudgeTimers.has(orchId)) return;
+    const t = setTimeout(() => { nudgeTimers.delete(orchId); nudge(orchId); }, NUDGE_DEBOUNCE_MS);
+    t.unref();
+    nudgeTimers.set(orchId, t);
+}
+
+function nudge(orchId) {
+    const o = store.get(orchId);
+    const r = pool.get(orchId);
+    if (!shouldNudge(o, r ? r.status() : null)) return false;
+    const summary = index.summary(orchId);
+    if (!summary) return false;
+    const unread = store.unread(orchId);
+    const counts = {};
+    for (const i of unread) counts[i.kind] = (counts[i.kind] || 0) + 1;
+    const text = orchestratorInboxEnvelope({
+        count: unread.length, counts, summary: describeCounts(unread),
+    });
+    const runner = r || pool.ensure(orchId, {
+        cwd: sessionCwd(summary), permissionMode: normalizeMode(summary.permissionMode),
+    });
+    runner.send(text);
+    store.noteNudged(orchId, Math.max(...unread.map(i => i.seq)));
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Filing
+// ---------------------------------------------------------------------------
+
+function file(orchId, item) {
+    const row = store.push(orchId, item);
+    if (!row) return null;
+    emit(orchId);
+    scheduleNudge(orchId);
+    return row;
+}
+
+/** A worker's report, from `report_to_orchestrator`. */
+function report(workerId, kind, text) {
+    const o = store.orchestratorOf(workerId);
+    if (!o) return null;
+    if (kind === 'done') store.noteDone(workerId, true);
+    return file(o.id, { workerId, kind, text });
+}
+
+function askText(p) {
+    const input = p.input || {};
+    if (p.kind === 'plan') return String(input.plan || '');
+    if (p.kind === 'question') {
+        return (input.questions || []).map((q) => {
+            const opts = (q.options || []).map(o => `  - ${o.label}${o.description ? `: ${o.description}` : ''}`);
+            return [`${q.question}${q.multiSelect ? ' (pick any)' : ''}`, ...opts].join('\n');
+        }).join('\n\n');
+    }
+    const detail = p.description || (input.command ? `$ ${input.command}` : JSON.stringify(input).slice(0, 2000));
+    return `${p.displayName || p.tool}: ${detail}`;
+}
+
+function onPermissionRequest(p) {
+    const o = store.orchestratorOf(p.sessionId);
+    if (!o) return;
+    file(o.id, {
+        workerId: p.sessionId,
+        kind: p.kind === 'plan' ? 'plan' : p.kind === 'question' ? 'ask' : 'permission',
+        text: askText(p),
+        requestId: p.requestId,
+        ask: { kind: p.kind, tool: p.tool, displayName: p.displayName, input: p.input },
+    });
+}
+
+const STALE_OUTCOMES = new Set(['superseded', 'abandoned', 'stopped', 'auto-denied']);
+
+function onPermissionResolved(p) {
+    const o = store.orchestratorOf(p.sessionId);
+    if (!o) return;
+    const item = store.byRequest(p.sessionId, p.requestId);
+    if (!item || item.status === 'resolved' || item.status === 'stale') {
+        answeredByOrchestrator.delete(p.requestId);
+        return;
+    }
+    const byOrch = answeredByOrchestrator.delete(p.requestId);
+    const wasRead = item.status === 'read';
+    store.settle(o.id, item.id, {
+        status: STALE_OUTCOMES.has(p.outcome) ? 'stale' : 'resolved',
+        outcome: p.outcome, by: byOrch ? 'orchestrator' : 'user',
+    });
+    // The orchestrator has seen this one and may be about to answer it; tell it
+    // somebody else did. An unread one just leaves the inbox quietly.
+    if (!byOrch && wasRead && !STALE_OUTCOMES.has(p.outcome)) {
+        const w = store.worker(o.id, p.sessionId);
+        file(o.id, {
+            workerId: p.sessionId, kind: 'note',
+            text: `The user answered ${w && w.title ? `"${w.title}"` : 'a worker'}'s ${item.kind} `
+                + `(${p.outcome}) before you did — there is nothing left to answer there.`,
+        });
+    } else {
+        emit(o.id);
+    }
+}
+
+function onTurnComplete(res) {
+    const id = res.sessionId;
+    if (store.get(id)) {
+        checkUsage();
+        scheduleNudge(id);
+        return;
+    }
+    const o = store.orchestratorOf(id);
+    if (!o) return;
+    const w = store.worker(o.id, id);
+    if (w && !w.closedAt) {
+        if (w.reportedDone) {
+            store.noteDone(id, false);
+            emit(o.id);
+        } else {
+            const r = pool.get(id);
+            const text = (r && r.lastResultText) || '(the turn ended without a final message)';
+            file(o.id, { workerId: id, kind: 'turn', text: res.isError ? `[ended with an error] ${text}` : text });
+        }
+    }
+    drainSpawns(o.id);
+    checkUsage();
+}
+
+/** The orchestrator going idle by any route — a stop, an answered ask — is a chance to nudge. */
+function onStatus(s) {
+    if (!s || !s.sessionId) return;
+    if (store.get(s.sessionId) && s.state === 'idle') scheduleNudge(s.sessionId);
+    else noteWorkerStatus(s);
+}
+
+// What each worker last looked like in a payload, so a status tick that changed
+// neither its state nor what it waits on — most of them: `status` also moves on
+// every busySince and mode — does not rebroadcast the whole orchestrator.
+const workerSeen = new Map();
+
+/** A worker's state moving is a change to its orchestrator's payload; say so. */
+function noteWorkerStatus(s) {
+    const o = store.orchestratorOf(s.sessionId);
+    if (!o) return;
+    const sig = `${s.state}|${s.pendingPermission ? s.pendingPermission.kind : ''}`;
+    if (workerSeen.get(s.sessionId) === sig) return;
+    workerSeen.set(s.sessionId, sig);
+    emit(o.id);
+}
+
+// ---------------------------------------------------------------------------
+// Workers
+// ---------------------------------------------------------------------------
+
+// Starts in progress, per orchestrator. A worker has no runner — and so does
+// not count as running — until its worktree exists, which is an await; without
+// these a drain or a batch of parallel spawn_worker calls all saw the same
+// headroom and started every one of them.
+const starting = new Map();
+
+function reserve(orchId) {
+    starting.set(orchId, (starting.get(orchId) || 0) + 1);
+}
+
+function release(orchId) {
+    const n = (starting.get(orchId) || 1) - 1;
+    if (n > 0) starting.set(orchId, n);
+    else starting.delete(orchId);
+}
+
+function running(orchId) {
+    return (starting.get(orchId) || 0) + store.openWorkers(orchId).filter((w) => {
+        const r = pool.get(w.id);
+        return r && (r.state === 'busy' || r.state === 'starting');
+    }).length;
+}
+
+function slug(s) {
+    return String(s || 'worker').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+        .slice(0, 32) || 'worker';
+}
+
+function refuse(status, message) {
+    const err = new Error(message);
+    err.status = status;
+    return err;
+}
+
+/**
+ * Start a worker, or queue it when the cap is reached. `opts` is what
+ * `spawn_worker` takes: {prompt, title, cwd, worktree, permissionMode, model, effort}.
+ */
+async function spawn(orchId, opts) {
+    const o = store.get(orchId);
+    if (!o) throw refuse(404, 'that session is not an orchestrator');
+    if (o.paused) {
+        throw refuse(409, `this orchestrator is paused (${o.paused.reason}) — nothing new starts `
+            + 'until the user resumes it');
+    }
+    if (!opts.prompt || !String(opts.prompt).trim()) throw refuse(400, 'prompt is required');
+    if (running(orchId) >= o.settings.maxRunning) {
+        const row = store.queueSpawn(orchId, { prompt: String(opts.prompt), title: opts.title || null, opts });
+        emit(orchId);
+        return { queued: true, id: row.id, position: store.get(orchId).pendingSpawns.length,
+            running: running(orchId), maxRunning: o.settings.maxRunning };
+    }
+    return { queued: false, ...(await startWorker(orchId, opts)) };
+}
+
+/**
+ * Start one worker, holding a slot for it from the first line.
+ *
+ * The reservation is taken here rather than by each caller: an async function
+ * runs synchronously up to its first await, so this still happens before any
+ * other spawn or drain can look — and there is no second call site to forget.
+ * It is given back the moment the worker's runner exists (from then on the
+ * runner itself counts), or when the start fails — and a failure lets the
+ * queue move, since nothing else would: a queue only drains when a running
+ * worker's turn ends, and the one that failed never had one.
+ */
+async function startWorker(orchId, opts) {
+    reserve(orchId);
+    let held = true;
+    const free = () => {
+        if (!held) return;
+        held = false;
+        release(orchId);
+    };
+    try {
+        return await launch(orchId, opts, free);
+    } catch (err) {
+        free();
+        drainSpawns(orchId);
+        throw err;
+    } finally {
+        free();
+    }
+}
+
+async function launch(orchId, opts, free) {
+    const o = store.get(orchId);
+    const summary = index.summary(orchId);
+    const base = opts.cwd || (summary ? sessionCwd(summary) : null);
+    if (!base) throw refuse(400, 'cwd is required — the orchestrator\'s own directory is not known yet');
+    if (tooManyCreates()) throw refuse(429, 'too many sessions started in the last minute — try again shortly');
+
+    const title = String(opts.title || '').trim() || String(opts.prompt).split('\n')[0].slice(0, 60);
+    const sessionId = randomUUID();
+    const wantTree = opts.worktree === undefined || opts.worktree === null
+        ? o.settings.worktree : opts.worktree !== false;
+
+    let worktree = null;
+    let startIn = base;
+    if (wantTree) {
+        const repo = resolveWorkdir(base);
+        const name = typeof opts.worktree === 'string' && opts.worktree.trim()
+            ? opts.worktree.trim() : `${slug(title)}-${sessionId.slice(0, 6)}`;
+        try {
+            const wt = await createWorktree(repo, name, undefined, { allow: (p) => cfg.withinRoots(p) });
+            worktree = { path: wt.path, branch: wt.branch };
+            startIn = wt.path;
+        } catch (err) {
+            throw refuse(err.code === 'worktree-exists' ? 409 : 400,
+                `could not make a worktree: ${err.message}. Pass worktree: false to start in ${base} instead.`);
+        }
+    }
+
+    // Filed before the spawn: the role is read off the store as `claude` starts.
+    store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree });
+    try {
+        pool.create({
+            sessionId, cwd: startIn, prompt: String(opts.prompt),
+            model: opts.model || null, effort: opts.effort || null,
+            permissionMode: normalizeMode(opts.permissionMode || 'auto'),
+        });
+    } catch (err) {
+        store.closeWorker(orchId, sessionId);
+        throw refuse(400, err.message);
+    }
+    // The runner counts now; the reservation would count it twice.
+    free();
+    const parentFlags = flags.get(orchId);
+    flags.set(sessionId, { title, ...(parentFlags.test ? { test: true } : {}) });
+    index.note(sessionId);
+    emit(orchId);
+    return { sessionId, title, cwd: startIn, worktree };
+}
+
+function drainSpawns(orchId) {
+    const o = store.get(orchId);
+    if (!o || o.paused) return;
+    while (o.pendingSpawns.length && running(orchId) < o.settings.maxRunning) {
+        const next = store.takeSpawn(orchId);
+        startWorker(orchId, { ...next.opts, prompt: next.prompt, title: next.title }).catch((err) => {
+            file(orchId, { kind: 'note', text: `A queued worker "${next.title || 'untitled'}" could `
+                + `not be started: ${err.message}` });
+        });
+    }
+}
+
+function ownWorker(orchId, workerId) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    const w = store.worker(orchId, workerId);
+    if (!w) throw refuse(404, 'no worker with that id belongs to this orchestrator — see list_workers');
+    return w;
+}
+
+function runnerFor(w) {
+    const r = pool.get(w.id);
+    if (r) return r;
+    const s = index.summary(w.id);
+    return pool.ensure(w.id, {
+        cwd: s ? sessionCwd(s) : w.cwd,
+        permissionMode: normalizeMode(s ? s.permissionMode : 'auto'),
+    });
+}
+
+function envelope(orchId, text) {
+    const s = index.summary(orchId);
+    return orchestratorMessageEnvelope({ from: orchId, fromTitle: s && s.title, text });
+}
+
+function sendTo(orchId, workerId, text) {
+    const w = ownWorker(orchId, workerId);
+    if (w.closedAt) throw refuse(409, 'that worker is closed');
+    if (!String(text || '').trim()) throw refuse(400, 'text is required');
+    const r = runnerFor(w);
+    const entry = r.send(envelope(orchId, text));
+    const st = r.status();
+    return { ok: true, queued: st.queue.some(q => q.id === entry.id), state: st.state };
+}
+
+const ASK_PROMPT = 'Your orchestrator asks for a summary of where you are: in 200 words or fewer, '
+    + 'what you have done, what is left, and anything you are blocked on. Reply with that and '
+    + 'nothing else — do not carry on with the work in this turn.';
+
+async function read(orchId, workerId, { mode = 'digest', turns, offset } = {}) {
+    const w = ownWorker(orchId, workerId);
+    if (mode === 'ask') {
+        sendTo(orchId, workerId, ASK_PROMPT);
+        return { text: 'Asked. The worker\'s summary will arrive in your inbox as its next turn report.' };
+    }
+    const rec = index.get(workerId);
+    if (!rec || !rec.file) {
+        const text = 'That worker has no transcript yet — it may still be starting. Try again in a few seconds.';
+        // A digest keeps its shape with nothing to read, so a page drawing
+        // `fields` gets null rather than a missing key.
+        return mode === 'digest' ? { text, headline: null, fields: null } : { text };
+    }
+    if (mode === 'tail') return workerRead.tail(rec.file, Number(turns) || 3);
+    if (mode === 'full') return workerRead.full(rec.file, Number(offset) || 0);
+    const r = pool.get(workerId);
+    const s = index.summary(workerId);
+    return workerRead.digest(rec.file, {
+        cwd: (s && s.cwd) || w.cwd, status: r ? r.status() : null, lastResult: r ? r.lastResultText : null,
+    });
+}
+
+function answer(orchId, itemId, decision, extra = {}) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    const item = store.item(orchId, itemId);
+    if (!item) throw refuse(404, 'no inbox item with that id');
+    if (!item.requestId) throw refuse(400, `a ${item.kind} item has nothing to answer — use send_to_worker`);
+    if (item.status === 'resolved' || item.status === 'stale') {
+        throw refuse(409, `already ${item.status}${item.by ? ` by the ${item.by}` : ''}`
+            + `${item.outcome ? ` (${item.outcome})` : ''}`);
+    }
+    const r = pool.get(item.workerId);
+    const pending = r && r.pendingPermission;
+    if (!pending || pending.id !== item.requestId) {
+        store.settle(orchId, itemId, { status: 'stale', outcome: 'gone' });
+        emit(orchId);
+        throw refuse(409, 'that worker is no longer waiting on this — it was answered, stopped or restarted');
+    }
+    // A plan approved without a mode would leave the worker in plan mode, where
+    // the work it was just told to do is refused.
+    const mode = extra.mode || (item.kind === 'plan' && decision !== 'deny' ? 'auto' : null);
+    answeredByOrchestrator.add(item.requestId);
+    const out = r.answerPermission(item.requestId, decision === 'allow-always' ? 'allow-always' : decision, {
+        answers: extra.answers || null, feedback: extra.feedback || '', mode,
+        updatedInput: null,
+    });
+    if (!out.ok) {
+        answeredByOrchestrator.delete(item.requestId);
+        throw refuse(409, out.error);
+    }
+    return { ok: true };
+}
+
+/**
+ * Stop a session's turn on the bridge's own initiative, without losing what was
+ * queued on it. `stop()` returns the queue and drops it; this gives each message
+ * back to whoever wrote it. An instruction the orchestrator sent comes back to
+ * the orchestrator's inbox as a note — it assumed delivery, and a composer on a
+ * page nobody is looking at would be the worst place for it. Anything else was
+ * typed by a person, and goes back as a `send-failed`, the way the Stop button
+ * hands it to the composer.
+ */
+function stopKeeping(r, why, opts = {}) {
+    const owner = store.orchestratorOf(r.sessionId);
+    if (owner) {
+        const mine = r.queue.filter(q => isOrchestratorMessage(q.text));
+        if (mine.length) {
+            r.queue = r.queue.filter(q => !mine.includes(q));
+            const w = store.worker(owner.id, r.sessionId);
+            file(owner.id, {
+                workerId: r.sessionId, kind: 'note',
+                text: `Not delivered to ${w && w.title ? `"${w.title}"` : 'that worker'} — ${why} `
+                    + `Send again once it is running if it still applies:\n\n`
+                    + mine.map(q => parseOrchestratorMessage(q.text).text).join('\n\n---\n\n'),
+            });
+        }
+    }
+    r.handOverQueue(why);
+    return r.stop(opts);
+}
+
+async function stopWorker(orchId, workerId, { hard = false } = {}) {
+    const w = ownWorker(orchId, workerId);
+    const r = pool.get(w.id);
+    if (!r) return { ok: true, how: null };
+    const out = await stopKeeping(r, 'it was stopped before these were sent.', { hard });
+    return { ok: true, how: out.how };
+}
+
+async function closeWorker(orchId, workerId, { archive = true } = {}) {
+    const w = ownWorker(orchId, workerId);
+    const r = pool.get(w.id);
+    if (r && r.state === 'busy') {
+        await stopKeeping(r, 'it was closed before these were sent.');
+    }
+    store.closeWorker(orchId, workerId);
+    if (archive) flags.set(workerId, { archived: true });
+    emit(orchId);
+    drainSpawns(orchId);
+    return { ok: true, worktree: w.worktree };
+}
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+
+function windows() {
+    try { return usage.snapshot().windows || []; } catch { return []; }
+}
+
+function usageFor(orchId) {
+    const o = store.get(orchId);
+    return {
+        windows: windows().map(w => ({ type: w.type, usedPercent: w.usedPercent, usedPercentAt: w.usedPercentAt,
+            resetsAt: w.resetsAt, status: w.status })),
+        cutoff: o ? o.settings.usageStop : null,
+        paused: o ? o.paused : null,
+    };
+}
+
+/** Does this bridge run anything of this orchestrator's? */
+function ours(o) {
+    return !!pool.get(o.id) || o.workers.some(w => pool.get(w.id));
+}
+
+/**
+ * Pause any orchestrator past its cutoff. On the clock and on quota events only
+ * the ones this bridge runs something of are considered — the store is shared
+ * with every other bridge. `onlyId` is a settings change made here: that one is
+ * checked whether or not anything of it is running yet, so a cutoff lowered
+ * just after a restart still takes effect before its next spawn.
+ */
+function checkUsage(onlyId = null) {
+    const ws = windows();
+    for (const o of store.byId.values()) {
+        if (o.paused) continue;
+        if (onlyId ? o.id !== onlyId : !ours(o)) continue;
+        const trips = usageTrips(o.settings, ws);
+        if (trips.length) pause(o.id, trips);
+    }
+}
+
+function tripReason(trip) {
+    return `${trip.window.replace(/_/g, '-')} usage at ${Math.round(trip.usedPercent)}%, `
+        + `past the ${trip.percent}% cutoff`;
+}
+
+/** "4:00 PM (in 45m)" — when a pause lifts, for a notice and a note. */
+function whenText(ms) {
+    const mins = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+    const span = mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`;
+    return `${new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (in ${span})`;
+}
+
+/**
+ * When this pause would lift by itself: the latest reset among the tripped
+ * windows plus the grace, or null — auto-resume off, or a tripped window with no
+ * reset time to wait for.
+ */
+function wakeAt(o, trips) {
+    if (!o.settings.usageStop.autoResume) return null;
+    const at = resumeAtFor(trips);
+    return at === null ? null : at + resumeGraceMs;
+}
+
+function pause(orchId, trips) {
+    const o = store.get(orchId);
+    const reason = trips.map(tripReason).join('; ');
+    const interrupted = [];
+    for (const id of [orchId, ...o.workers.filter(w => !w.closedAt).map(w => w.id)]) {
+        const r = pool.get(id);
+        if (r && r.state === 'busy') {
+            interrupted.push(id);
+            stopKeeping(r, 'the usage cutoff stopped it before these were sent.')
+                .catch(() => { /* already gone */ });
+        }
+    }
+    const resumeAt = wakeAt(o, trips);
+    store.setPaused(orchId, { reason, resumeAt, by: cfg.PORT, interrupted });
+    armWake(orchId);
+    const then = resumeAt ? ` It carries on by itself at ${whenText(resumeAt)}, after the window resets.`
+        : o.settings.usageStop.autoResume ? ' No reset time is known for that window, so it waits for Resume.'
+        : ' Resume it when you are ready.';
+    broadcast('notice', { sessionId: orchId, level: 'warn', kind: 'orchestrator_paused',
+        text: `Orchestrator paused: ${reason}. Every running worker was stopped.${then}` });
+    emit(orchId);
+}
+
+// ---------------------------------------------------------------------------
+// Waking up after a reset
+// ---------------------------------------------------------------------------
+//
+// A paused orchestrator cannot set a timer of its own — every turn it had was
+// stopped — so the bridge keeps it: `paused.resumeAt`, in the store so it
+// survives a restart, armed here as a timeout and checked again on the
+// minute's tick in case the timeout was lost. Only the bridge that paused it
+// (`paused.by`) wakes it; the store is shared with every other bridge.
+
+const wakeTimers = new Map();
+// setTimeout's ceiling. A weekly window can reset further off than that; the
+// minute's tick picks it up when it is due.
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+function armWake(orchId) {
+    clearTimeout(wakeTimers.get(orchId));
+    wakeTimers.delete(orchId);
+    const o = store.get(orchId);
+    const p = o && o.paused;
+    if (!p || !p.resumeAt || p.by !== cfg.PORT) return;
+    const ms = Math.max(0, p.resumeAt - Date.now());
+    if (ms > MAX_TIMER_MS) return;
+    const t = setTimeout(() => { wakeTimers.delete(orchId); wake(orchId); }, ms);
+    t.unref();
+    wakeTimers.set(orchId, t);
+}
+
+/** Every pause due to lift, from the minute's tick. */
+function checkWakes() {
+    for (const o of store.byId.values()) {
+        const p = o.paused;
+        if (p && p.resumeAt && p.by === cfg.PORT && p.resumeAt <= Date.now()) wake(o.id);
+    }
+}
+
+/**
+ * The window should have reset: carry on, or — when another window is still
+ * over, or the reading has not moved — pause again until that one resets.
+ */
+function wake(orchId) {
+    const o = store.get(orchId);
+    const p = o && o.paused;
+    if (!p || !p.resumeAt || p.by !== cfg.PORT) return false;
+    if (!o.settings.usageStop.autoResume) return false;
+    const trips = usageTrips(o.settings, windows());
+    if (trips.length) {
+        const resumeAt = wakeAt(o, trips);
+        store.setPaused(orchId, { ...p, reason: trips.map(tripReason).join('; '), resumeAt });
+        armWake(orchId);
+        broadcast('notice', { sessionId: orchId, level: 'warn', kind: 'orchestrator_paused',
+            text: `Orchestrator still paused: ${trips.map(tripReason).join('; ')}.${resumeAt
+                ? ` Trying again at ${whenText(resumeAt)}.` : ' Waiting for Resume.'}` });
+        emit(orchId);
+        return false;
+    }
+    lift(orchId, 'auto');
+    return true;
+}
+
+/**
+ * Take the pause off and get going again: queued spawns start, and the
+ * orchestrator is told — in its inbox, so the nudge wakes it — what happened
+ * and which sessions the cutoff stopped mid-turn, since nothing else will tell
+ * those workers to carry on.
+ */
+function lift(orchId, how) {
+    const o = store.get(orchId);
+    const p = o.paused;
+    store.setPaused(orchId, null);
+    armWake(orchId);
+    const stopped = (p && p.interrupted || [])
+        .filter(id => id !== orchId)
+        .map((id) => {
+            const w = store.worker(orchId, id);
+            return w && !w.closedAt ? `- "${w.title || 'untitled'}" (worker ${id})` : null;
+        })
+        .filter(Boolean);
+    const lines = [
+        how === 'auto'
+            ? `You were paused by the usage cutoff (${p ? p.reason : 'over the limit'}). The window has `
+                + 'reset, so TGXCode lifted the pause and you can carry on.'
+            : `The user resumed you after the usage cutoff paused you (${p ? p.reason : 'over the limit'}).`,
+    ];
+    if (stopped.length) {
+        lines.push('', 'These workers were stopped mid-turn and are waiting. Tell each to carry on with '
+            + 'send_to_worker if its work still applies:', ...stopped);
+    }
+    if (p && p.interrupted && p.interrupted.includes(orchId)) {
+        lines.push('', 'Your own turn was stopped too; pick up where you left off.');
+    }
+    if (how === 'auto' || stopped.length || (p && p.interrupted && p.interrupted.length)) {
+        file(orchId, { kind: 'note', text: lines.join('\n') });
+    }
+    emit(orchId);
+    drainSpawns(orchId);
+    scheduleNudge(orchId);
+}
+
+/**
+ * The pause's wake time, recomputed after the settings changed: turning
+ * auto-resume on while paused should start the clock, and turning it off should
+ * stop it.
+ */
+function rearmPause(orchId) {
+    const o = store.get(orchId);
+    if (!o || !o.paused) return;
+    const trips = usageTrips(o.settings, windows());
+    const resumeAt = trips.length ? wakeAt(o, trips) : (o.settings.usageStop.autoResume ? Date.now() : null);
+    store.setPaused(orchId, { ...o.paused, resumeAt, by: o.paused.by || cfg.PORT });
+    armWake(orchId);
+}
+
+function resume(orchId) {
+    const o = store.get(orchId);
+    if (!o) throw refuse(404, 'that session is not an orchestrator');
+    // Resuming while still over the line would start the queued workers and
+    // nudge the orchestrator, only for the next reading to stop them again a
+    // minute later — turns spent on work that is cut off before it gets anywhere.
+    const trips = usageTrips(o.settings, windows());
+    if (trips.length) {
+        throw refuse(409, `still over the cutoff (${trips.map(tripReason).join('; ')}). Raise or turn `
+            + 'off the cutoff in this orchestrator\u2019s settings, or wait for the window to reset.');
+    }
+    if (o.paused) lift(orchId, 'user');
+    return payload(orchId);
+}
+
+// ---------------------------------------------------------------------------
+// Turning it on and off
+// ---------------------------------------------------------------------------
+
+function enable(sessionId, settings) {
+    const base = defaultSettings();
+    store.enable(sessionId, { settings: settings ? cleanSettings(settings, base) : base });
+    const now = pool.recycle(sessionId);
+    emit(sessionId);
+    return { ...payload(sessionId), restarted: now ? 'now' : 'after-turn' };
+}
+
+/**
+ * Deny whatever this orchestrator's workers are blocked on. Called as the
+ * orchestrator goes away, and unconditionally: "a window is open" means a
+ * window on *any* session, not one looking at this worker, and with the inbox
+ * gone nothing would point anybody at it — the worker would wait, silently,
+ * until somebody happened to open its page. Denied, it carries on with its own
+ * judgement and says so in its reply.
+ */
+function releaseAsks(orchId) {
+    for (const w of store.openWorkers(orchId)) {
+        const r = pool.get(w.id);
+        if (r && r.pendingPermission) {
+            r.denyPending('Its orchestrator went away before answering this, so it was denied. '
+                + 'Use your own judgement, or ask the user.');
+        }
+    }
+}
+
+function disable(sessionId) {
+    releaseAsks(sessionId);
+    store.disable(sessionId);
+    pool.recycle(sessionId);
+    emit(sessionId);
+    return payload(sessionId);
+}
+
+/**
+ * A session deleted. An orchestrator stops being one; a worker leaves its
+ * orchestrator's list. Its inbox items stay — what it said still happened.
+ */
+function forget(sessionId) {
+    if (store.get(sessionId)) {
+        releaseAsks(sessionId);
+        store.disable(sessionId);
+        return;
+    }
+    const o = store.orchestratorOf(sessionId);
+    if (o && store.removeWorker(o.id, sessionId)) emit(o.id);
+}
+
+function setSummary(orchId, text, fields) {
+    if (!store.setSummary(orchId, text, fields)) throw refuse(404, 'that session is not an orchestrator');
+    emit(orchId);
+    return store.get(orchId).summary;
+}
+
+/** The user answered one of the brief's decisions — recorded, not delivered. */
+function answerDecision(orchId, decisionId, text) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    if (!String(text || '').trim()) throw refuse(400, 'text is required');
+    const d = store.answerDecision(orchId, decisionId, text);
+    if (!d) throw refuse(404, 'no such decision — the orchestrator may have dropped it');
+    emit(orchId);
+    return d;
+}
+
+// What each orchestrator's workers' pull requests looked like at the last
+// look, so a PR pass that moved somebody else's PR does not rebroadcast this one.
+const prSeen = new Map();
+
+/**
+ * A PR pass moved something. Nothing about a worker changed, so nothing else
+ * would tell its orchestrator's page that the PR it shows went from open to
+ * approved — re-broadcast every orchestrator whose workers' PRs read differently.
+ */
+function onPrsChanged() {
+    for (const id of store.ids()) {
+        const o = store.get(id);
+        const sig = o.workers.map(w => {
+            const pr = workerPr(index.summary(w.id));
+            return pr ? `${pr.number}:${pr.status}` : '';
+        }).join('|');
+        if (prSeen.get(id) === sig) continue;
+        const first = !prSeen.has(id);
+        prSeen.set(id, sig);
+        if (!first) emit(id);
+    }
+}
+
+module.exports = {
+    init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
+    report, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
+};

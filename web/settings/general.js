@@ -22,6 +22,7 @@
 
 import { html, useState } from '../vendor/preact.js';
 import { shortPath } from '../format.js';
+import { canPreviewUrls } from '../preview.js';
 import { state } from '../state.js';
 import {
     paintBackdropTint, refreshPairUrl, renderProjectBackdrop, renderProjectColors,
@@ -29,7 +30,7 @@ import {
 } from '../app.js';
 import { renderSnipSettings } from '../snippets/settings.js';
 import { renderWisprSettings, wisprAvailable } from '../composer/wispr.js';
-import { renderClaudeConfig } from './claude-config.js';
+import { claudeConfigCard } from './claude-config.js';
 import {
     renderSettings, saveSetting, saveSettings, SCOPE_NAMES, settingOrigin, settingsTargetRow,
 } from './index.js';
@@ -37,6 +38,7 @@ import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderClaudeDocs } from './memory.js';
 import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
+import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
 import { renderToolbarSettings } from './toolbar.js';
 
@@ -90,16 +92,35 @@ export const SETTINGS_CATEGORIES = [
 ];
 
 // Most groups are built from `rows`. The rest are not, and say how they are
-// drawn instead: `render` (built by hand with el() — Claude Code, its Memory,
-// Project commands, whose content only the bridge has), `node` (written out in
+// drawn instead: `render` (built by hand with el() — Claude Code, whose
+// content only the bridge has), `node` (written out in
 // web/index.html, because none is backed by the settings file — one is a store
 // of its own, one is per-browser storage and the last is a task rather than a
 // setting; renderSettings moves the markup into place, so it takes its turn in
-// this order), or `card` (a Preact component of its own).
+// this order), or `card` (a Preact component of its own — Claude Code's
+// Memory and Project commands among them, which also draw what only the
+// bridge has).
 //
 // `render` and `node` are handed to Preact as foreign DOM (see Foreign in
 // index.js). `card` and `rows` groups are Preact all the way down.
 export const SETTINGS = [
+    {
+        title: 'On startup', section: 'startup', category: 'workspace', userOnly: true,
+        note: 'What a new window opens to. A refresh keeps whatever was open.',
+        rows: [
+            { key: 'view', type: 'radio',
+                label: 'Open to',
+                options: [
+                    ['conversation', 'Conversation'], ['dashboard', 'Dashboard'],
+                    ['taskboard', 'Tasks'], ['drafts', 'Drafts'], ['schedules', 'Schedules'],
+                ] },
+            { key: 'live', type: 'bool',
+                label: 'Live board on',
+                note: 'Over another screen it shows only where Live board › visibility '
+                    + 'keeps it up; otherwise it is on underneath, there when you '
+                    + 'close that screen.' },
+        ],
+    },
     {
         title: 'Reading', section: 'transcript', category: 'workspace',
         note: 'How a transcript folds the work between one message and the next, '
@@ -122,6 +143,20 @@ export const SETTINGS = [
                 label: 'A thinking block is part of the run',
                 note: 'Off breaks the run there instead, which fragments a turn that '
                     + 'thinks between every call.' },
+        ],
+    },
+    {
+        title: 'While you were away', section: 'digest', category: 'workspace', userOnly: true,
+        note: 'A card in the corner when you come back, with what finished, failed or '
+            + 'is waiting on you since you left.',
+        rows: [
+            { key: 'enabled', type: 'bool',
+                label: 'Show what happened while you were away' },
+            { key: 'awayMinutes', type: 'int', min: 1, max: 480,
+                when: (p) => p.digest && p.digest.enabled === true,
+                label: 'Count as away after, in minutes',
+                note: 'How long the window has to be hidden, or go untouched, before '
+                    + 'coming back to it shows the card.' },
         ],
     },
     {
@@ -199,6 +234,52 @@ export const SETTINGS = [
         ],
     },
     {
+        title: 'Orchestrators', section: 'orchestrator', category: 'workspace', userOnly: true,
+        note: 'Sessions marked as orchestrators start worker sessions and read what they report '
+            + 'from an inbox. These are what a new orchestrator starts with; each keeps its own '
+            + 'copy afterwards, changed from its own conversation.',
+        rows: [
+            { key: 'maxRunning', type: 'int', min: 1, max: 10,
+                label: 'Workers running at once',
+                note: 'More are queued, and start as running ones finish their turn.' },
+            { key: 'worktree', type: 'bool',
+                label: 'Start each worker in its own worktree' },
+            { key: 'usageStopEnabled', type: 'bool',
+                label: 'Stop everything past a usage threshold',
+                note: 'Stops the orchestrator and every running worker.' },
+            { key: 'usageStopWindow', type: 'choice',
+                label: 'Of which window',
+                note: 'All limits checks the five-hour and weekly windows against their own '
+                    + 'thresholds below, and stops at whichever is passed first.',
+                options: [
+                    ['five_hour', 'Five-hour'], ['seven_day', 'Weekly'],
+                    ['seven_day_opus', 'Weekly, Opus'], ['seven_day_sonnet', 'Weekly, Sonnet'],
+                    ['all', 'All limits'],
+                ] },
+            { key: 'usageStopPercent', type: 'int', min: 1, max: 100,
+                label: 'Threshold, in percent',
+                note: 'For a single window.' },
+            { key: 'usageStopAllFiveHour', type: 'int', min: 1, max: 100,
+                label: 'All limits: five-hour, in percent' },
+            { key: 'usageStopAllWeekly', type: 'int', min: 1, max: 100,
+                label: 'All limits: weekly, in percent' },
+            { key: 'usageStopAutoResume', type: 'bool',
+                label: 'Carry on when the window resets',
+                note: 'Instead of waiting for Resume: the orchestrator wakes a minute after the '
+                    + 'window that stopped it resets, and is told which workers were cut off '
+                    + 'mid-turn so it can set them going again.' },
+            { key: 'addendum', type: 'text',
+                label: 'Instructions for every orchestrator',
+                note: 'Added to each orchestrator’s system prompt, after the brief that explains '
+                    + 'its tools — a CLAUDE.md for orchestrators. Takes effect when its process '
+                    + 'next starts.',
+                placeholder: 'e.g. Have every worker open a pull request when it is done.' },
+            { key: 'workerAddendum', type: 'text',
+                label: 'Instructions for every worker',
+                note: 'The same, for the workers they start.' },
+        ],
+    },
+    {
         title: 'Toolbar', section: 'toolbar', category: 'workspace', userOnly: true, toolbar: true,
         note: 'The buttons along the top: their order, which of them fold into the '
             + 'More menu, and which show their name beside the icon. A hidden view '
@@ -265,7 +346,11 @@ export const SETTINGS = [
                 note: 'A link in a message opens here instead of in your browser. '
                     + 'Ctrl-, Shift- or middle-click still sends it to the browser. '
                     + 'A site other than a local port needs the desktop app, and a '
-                    + 'link it leads to on another site still leaves for the browser.' },
+                    + 'link it leads to on another site still leaves for the browser.'
+                    + (window.claudeShell && !canPreviewUrls
+                        ? ' This app was packaged before that was possible: rebuild it '
+                            + '(install.ps1) and other sites open here too.'
+                        : '') },
             { key: 'listMode', type: 'radio',
                 when: (p) => p.preview && p.preview.links === true,
                 label: 'Which links',
@@ -321,23 +406,42 @@ export const SETTINGS = [
                 note: 'Starting it opens a window; “do nothing” only says it is closed.' },
         ],
     },
-    // Claude Code's own settings — a different owner's files, and the one group
-    // built by a `render` rather than from `rows` or from markup. It has to be:
+    {
+        title: 'Agent test browser', section: 'agentBrowser', category: 'browsers', userOnly: true,
+        note: 'The browser an agent opens through Playwright to look at a page it is testing.',
+        rows: [
+            { key: 'mode', type: 'choice',
+                label: 'Show its window',
+                options: [['visible', 'Yes'], ['headless', 'No — run it headless']],
+                note: 'Headless draws no window, so it cannot come to the front or take the '
+                    + 'keyboard while you type. Screenshots and clicks still work. Applies to '
+                    + 'sessions started from now on; one already running keeps its browser.' },
+        ],
+    },
+    // Claude Code's own settings — a different owner's files, and a group
+    // drawn by a `card` rather than from `rows` or from markup. It has to be:
     // what it draws comes from the bridge at load time rather than from a table
     // here, because the whole point is that a key this app has never heard of
-    // still gets a control. See renderClaudeConfig().
+    // still gets a control. See claudeConfigCard().
     {
         title: 'Claude Code', section: 'claude', category: 'claude', tocTitle: 'Settings',
-        render: () => renderClaudeConfig(),
+        card: () => claudeConfigCard(),
     },
-    // The same owner's other files, and a `render` for the same reason: what it
+    // The same owner's other files, drawn from the bridge for the same reason: what it
     // draws is a document that only the bridge has. Directly under the group
     // above rather than a tab inside it, because those are settings with a
     // precedence chain and these are instructions that add up — one control
     // cannot mean both things. See renderClaudeDocs().
     {
         title: 'Claude Code · Memory', section: 'memory', category: 'claude', tocTitle: 'Memory',
-        render: () => renderClaudeDocs(),
+        card: () => renderClaudeDocs(),
+    },
+    // Which skills count as code reviews — the Reviews pane's list. A `card`
+    // because it is a list of rows edited as a draft and saved whole; see
+    // web/settings/review-types.js.
+    {
+        title: 'Code reviews', section: 'reviews', category: 'claude', tocTitle: 'Code reviews',
+        card: () => reviewTypesCard(),
     },
     {
         title: 'Projects', section: 'projects', category: 'projects', node: 'setGProjects',
@@ -375,6 +479,10 @@ export const SETTINGS = [
                 options: [['top', 'Top'], ['bottom', 'Bottom']],
                 note: 'A project you have not placed yet. It keeps that place once '
                     + 'you drag anything.' },
+            { key: 'compactActions', type: 'bool',
+                label: 'Compact session actions',
+                note: 'Put Rename, Pin, Archive and Delete in a ⋮ menu at the top right '
+                    + 'of each session, instead of a row of buttons over it on hover.' },
         ],
         // Ordinary rows, drawn into the markup group because the group is not
         // built from `rows` — see renderProjectBackdrop().
@@ -392,12 +500,13 @@ export const SETTINGS = [
         after: () => { renderProjectOrder(); renderProjectBackdrop(); renderProjectColors(); },
     },
     // The commands this project declares, which are the buttons in the
-    // conversation header. A `render` for the same reason Claude Code's two use
-    // one — what it draws is a pair of files only the bridge has read — and
+    // conversation header. A `card` of its own rather than `rows`, for the same
+    // reason as Claude Code's two — what it draws is a pair of files only the
+    // bridge has read — and
     // filed with Projects, because it is about a project rather than this window.
     {
         title: 'Project commands', section: 'commands', category: 'projects', tocTitle: 'Commands',
-        render: () => renderCmdConfig(),
+        card: () => renderCmdConfig(),
     },
     {
         title: 'Notifications', section: 'notify', category: 'connect', card: () => notifyCard(),
@@ -666,6 +775,15 @@ function settingControl(row, value, disabled, save, saveKey) {
                 const lines = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
                 save(lines.length ? lines : null);
             }}></textarea>`;
+    }
+    if (row.type === 'text') {
+        // Free text over several lines, committed on blur like a list. Kept as
+        // written, blank lines and all; an empty box is the default.
+        const text = typeof value === 'string' ? value : '';
+        return html`<textarea key=${`text:${rev}:${text}`} class="settings-text settings-list"
+            rows=${Math.min(14, Math.max(4, text.split('\n').length + 1))}
+            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''}
+            onChange=${(e) => save(e.target.value.trim() ? e.target.value : null)}></textarea>`;
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
     return html`<span>${String(value)}</span>`;

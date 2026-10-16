@@ -1,0 +1,146 @@
+/* ── While you were away (web/digest.js) ─────────────────────────────────
+   A card in the top-right corner, under the bar: out of the composer's way at
+   the bottom, and not over the rail on the left where the same sessions are
+   listed. Not modal — nothing behind it is dimmed or blocked — so it can stay
+   up while you work through it. Tokens only; base.css and colours.css own
+   them. */
+
+.digest {
+    position: fixed;
+    top: 60px;
+    right: 16px;
+    z-index: 70;              /* under the toasts (80), over the panes */
+    width: min(380px, calc(100vw - 32px));
+    pointer-events: none;     /* the empty container must not eat clicks */
+}
+
+.digest-card {
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    max-height: min(70vh, 640px);
+    background: var(--s2);
+    color: var(--text);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 28px #0007;
+    animation: digest-in var(--t-med) var(--ease);
+}
+
+.digest-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 10px 8px 16px;
+}
+.digest-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font: 500 14px/1.4 var(--sans);
+}
+.digest-away { color: var(--text-3); font-weight: 400; }
+
+.digest-close {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    font-size: 12px;
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.digest-close:hover { background: var(--s4); color: var(--text); }
+
+.digest-body {
+    overflow-y: auto;
+    padding: 0 8px 10px;
+}
+
+.digest-group + .digest-group { margin-top: 6px; }
+
+.digest-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 6px 8px 4px;
+    font: 500 11.5px/1.4 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.digest-count {
+    min-width: 18px;
+    padding: 0 6px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-2);
+    font-size: 11px;
+    text-align: center;
+    letter-spacing: 0;
+}
+.digest-group[data-tone="ask"] .digest-group-head { color: var(--yellow); }
+.digest-group[data-tone="ask"] .digest-count { background: var(--yellow); color: var(--bg); }
+.digest-group[data-tone="bad"] .digest-group-head { color: var(--red); }
+
+.digest-rows { margin: 0; padding: 0; list-style: none; }
+
+.digest-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 10px;
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: var(--r-sm);
+    text-align: left;
+    transition: background var(--t-fast) var(--ease);
+}
+.digest-row:hover { background: var(--s3); }
+.digest-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.digest-group[data-tone="ask"] .digest-row { background: var(--s3); margin-bottom: 2px; }
+.digest-group[data-tone="ask"] .digest-row:hover { background: var(--s4); }
+
+.digest-row-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 13px;
+    color: var(--text);
+}
+.digest-row-at {
+    font-size: 11.5px;
+    color: var(--text-4);
+    white-space: nowrap;
+}
+.digest-row-sub {
+    grid-column: 1 / -1;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-3);
+}
+
+.digest-more {
+    margin: 2px 0 0 8px;
+    padding: 2px 6px;
+    border-radius: var(--r-xs);
+    font-size: 12px;
+    color: var(--blue);
+}
+.digest-more:hover { background: var(--s3); }
+.digest-more-note { margin: 2px 8px 0; font-size: 12px; color: var(--text-4); }
+
+.digest-empty { margin: 4px 8px 6px; font-size: 13px; color: var(--text-3); }
+
+@keyframes digest-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .digest-card { animation: none; }
+}

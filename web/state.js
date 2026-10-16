@@ -114,6 +114,17 @@ export const state = {
     // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
     // Null until that answers; the header draws its PRs from the summary either way.
     prStatus: null,
+    // 'owner/name#N' -> {review, pending, loading, error} from GET /api/pr-review —
+    // the nightly review's findings, fetched when a review chip is opened and
+    // forgotten on `pr-reviews-changed`. See web/pr-review.js.
+    prReviews: new Map(),
+    // The review open in the panel under the conversation header, by that key.
+    prReviewOpen: null,
+    // '<key>:<finding index>' or '<key>:all' while a Fix button's request is out.
+    prReviewFixing: new Set(),
+    // {sessionId, repo} — the repository that session's checkout points at, from the
+    // same response. What a bare `#N` in it means; see web/pr-refs.js.
+    prRepo: null,
     // sessionId -> {status, label, total, counts} — one word for a whole session's
     // pull requests, which is all a rail row has space for. Seeded from /api/prs at
     // boot and kept current by the `prs-changed` event; empty until the first of
@@ -164,6 +175,7 @@ export const state = {
     railRename: null,       // {id, draft} while a rail row's name is being edited
     railDrag: null,         // {cwd, order} while a project card is dragged, in `custom`
     sortMenu: false,        // the rail head's order menu is open
+    palette: { open: false, q: '', sel: 0 },   // the Ctrl+K palette; see web/palette.js
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     // The one message drawn in the log before the transcript has it:
     // {sessionId, node, timer}. Kept out of state.nodes on purpose — renderTurns
@@ -180,7 +192,7 @@ export const state = {
     pendingDelete: null,    // the session the confirm dialog is asking about
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
-    queueDrag: null,        // id of the chip being dragged
+    queueDrag: null,        // {id, order} while a chip is dragged — order is where the pointer has it
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Messages waiting on a clock — every session's, not just this one's, because
     // that is the shape the `later-changed` event carries and the rail wants the
@@ -188,6 +200,7 @@ export const state = {
     later: [],
     laterOpen: new Set(),   // ids of chips expanded to their full text
     laterPick: false,       // is the popover showing the pick-a-time fields?
+    laterSending: new Set(),   // ids whose Send now is in flight, so the button stays disabled
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
     // that pressing `/` draws from memory rather than waiting on a fetch; the
@@ -215,6 +228,9 @@ export const state = {
     // starts folded whatever its status, so absence means folded rather than
     // "not decided yet".
     taskOpen: new Map(),      // toolUseId -> bool
+    // Tasks whose Start is on the wire, so the button says "Starting" wherever
+    // it is drawn and a second click does not start a second session.
+    taskStarting: new Set(),  // toolUseId
     // Whether the aside is showing at all. A property of the window rather than
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
@@ -226,11 +242,23 @@ export const state = {
     // by object so a decision taken inside it can find its way back to the same
     // task after the panel behind has been rebuilt.
     taskDialog: null,
-    queueSig: '',           // what the chips were last built from, to avoid churn
+    queueSig: '',           // what the chips were last animated from — morph only when it changes
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
+    // The `orchestrator` payload for the session on screen — its own, or its
+    // orchestrator's when it is a worker. web/orchestrator.js.
+    orch: null,
     planAside: false,       // the plan view is collapsed to its one-line bar
     planFor: null,          // which requestId that was decided about
+    // The plan footer's feedback box: 'approve', 'reject' or null when shut.
+    // Belongs to planFor, and is reset with it. web/transcript/approvals.js.
+    planFeedback: null,
+    // Which question is mounted in the dock. Kept once the dock is hidden, so
+    // reading a subagent and coming back finds your picks where you left them.
+    askDockFor: null,
+    // The requestId whose answer is on its way to the bridge; the dock and the
+    // plan footer draw their buttons disabled while it matches.
+    askPending: null,
     // The mode the bridge last reported, per session, so that a mode which moves
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),
@@ -256,10 +284,11 @@ export const state = {
     },
     // The file on screen in the diff viewer.
     //
-    // Values copied off a row, never the row itself. `renderChanges` calls
-    // replaceChildren on every load, every refresh and every turn that ends, so
-    // an element or a closure this held would be an orphan within seconds of the
-    // dialog opening — and the dialog outlives several of those by design.
+    // Values copied off a row, never the row itself. `renderChanges` redraws on
+    // every load, every refresh and every turn that ends; rows are keyed and kept
+    // when they survive, but a file that left the list takes its row with it, so
+    // an element or a closure this held could be an orphan by the time the
+    // dialog, which outlives several of those by design, comes to use it.
     //
     // `req` is a sequence rather than a loading flag, for the reason
     // `loadChanges` has an `at`: an answer that arrives for a file you have since
@@ -280,8 +309,8 @@ export const state = {
         // width — side by side in a narrow window is two unreadable columns.
         sized: localStorage.getItem('diffSplit') != null,
     },
-    // The right-click menu. `dom.ctxMenu.hidden` is whether it is open, the way
-    // `dom.newMenu.hidden` is; this holds only what to give focus back to.
+    // The right-click menu. `isUp(dom.ctxMenu)` is whether it is open, the way
+    // `isUp(dom.newMenu)` is; this holds only what to give focus back to.
     ctx: { from: null },
     // The session's own task list. `on` and `shut` are the same two window
     // properties the drawers either side of the transcript have, remembered for
@@ -295,6 +324,15 @@ export const state = {
     // No `at`, `loading` or `error`, which `changes` needs: there is nothing to
     // fetch and nothing to go stale. The bridge pushes this on the same follow
     // the transcript arrives on.
+    // The Reviews pane (web/transcript/reviews.js): GET /api/sessions/:id/reviews
+    // as it last answered, and the one review its dialog has open.
+    reviews: {
+        on: localStorage.getItem('reviewsOn') === '1',
+        shut: localStorage.getItem('reviewsShut') === '1',
+        sessionId: null, data: null, at: 0, loading: false, error: null,
+        // The dialog: which run, and its full answer once it lands.
+        openId: null, detail: null, detailError: null,
+    },
     checklist: {
         on: localStorage.getItem('checklistOn') !== '0',
         shut: localStorage.getItem('checklistShut') === '1',
@@ -305,7 +343,12 @@ export const state = {
     },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
-    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set(), reviewOpen: null },
+    // The analytics board (web/boards/analytics.js): the last rollup, for `days`.
+    analytics: { open: false, data: null, at: 0, days: 30, loading: false, error: null },
+    // The open conversation's spend, for its header: `/api/analytics/sessions/:id`,
+    // replaced by `session-spend` pushes while it is open.
+    spend: null,
     // The browser preview (web/preview.js). Not one of PANELS: those cover it the
     // way they cover the conversation, and it comes back when they close.
     // `overLive` is decided at open — whether this preview covers a docked Live
@@ -374,9 +417,20 @@ export const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // Full-text search across every transcript — web/search.js; `sx` because
+    // `dom.search` is the bar's filter and a panel's key names its section. `data` is the
+    // last `/api/search` answer for `q`; `seq` drops an answer that arrives
+    // after a newer question was asked.
+    sx: { open: false, q: '', tools: false, data: null, loading: false, error: null, seq: 0 },
+    // Session templates, pushed whole on `templates-changed` like the drafts.
+    // `editing` is the template the dialog is open on, or null; `picked` the one
+    // chosen in the picker this open, which Fill resolves.
+    templates: { rows: [], editing: null, picked: null },
     // The project card whose ⋮ menu is open, or null. The menu is fixed and
     // outside the rail, so this is how the card's ⋮ knows to draw itself
     // expanded, and how syncProjMenu() finds the button to follow.
+    // `{key, cwd, name}` for a project card; `{sessionId}` when it was opened
+    // from a session row's ⋮ instead (`projects.compactActions`).
     projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference
@@ -461,12 +515,26 @@ export const state = {
         scope: 'user', tab: 'form', data: null, loading: false, error: null,
         saving: false, draft: null, dirty: false, jsonError: null,
         stale: null, jumpTo: null,
-        // The hooks editor's draft, which is the second one here: hooks are
-        // written whole, on Save, after a review — see claudeHooksRow().
-        // `hooksSeed` is the block the draft started from, as JSON, so a change
-        // on disk can be told apart from the page's own saves of other keys.
+        // `rev` remounts the typed-into boxes after a save that did not move
+        // the stored value (settingsRevert()'s idea); `flash` is the set of
+        // rows a reload from elsewhere changed, drawn lit for a moment.
+        rev: 0, flash: null,
+    },
+    // The Hooks page (web/hooks/page.js): Claude Code's settings chain read for
+    // one project, and the one hooks draft there is. `dir` is null until the
+    // page first opens and settles on Settings' project. `event` is the rail's
+    // selection, null for all of them. The `hooks*` fields are the editor's
+    // draft — written whole, on Save, after a review; `hooksSeed` is the block
+    // it started from, as JSON, so a change on disk can be told apart from the
+    // page's own save of `disableAllHooks`. `script` is the one script open
+    // under a hook (web/hooks/script.js); `sources` the plugin, skill and agent
+    // hooks from /api/claude-config/hook-sources.
+    hooks: {
+        open: false, dir: null, scope: 'user', event: null,
+        data: null, loading: false, error: null, saving: false,
         hooksDraft: null, hooksDirty: false, hooksReview: false,
         hooksProblems: null, hooksSeed: null,
+        script: null, recipes: false, sources: null, sourcesError: null,
     },
     // And Claude Code's memory files, which are two rather than four and are
     // additive rather than a chain — see the Memory section below. All of it is

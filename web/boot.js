@@ -33,6 +33,7 @@ export const PREFS_FALLBACK = {
         colors: {}, backdropTint: true, backdropStrength: 13,
         sort: 'recent', bumpOnCreate: true, bumpOnUser: true, bumpOnAny: false,
         bumpOnTurn: false, bumpOnPr: false, order: [], newAt: 'top',
+        compactActions: false,
     },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
@@ -42,6 +43,13 @@ export const PREFS_FALLBACK = {
     preview: { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [] },
     devbrowser: { show: true, openIn: 'devbrowser', whenClosed: 'launch' },
     standing: { mode: 'model' },
+    startup: { view: 'conversation', live: false },
+    agentBrowser: { mode: 'visible' },
+    digest: { enabled: true, awayMinutes: 20 },
+    reviews: { types: [
+        { id: 'code-review', label: 'Code review', skill: 'code-review', colour: 'blue' },
+        { id: 'adversarial', label: 'Adversarial', skill: 'adversarial-reviewer', colour: 'red' },
+    ] },
 };
 
 

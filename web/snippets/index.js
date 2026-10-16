@@ -22,6 +22,7 @@
 //   settings.js the editor group in Settings, its drag-to-reorder, and the
 //               arm-then-confirm delete button other Settings groups borrow
 //   editor.js   one snippet, in the editor dialog
+//   trigger.js  which snippet the word before the caret names — pure, tested
 //
 // Every module here evaluates before app.js's body does, so none may read an
 // imported app.js binding at top level — only inside a function called later.
@@ -37,7 +38,7 @@ import { hexAccent } from '../app.js';
 import { composers, live } from '../composer/slash.js';
 import { newC } from '../new-session/dialog.js';
 import {
-    closeSnipFill, confirmSnipFill, drawSnips, onSnipsKey, showSnips,
+    closeSnipFill, confirmSnipFill, drawSnips, expandTrigger, onSnipsKey, showSnips,
 } from './popover.js';
 import { renderPins } from './pins.js';
 import { newSnipGroup, renderSnipSettings } from './settings.js';
@@ -154,6 +155,20 @@ export function wireSnippets() {
     });
     dom.snipMenu.addEventListener('keydown', (e) => onSnipsKey(e, live));
     dom.newSnipMenu.addEventListener('keydown', (e) => onSnipsKey(e, newC));
+
+    // A trigger, then Tab, on either composer's box. On the box itself rather than
+    // the document, so slash.js's capture-phase handler has already had the key:
+    // an open slash or mention menu with rows takes Tab for its completion and
+    // stops it there, and this never sees it. Plain Tab only — Shift+Tab is how
+    // you leave the box backwards, and a modifier is somebody else's shortcut. No
+    // match leaves the key alone, so Tab still moves the focus on as it always has.
+    for (const c of [live, newC]) {
+        c.input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+            if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+            if (expandTrigger(c)) e.preventDefault();
+        });
+    }
 
     // ✕, Cancel and a whole click outside, on both — no Escape; see modalUp().
     for (const n of dom.snipFillScrim.querySelectorAll('[data-close-fill]')) {

@@ -46,6 +46,14 @@ self.addEventListener('notificationclick', (event) => {
  */
 async function answer(data, decision) {
     if (!data.sessionId || !data.requestId) return;
+    // A plan's Approve has to leave plan mode as it approves, exactly as the
+    // card's primary button does: the session is *in* plan mode while the ask
+    // is up, so a bare `allow` agreed to the work and then blocked every edit
+    // in it. `auto` is the card's default (`y`). A notification raised by a
+    // page from before `kind` was put in its data carries none, and gets the
+    // old bare allow — there is no way to tell it was a plan.
+    const body = { requestId: data.requestId, decision };
+    if (data.kind === 'plan' && decision === 'allow') body.mode = 'auto';
     try {
         await fetch(`/api/sessions/${encodeURIComponent(data.sessionId)}/permission`, {
             method: 'POST',
@@ -53,7 +61,7 @@ async function answer(data, decision) {
                 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1',
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ requestId: data.requestId, decision }),
+            body: JSON.stringify(body),
         });
     } catch { /* nothing here can usefully recover; the card still can */ }
 }

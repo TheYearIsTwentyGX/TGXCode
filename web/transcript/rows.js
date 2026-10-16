@@ -241,6 +241,8 @@ export function renderEvent(ev, opts = {}) {
         case 'agent-done': return renderAgentDone(ev);
         case 'peer-message': return renderPeerMessage(ev);
         case 'handoff': return renderHandoff(ev);
+        case 'orchestrator-inbox': return renderOrchestratorInbox(ev);
+        case 'orchestrator-message': return renderOrchestratorMessage(ev);
         case 'system': return renderSystem(ev);
         case 'compact': return row(ev, 'compact', 'context compacted');
         default: return null;
@@ -315,7 +317,6 @@ function renderThinking(ev) {
     const words = ev.text.trim().split(/\s+/).length;
     const det = el('details', { class: 'tool thinking' },
         el('summary', {},
-            el('span', { class: 'caret' }, '▶'),
             el('span', { class: 'tname' }, 'Thought'),
             el('span', { class: 'targ' }, clip(ev.text, 90)),
             el('span', { class: 'tmeta' }, `${words} words`),
@@ -360,7 +361,6 @@ function renderAgentDone(ev) {
     if (ev.result) {
         body.push(el('details', { class: 'tool' },
             el('summary', {},
-                el('span', { class: 'caret' }, '▶'),
                 el('span', { class: 'tname' }, 'Result'),
                 el('span', { class: 'targ' }, clip(ev.result, 90)),
             ),
@@ -387,7 +387,9 @@ function renderAgentDone(ev) {
 function redrawEvent(ev) {
     for (const nodes of [state.nodes, state.agentNodes]) {
         const entry = nodes.get(ev.id);
-        if (!entry || !entry.node.isConnected) continue;
+        // `parentNode`, not `isConnected`: a row the window has taken out of the
+        // document is still the row, and its peer card still wants the name.
+        if (!entry || !entry.node.parentNode) continue;
         const next = renderEvent(ev, { actions: nodes === state.nodes });
         if (!next) return;
         entry.node.replaceWith(next);
@@ -494,6 +496,62 @@ function renderHandoff(ev) {
     }
 
     return row(ev, 'handoff', ...body);
+}
+
+// Short names for the inbox's item kinds, singular and plural. The nudge's own
+// prose uses longer ones ("plan to approve") because the model reads it; this is
+// a line you glance at. A kind missing here is shown by its own name.
+const INBOX_WORDS = {
+    plan: ['plan', 'plans'],
+    permission: ['permission prompt', 'permission prompts'],
+    ask: ['question for you', 'questions for you'],
+    question: ['question', 'questions'],
+    update: ['update', 'updates'],
+    done: ['done report', 'done reports'],
+    turn: ['turn report', 'turn reports'],
+    note: ['note', 'notes'],
+};
+
+export function inboxSummary(ev) {
+    if (ev.counts) {
+        return Object.entries(ev.counts)
+            .map(([k, n]) => `${n} ${(INBOX_WORDS[k] || [k, k])[n === 1 ? 0 : 1]}`)
+            .join(', ');
+    }
+    return ev.summary || '';
+}
+
+/**
+ * The bridge waking an idle orchestrator because its inbox has something in it.
+ * Nobody typed this, and what it says is the orchestrator's next move rather
+ * than anything to read, so it is one muted line rather than a card.
+ */
+function renderOrchestratorInbox(ev) {
+    const n = ev.count || 0;
+    const what = inboxSummary(ev);
+    // No 📥 in front: an emoji is a glyph only where an emoji font is installed,
+    // and on a Linux host without one it was a box.
+    return row(ev, 'orchestrator-inbox',
+        `${n} item${n === 1 ? '' : 's'} waiting${what ? ` — ${what}` : ''}`);
+}
+
+/**
+ * An instruction from the orchestrator this session is a worker for. Shaped like
+ * a handoff card — attributed, with a way back to the sender — because that is
+ * what it is: another session telling this one what to do, not a turn you took.
+ */
+function renderOrchestratorMessage(ev) {
+    const label = ev.fromTitle ? `From your orchestrator, ${ev.fromTitle}` : 'From your orchestrator';
+    const body = [
+        el('div', { class: 'ev-label' }, label),
+        el('div', { class: 'prose', html: renderMarkdown(ev.text || '') }),
+    ];
+    if (ev.from && state.sessions.some(s => s.sessionId === ev.from)) {
+        body.push(el('div', { class: 'subagent-btns' },
+            el('button', { class: 'more-btn', type: 'button',
+                onclick: () => openSession(ev.from) }, 'Open the orchestrator')));
+    }
+    return row(ev, 'orchestrator-message', ...body);
 }
 
 function renderSystem(ev) {

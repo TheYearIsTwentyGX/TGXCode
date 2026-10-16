@@ -27,12 +27,12 @@ const PHONE = {
  * Deliberately close to `call` below rather than folded into it: one body encoding per
  * function keeps the JSON path — every other route in this suite — unchanged.
  */
-function upload(p, { headers, bytes, type = 'image/png' } = {}) {
+function upload(p, { headers, bytes, type = 'image/png', declare } = {}) {
     return new Promise((resolve, reject) => {
         const payload = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || '');
         const req = http.request({
             host: '127.0.0.1', port: PORT, path: p, method: 'POST',
-            headers: { ...headers, 'Content-Type': type, 'Content-Length': payload.length },
+            headers: { ...headers, 'Content-Type': type, 'Content-Length': declare ?? payload.length },
         }, (res) => {
             const c = [];
             res.on('data', (x) => c.push(x));
@@ -41,6 +41,7 @@ function upload(p, { headers, bytes, type = 'image/png' } = {}) {
                 let parsed = null;
                 try { parsed = JSON.parse(text); } catch { /* html or empty */ }
                 resolve({ status: res.statusCode, body: parsed, text });
+                if (declare != null) req.destroy();
             });
         });
         // A refused upload is answered and then hung up on, deliberately — see
@@ -51,6 +52,14 @@ function upload(p, { headers, bytes, type = 'image/png' } = {}) {
         // socket errors to the request and an unhandled one takes the process down.
         req.on('error', () => {});
         req.on('socket', (sock) => sock.on('error', () => {}));
+        // `declare` sends a Content-Length and no body, for the size refusals. Writing
+        // the bytes as well races the hang-up: a reset that lands while megabytes are
+        // still going out can take the 413 with it, and a promise that never settles
+        // lets node exit 0 halfway through this file.
+        if (declare != null) {
+            req.flushHeaders();
+            return;
+        }
         req.write(payload);
         req.end();
     });
@@ -159,6 +168,16 @@ const HOME = os.homedir();
     // later is refused by default rather than by being remembered.
     check('as is anything under that prefix',
         (await call('GET', '/api/claude-config/anything', { headers: PHONE })).status, 403);
+    // The Hooks page's routes sit under that prefix on purpose. Named here so a
+    // move out from under it fails a test rather than opening a write of an
+    // executable file to a phone.
+    check('the hook-script read is refused remotely',
+        (await call('GET', '/api/claude-config/hook-script', { headers: PHONE })).status, 403);
+    check('the hook-script write is refused remotely', (await call('PUT', '/api/claude-config/hook-script', {
+        headers: PHONE, body: { path: '/tmp/x', stamp: null, text: '' },
+    })).status, 403);
+    check('and so is the list of plugin, skill and agent hooks',
+        (await call('GET', '/api/claude-config/hook-sources', { headers: PHONE })).status, 403);
     // Claude Code's memory files, refused the same way — the same three checks,
     // because the same three things could go wrong. A project's CLAUDE.md is
     // repository source and a user's describes the machine; neither is
@@ -178,18 +197,31 @@ const HOME = os.homedir();
     check('a local save without the client header', (await call('PUT', '/api/prefs', {
         headers: { authorization: `Bearer ${TOKEN}` }, body: { scope: 'user', patch: {} },
     })).status, 403);
-    // Same argument as mkdir: attaching a file writes it into a checkout. Refused
-    // before the name or the session id is looked at, so this holds for any of them.
-    check('attaching a file', (await upload('/api/sessions/abc/attachments?name=x.png', {
+    // Uploading is *not* refused remotely — a phone has nowhere else to put a photo —
+    // so a remote upload gets as far as the session lookup, and an id that does not
+    // exist is a 404 rather than the remote 403. That is the assertion: the request
+    // got past remoteRefusal.
+    const phoneUpload = await upload('/api/sessions/abc/attachments?name=x.png', {
         headers: PHONE, bytes: 'x',
-    })).status, 403);
-    // The cwd-addressed upload is the same refusal for the same reason, and it
-    // needs its own case: the clause it used to be covered by is a regex on
-    // /api/sessions/:id/attachments, which this path does not match. Without this
-    // assertion a future prefix rule could take one and leave the other.
-    check('attaching a file by path', (await upload(`/api/attachments?cwd=${encodeURIComponent(HOME)}&name=x.png`, {
+    });
+    check('attaching a file from a phone reaches the route', phoneUpload.status, 404);
+    // The cwd-addressed upload, same rule. /etc so that nothing is written if this
+    // ever passes the roots check: the refusal is the roots one, not the remote one.
+    const phoneByPath = await upload('/api/attachments?cwd=/etc&name=x.png', {
         headers: PHONE, bytes: 'x',
-    })).status, 403);
+    });
+    check('attaching by path from a phone reaches the roots check', phoneByPath.status, 403);
+    check('and is refused for the roots, not for being remote', phoneByPath.body.remote, undefined);
+    // What a remote caller gets instead of the refusal is a smaller cap. 11MB is
+    // under the local 25MB and over the remote 10MB, and is answered from
+    // Content-Length before any lookup — so the phone hears 413 and the desktop,
+    // declaring the same length, gets as far as "session not found".
+    const eleven = 11 * 1024 * 1024;
+    check('an 11MB upload from a phone is over its cap', (await upload(
+        '/api/sessions/abc/attachments?name=big.png', { headers: PHONE, declare: eleven })).status, 413);
+    check('the same upload from this machine is not', (await upload(
+        '/api/sessions/abc/attachments?name=big.png', { headers: LOCAL, declare: eleven })).status, 404);
+    // Opening one launches a program on the desktop, and that stays local-only.
     check('opening an attachment', (await call('POST', '/api/sessions/abc/attachments/open', {
         headers: PHONE, body: { path: 'x.png' },
     })).status, 403);
@@ -198,6 +230,16 @@ const HOME = os.homedir();
     // a leaked token cannot even find out which ids are real this way.
     check('handing work to a session', (await call('POST', '/api/sessions/abc/handoff', {
         headers: PHONE, body: { text: 'do this' },
+    })).status, 403);
+    // An orchestrator's tools start sessions in fresh worktrees and answer their
+    // permission prompts — the handoff clause, several times over.
+    for (const sub of ['spawn', 'next', 'send', 'answer', 'read', 'stop', 'close', 'summary']) {
+        check(`an orchestrator's ${sub}`, (await call('POST', `/api/sessions/abc/orchestrator/${sub}`, {
+            headers: PHONE, body: {},
+        })).status, 403);
+    }
+    check('a worker\'s report', (await call('POST', '/api/sessions/abc/report', {
+        headers: PHONE, body: { kind: 'update', text: 'x' },
     })).status, 403);
     check('runs list', (await call('GET', '/api/runs', { headers: PHONE })).status, 403);
     check('runs stream', (await call('GET', '/api/runs/x/stream', { headers: PHONE })).status, 403);
@@ -320,6 +362,12 @@ const HOME = os.homedir();
         headers: PHONE, body: { cwd: HOME, prompt: 'x', worktree: { name: 'never' } },
     });
     check('starting in a new worktree remotely', wtRemote.status, 403);
+    // The janitor's removal deletes a directory. The listing beside it only reads.
+    const wtRemove = await call('POST', '/api/worktrees/remove', {
+        headers: PHONE, body: { cwd: HOME, paths: [HOME] },
+    });
+    check('removing a worktree remotely', wtRemove.status, 403);
+    check('…and it says it is a remote refusal', !!(wtRemove.body && wtRemove.body.remote), true);
     check('dontAsk remotely', (await call('POST', '/api/sessions', {
         headers: PHONE, body: { cwd: HOME, prompt: 'x', permissionMode: 'dontAsk' },
     })).status, 403);
@@ -404,6 +452,25 @@ const HOME = os.homedir();
     }
     check('an unknown draft is a 404, not a refusal', (await call('DELETE',
         '/api/drafts/nope', { headers: LOCAL })).status, 404);
+
+    // Templates go through the same draftFields, plus the worktree rule from
+    // POST /api/sessions. Every case here is refused before anything is written,
+    // because this bridge shares the real state directory.
+    console.log('\n--- templates ---');
+    check('saving a bypassPermissions template remotely', (await call('POST', '/api/templates', {
+        headers: PHONE, body: { name: 'x', permissionMode: 'bypassPermissions' },
+    })).status, 403);
+    check('saving a template with a worktree remotely', (await call('POST', '/api/templates', {
+        headers: PHONE, body: { name: 'x', worktree: { name: 'x' } },
+    })).status, 403);
+    check('adding a worktree to a template remotely, before the id is looked up',
+        (await call('PATCH', '/api/templates/nope', {
+            headers: PHONE, body: { worktree: { name: 'x' } },
+        })).status, 403);
+    check('a phone may read templates', (await call('GET', '/api/templates',
+        { headers: PHONE })).status, 200);
+    check('an unknown template is a 404', (await call('DELETE',
+        '/api/templates/nope', { headers: LOCAL })).status, 404);
 
     // The same rule on a schedule, where the stakes are higher and the second
     // gate is different. A draft in a refused mode still needs somebody to press

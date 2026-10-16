@@ -18,10 +18,12 @@
 
 import { html, render, Component } from '../vendor/preact.js';
 import { post } from '../api.js';
+import { BOOT_PREFS } from '../boot.js';
 import { toast } from '../dom.js';
 import { clip, dur } from '../format.js';
 import { ICON } from '../icons.js';
 import { awayWords, loadDraft, saveDraft } from '../app.js';
+import { flipAll } from '../motion.js';
 
 /** One of web/icons.js's ICON glyphs, as a vnode. Its icon() is the DOM twin. */
 export function icon(name, size = 15) {
@@ -45,7 +47,12 @@ export function paint(container, tree) {
         claimed.add(container);
         container.textContent = '';
     }
-    render(tree, container);
+    // A card that changes column or place slides there, and one that arrives
+    // fades in. Cards carry their session in `data-id`, or their task in
+    // `data-task`; anything else on a board is not tracked and just updates.
+    flipAll(container, () => container.querySelectorAll('[data-id], [data-task]'),
+        (n) => (n.dataset.task ? `task:${n.dataset.task}` : n.dataset.id),
+        () => render(tree, container));
 }
 
 /** How many messages are waiting behind the turn. Same words the rail uses. */
@@ -55,7 +62,21 @@ export function queuedBadge(queued) {
         >${`+${queued} queued`}</span>`;
 }
 
-/** A session's task list, as a bar. app.js keeps the DOM twin for the checklist. */
+/**
+ * A busy turn that has said nothing past `live.stalledAfterMinutes` —
+ * bridge/runner.js's header has the rule. The rail's row, both boards' cards.
+ *
+ * In place of the pulse rather than beside it: a breathing "Working" next to
+ * a badge saying nothing is happening is two claims, and only one is true.
+ */
+export function stalledBadge() {
+    const mins = BOOT_PREFS.live.stalledAfterMinutes;
+    return html`<span class="tag-stalled"
+        title=${`Working, but nothing for ${mins} min or more: no output, no tool running`}
+        >stalled</span>`;
+}
+
+/** A session's task list, as a bar. The boards' cards and the checklist column. */
 export function taskBar(t) {
     const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
     return html`<div class="tbar" title=${`${t.done} of ${t.total} tasks done`}
@@ -87,8 +108,11 @@ export function liveStatusWords(s, busy, away, { tick = false } = {}) {
         return [html`<span class="lstate err">${clip(r.error || 'The turn failed.', 68)}</span>`];
     }
     if (busy) {
+        // The activity line is the last thing the turn said, and minutes old; the
+        // clock stays, because how long it has been is what you decide on.
         return [
-            html`<span class=${r.retry ? 'lstate warn' : 'lstate'}>${clip(r.activity || 'Working…', 52)}</span>`,
+            r.stalled ? stalledBadge()
+                : html`<span class=${r.retry ? 'lstate warn' : 'lstate'}>${clip(r.activity || 'Working…', 52)}</span>`,
             r.busySince ? html`<${Clock} since=${r.busySince} tick=${tick} />` : null,
         ];
     }
@@ -135,7 +159,8 @@ class Clock extends Component {
  * several sessions away from the one you are reading is not the place to offer
  * it.
  *
- * Except with `hard`, which the rail's row passes only for a stalled turn. That
+ * Except with `hard`, which the rail's row and both boards' cards pass only for
+ * a stalled turn. That
  * is the one case the interrupt is least likely to fix: a process that has said
  * nothing for minutes either does not answer it (eight seconds, then the kill
  * anyway) or answers it and still sends no `result` — the `inFlight` wedge,

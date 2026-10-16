@@ -15,10 +15,11 @@
    read top to bottom instead of scanned: you arrive knowing which setting you
    came for, and the group titles are how you find it.
 
-   The control goes on the *left* of its label, which is the opposite of the
-   rest of this app and deliberate: every row here is a control, so the left
-   edge is a column of them and the eye runs down it. Putting them on the right
-   would leave a ragged column that moves with the length of each label. */
+   One row anatomy throughout: label and note down the left, the control at the
+   right edge (see .settings-row). A control no right-hand column is the right
+   width for — a list, a run of pills — goes under its label at the full measure
+   instead (.is-wide), with the label, note and Clear exactly where a plain row
+   has them. */
 
 /* One scroll container, one centred column. The panel is read rather than
    scanned, so it gets a measure — the head, the file it writes and the groups
@@ -49,7 +50,7 @@
 .settings-col {
     width: min(880px, calc(100% - 2 * var(--set-aside)));
     margin: 0 auto;
-    padding: 0 28px;
+    padding: 0 var(--pane-x, 28px);
 }
 
 /* The head and the file line, pinned. Sticky inside .settings-col, which spans
@@ -62,11 +63,11 @@
     z-index: 3;
     background: var(--s1);
     border-bottom: 1px solid var(--outline-soft);
-    margin-bottom: 14px;
+    margin-bottom: var(--sp-6);
 }
-.settings-head { padding: 22px 0 14px; }
-.settings-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
-.settings-sub { margin: 5px 0 0; max-width: 560px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
+.settings-head { padding: var(--sp-8) 0 var(--sp-6); }
+.settings-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
+.settings-sub { margin: var(--sp-2) 0 0; max-width: 560px; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-3); }
 
 /* Contents beside the groups, and deliberately out of flow: `right: 100%` puts
    it entirely to the left of the centred column, so its width cannot shift what
@@ -76,7 +77,7 @@
    list inside it and a sticky element only travels within its parent's box.
 
    The list sticks at the offset it opens at — the pinned head's height plus the
-   head's 14px margin-bottom — so it holds still from the first scroll rather
+   head's margin-bottom — so it holds still from the first scroll rather
    than sliding up beside the title once the head is pinned. */
 .settings-cols { position: relative; }
 .settings-toc {
@@ -84,10 +85,10 @@
     top: 0;
     bottom: 0;
     right: 100%;
-    width: calc(var(--set-aside) - 20px);
-    margin-right: 20px;
+    width: calc(var(--set-aside) - var(--sp-8));
+    margin-right: var(--sp-8);
 }
-.settings-toc-list { position: sticky; top: calc(var(--set-top-h, 0px) + 14px); display: flex; flex-direction: column; gap: 1px; }
+.settings-toc-list { position: sticky; top: calc(var(--set-top-h, 0px) + var(--sp-6)); display: flex; flex-direction: column; gap: 1px; }
 /* Wide enough for the longest entry on one line — "Connect a phone" wrapping
    into two was the whole reason `--set-aside` is 172px rather than 152px. */
 .settings-toc-link {
@@ -95,8 +96,8 @@
     background: none;
     border: 0;
     border-radius: var(--r-sm);
-    padding: 7px 11px;
-    font: 400 13px var(--sans);
+    padding: var(--sp-4) var(--sp-6);
+    font: 400 var(--fs-md) var(--sans);
     color: var(--text-3);
     text-align: left;
     cursor: pointer;
@@ -108,10 +109,10 @@
     content: "";
     position: absolute;
     left: 0;
-    top: 5px;
-    bottom: 5px;
+    top: var(--sp-2);
+    bottom: var(--sp-2);
     width: 2px;
-    border-radius: 1px;
+    border-radius: var(--pill);
     background: transparent;
 }
 .settings-toc-link.on { color: var(--text); }
@@ -124,9 +125,9 @@
     background: none;
     border: 0;
     border-radius: var(--r-sm);
-    margin-top: 12px;
-    padding: 5px 11px 3px;
-    font: 500 10.5px/1.3 var(--sans);
+    margin-top: var(--sp-6);
+    padding: var(--sp-2) var(--sp-6) var(--sp-2);
+    font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -135,23 +136,26 @@
 }
 .settings-toc-cat:first-child { margin-top: 0; }
 .settings-toc-cat:hover, .settings-toc-cat.on { color: var(--text-2); }
-.settings-toc-cat + .settings-toc-link, .settings-toc-link + .settings-toc-link { padding-left: 19px; }
-.settings-toc-link { padding-top: 5px; padding-bottom: 5px; }
+.settings-toc-cat + .settings-toc-link, .settings-toc-link + .settings-toc-link { padding-left: calc(var(--sp-6) + var(--sp-4)); }
+/* A narrower right side than left: the contents column is 152px, and with an
+   even 12px both sides "Session status line" wrapped onto a second line. */
+.settings-toc-link { padding-top: var(--sp-2); padding-bottom: var(--sp-2); padding-right: var(--sp-4); }
 
-.settings-picks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-.settings-pick { display: flex; flex-direction: column; gap: 4px; }
+.settings-picks { display: flex; flex-wrap: wrap; gap: var(--sp-5); margin-top: var(--sp-6); }
+.settings-pick { display: flex; flex-direction: column; gap: var(--sp-2); }
 /* The Descriptions picker is about this page rather than the file, so it
    stands apart from the two that choose what gets written. */
 .settings-pick-end { margin-left: auto; }
-.settings-pick > span { font-size: 11px; letter-spacing: 0.02em; color: var(--text-4); }
+/* A label over one value, so sentence case at meta size rather than an overline. */
+.settings-pick > span { font-size: var(--fs-sm); color: var(--text-3); }
 .settings-pick select {
     appearance: none;
     background: var(--s3);
     color: var(--text);
     border: 0;
     border-radius: var(--pill);
-    padding: 7px 14px;
-    font: 400 13px var(--sans);
+    padding: var(--sp-4) var(--sp-6);
+    font: 400 var(--fs-md) var(--sans);
     max-width: 260px;
     cursor: pointer;
 }
@@ -164,9 +168,9 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px;
-    padding: 0 0 14px;
-    font-size: 12px;
+    gap: var(--sp-4);
+    padding: 0 0 var(--sp-6);
+    font-size: var(--fs-sm);
     color: var(--text-4);
 }
 .settings-file-lede { color: var(--text-4); }
@@ -174,7 +178,7 @@
     background: none;
     border: 0;
     padding: 0;
-    font: 400 12px var(--mono);
+    font: 400 var(--fs-sm) var(--mono);
     color: var(--text-2);
     cursor: pointer;
     text-align: left;
@@ -184,8 +188,8 @@
 .settings-file-tag {
     background: var(--s3);
     border-radius: var(--pill);
-    padding: 2px 9px;
-    font-size: 11px;
+    padding: var(--sp-1) var(--sp-4);
+    font-size: var(--fs-xs);
     color: var(--text-3);
 }
 .settings-file-tag.bad { background: var(--s2); color: var(--red); }
@@ -194,27 +198,27 @@
    than beside them, because the file is what has the problem and the control
    showing the default is behaving correctly. */
 .settings-problems {
-    margin: 0 0 14px;
-    padding: 10px 14px;
+    margin: 0 0 var(--sp-6);
+    padding: var(--sp-5) var(--sp-6);
     background: var(--s2);
     border-radius: var(--r);
-    box-shadow: inset 3px 0 0 var(--yellow);
-    font-size: 12px;
-    line-height: 1.6;
+    box-shadow: inset var(--edge-w) 0 0 var(--yellow);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
     color: var(--text-3);
     max-width: 860px;
 }
-.settings-problem + .settings-problem { margin-top: 4px; }
-.settings-problems code { font: 400 11px var(--mono); color: var(--text-4); }
+.settings-problem + .settings-problem { margin-top: var(--sp-2); }
+.settings-problems code { font: 400 var(--fs-xs) var(--mono); color: var(--text-4); }
 
 .settings-body {
     min-width: 0;
-    padding: 0 0 40px;
+    padding: 0 0 var(--sp-10);
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: var(--sp-6);
 }
-.settings-empty, .settings-error { padding: 8px 0; font-size: 13px; color: var(--text-3); }
+.settings-empty, .settings-error { padding: var(--sp-4) 0; font-size: var(--fs-md); color: var(--text-3); }
 .settings-error { color: var(--red); }
 
 /* Each group is a card, one step up the surface ramp from the pane. It used to
@@ -239,66 +243,66 @@
     background: var(--s1);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-lg);
-    padding: 18px 22px 8px;
+    padding: var(--sp-7) var(--sp-8) var(--sp-4);
 }
 /* The heading over a run of cards — Workspace, Input, and the rest; see
    SETTINGS_CATEGORIES. Quiet on purpose: it is a signpost, and the card titles
    are what you read. The margin is larger than the gap between cards so the
    heading belongs to what follows it. */
 .settings-cat {
-    margin: 18px 0 -4px 2px;
-    font: 500 11px/1.3 var(--sans);
+    margin: var(--sp-7) 0 calc(-1 * var(--sp-2)) var(--sp-1);
+    font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-4);
 }
 .settings-cat:first-child { margin-top: 0; }
 .settings-group[data-locked] .settings-row { opacity: 0.5; }
-.settings-group-title { margin: 0; font: 400 15px/1.3 var(--sans); color: var(--text); }
+.settings-group-title { margin: 0; font: 400 var(--fs-lg)/var(--lh-tight) var(--sans); color: var(--text); }
 .settings-group-note {
-    margin: 5px 0 0;
+    margin: var(--sp-2) 0 0;
     max-width: 620px;
-    font-size: 12px;
-    line-height: 1.6;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
     color: var(--text-4);
 }
 .settings-locked {
-    margin: 10px 0 0;
-    padding: 9px 12px;
+    margin: var(--sp-5) 0 0;
+    padding: var(--sp-4) var(--sp-6);
     background: var(--s2);
     border-radius: var(--r-sm);
-    font-size: 12px;
-    line-height: 1.6;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
-.settings-locked code { font: 400 11px var(--mono); color: var(--text-2); }
+.settings-locked code { font: 400 var(--fs-xs) var(--mono); color: var(--text-2); }
 
 /* Label down the left, control at the right edge, and the "Clear" or "default"
    line under the control. The controls then form one column the eye can run
    down — which they cannot when each one starts where its own label ended. */
-.settings-row { display: flex; align-items: flex-start; gap: 24px; padding: 14px 0; }
+.settings-row { display: flex; align-items: flex-start; gap: var(--sp-9); padding: var(--sp-6) 0; }
 .settings-row + .settings-row { border-top: 1px solid var(--outline-soft); }
 .settings-row-text { flex: 1; min-width: 0; }
-.settings-row-label { font-size: 13px; color: var(--text); }
-.settings-row-note { margin-top: 3px; font-size: 12px; line-height: 1.6; color: var(--text-4); }
-.settings-row-warn { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--yellow); }
-.settings-row-warn code { font: 400 11px var(--mono); }
+.settings-row-label { font-size: var(--fs-md); color: var(--text); }
+.settings-row-note { margin-top: var(--sp-2); font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--text-4); }
+.settings-row-warn { margin-top: var(--sp-3); font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--yellow); }
+.settings-row-warn code { font: 400 var(--fs-xs) var(--mono); }
 .settings-row-ctl {
     flex: none;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 5px;
+    gap: var(--sp-2);
     padding-top: 1px;
 }
-.settings-row-side { font-size: 12px; text-align: right; }
+.settings-row-side { font-size: var(--fs-sm); text-align: right; }
 .settings-row-from { color: var(--text-4); }
 /* Where a value came from, only for the row you are at. `visibility` rather
    than `display`, so the row does not change height or reflow as the pointer
    crosses it; `:focus-within` is what brings it back for the keyboard, since
    Clear is a button you have to be able to reach. The "Overridden by" line is
    not in here — that one is a problem, and stays in view. */
-.settings-row-side.is-origin { visibility: hidden; opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+.settings-row-side.is-origin { visibility: hidden; opacity: 0; transition: opacity var(--dur-fast) var(--ease-standard); }
 .settings-row:hover .settings-row-side.is-origin,
 .settings-row:focus-within .settings-row-side.is-origin { visibility: visible; opacity: 1; }
 /* And beside the control rather than under it: under it, the hidden line still
@@ -306,7 +310,7 @@
 .settings-row-ctl:has(> .settings-row-side.is-origin) {
     flex-direction: row-reverse;
     align-items: center;
-    gap: 12px;
+    gap: var(--sp-6);
 }
 
 /* A description behind an ⓘ — settingTip() in general.js. The popover is the
@@ -322,19 +326,19 @@
     justify-content: center;
     width: 15px;
     height: 15px;
-    margin: 0 0 0 7px;
+    margin: 0 0 0 var(--sp-4);
     padding: 0;
     border: 1.5px solid currentColor;
     border-radius: 50%;
     background: none;
     color: var(--text-4);
-    font: italic 600 10px/1 Georgia, serif;
+    font: italic 600 var(--fs-2xs)/1 Georgia, serif;
     vertical-align: -2px;
     cursor: help;
 }
 .set-tip::before { content: "i"; }
 .set-tip:hover, .set-tip:focus-visible { color: var(--text-2); }
-.set-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.set-tip:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 .set-tip::after {
     content: attr(data-tip);
     position: absolute;
@@ -344,11 +348,11 @@
     width: max-content;
     max-width: min(420px, 100%);
     min-width: min(240px, 100%);
-    padding: 9px 12px;
+    padding: var(--sp-4) var(--sp-6);
     background: var(--set-s5);
     border-radius: var(--r-sm);
-    box-shadow: 0 6px 20px rgb(0 0 0 / 0.45);
-    font: 400 12px/1.6 var(--sans);
+    box-shadow: var(--shadow-pop);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     font-style: normal;
     color: var(--text-2);
     text-align: left;
@@ -356,7 +360,7 @@
     pointer-events: none;
     visibility: hidden;
     opacity: 0;
-    transition: opacity var(--t-fast) var(--ease);
+    transition: opacity var(--dur-fast) var(--ease-standard);
 }
 .set-tip:hover::after, .set-tip:focus-visible::after { visibility: visible; opacity: 1; }
 
@@ -372,9 +376,9 @@
    underneath — which for the verb groups is the difference between four pills
    per line and a list you scroll. */
 .settings-row.is-wide { flex-direction: column; gap: 0; }
-.settings-row-head { display: flex; align-items: flex-start; gap: 24px; width: 100%; }
+.settings-row-head { display: flex; align-items: flex-start; gap: var(--sp-9); width: 100%; }
 .settings-row-head .settings-row-side { flex: none; padding-top: 1px; }
-.settings-row-wide { width: 100%; margin-top: 12px; }
+.settings-row-wide { width: 100%; margin-top: var(--sp-6); }
 
 /* A long row folded away — settings/fold.js. The label is the button, so it
    keeps the look of whatever it labels and only gains a caret in front; the
@@ -382,8 +386,9 @@
 .set-fold {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    margin-left: -16px;
+    gap: var(--sp-2);
+    /* Hangs the caret (12px) and its gap in the gutter, left of the label. */
+    margin-left: calc(-1 * (12px + var(--sp-2)));
     padding: 0;
     border: 0;
     background: none;
@@ -395,20 +400,20 @@
     cursor: pointer;
 }
 .set-fold:hover { color: var(--text); }
-.set-fold:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+.set-fold:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); border-radius: var(--r-2xs); }
 .set-fold-caret {
     display: inline-flex;
     flex: none;
     width: 12px;
     color: var(--text-4);
-    transition: transform var(--t-fast) var(--ease);
+    transition: transform var(--dur-fast) var(--ease-standard);
 }
 .set-fold[aria-expanded="true"] .set-fold-caret { transform: rotate(90deg); }
 /* Inside a bordered block (the inherited lists) there is no gutter to hang in. */
 .set-fold.is-quiet, .set-fold.is-card { margin-left: 0; }
 .set-fold.is-quiet:hover { color: var(--text-2); }
-.set-fold-sum { margin-top: 3px; font-size: 12px; color: var(--text-4); }
-.set-fold-sum.is-inline { margin: 0 0 0 8px; text-transform: none; letter-spacing: 0; }
+.set-fold-sum { margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--text-4); }
+.set-fold-sum.is-inline { margin: 0 0 0 var(--sp-4); text-transform: none; letter-spacing: 0; }
 .settings-row.is-folded .settings-row-head { align-items: center; }
 .cmd-card.is-folded .cmd-card-head { margin-bottom: 0; }
 
@@ -425,9 +430,9 @@
     position: relative;
     width: 17px;
     height: 17px;
-    border-radius: 5px;
+    border-radius: var(--r-2xs);
     border: 2px solid var(--outline);
-    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
 }
 /* The tick is drawn rather than shipped: an inline SVG per checkbox is a lot of
    nodes for one glyph, and two borders of a rotated box are the same picture.
@@ -445,7 +450,7 @@
     border-width: 0 2px 2px 0;
     transform: rotate(40deg) scale(0.4);
     opacity: 0;
-    transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+    transition: transform var(--dur-fast) var(--ease-standard), opacity var(--dur-fast) var(--ease-standard);
 }
 .settings-check input:checked + .settings-box,
 .settings-group-pick input:checked + .settings-box {
@@ -458,7 +463,7 @@
     opacity: 1;
 }
 .settings-check input:focus-visible + .settings-box,
-.settings-group-pick input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+.settings-group-pick input:focus-visible + .settings-box { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 
 .settings-num, .settings-text, .settings-select {
     flex: none;
@@ -466,20 +471,20 @@
     color: var(--text);
     border: 0;
     border-radius: var(--r-sm);
-    padding: 6px 10px;
-    font: 400 13px var(--sans);
+    padding: var(--sp-3) var(--sp-5);
+    font: 400 var(--fs-md) var(--sans);
 }
 .settings-num { width: 88px; text-align: right; font-family: var(--mono); }
 /* A width, not a max-width: an <input type=text> defaults to about twenty
    characters, and the one field here is a filesystem path — so it came out
    clipped at exactly the point where reading it matters. */
-.settings-text { width: 340px; max-width: 100%; font-family: var(--mono); font-size: 12px; }
+.settings-text { width: 340px; max-width: 100%; font-family: var(--mono); font-size: var(--fs-sm); }
 /* The pairing link is 43 characters of token on top of a hostname, and the
    remembered host is a URL — both belong in a field the width of the row rather
    than one you scroll sideways through. */
 .settings-text.is-long { width: 100%; }
 /* A list typed one entry per line — the preview's domains and URLs. */
-.settings-list { display: block; width: 100%; resize: vertical; line-height: 1.5; }
+.settings-list { display: block; width: 100%; resize: vertical; line-height: var(--lh-base); }
 
 /* The notification rules, and the sentence that replaces them when the browser
    is refusing. Same slot, so the group does not change height. */
@@ -488,15 +493,19 @@
 
 /* A run of rows inside a group that belong together — the live board's
    visibility over each screen. Ruled off from the rows above like a row is. */
-.settings-subhead { padding: 18px 0 4px; border-top: 1px solid var(--outline-soft); }
-.settings-subhead-title { margin: 0; font: 500 13.5px/1.3 var(--sans); color: var(--text); }
+.settings-subhead { padding: var(--sp-7) 0 var(--sp-2); border-top: 1px solid var(--outline-soft); }
+.settings-subhead-title { margin: 0; font: 500 var(--fs-base)/var(--lh-tight) var(--sans); color: var(--text); }
 .settings-subhead + .settings-row { border-top: 0; }
 .settings-row-ctl .seg-btn:disabled { color: var(--text-4); cursor: default; }
 
 /* One choice of a few, all in view — radios rather than a select, so a column
    of them reads as a table of what each screen does. */
-.settings-radios { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 16px; }
-.settings-radio { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.settings-radios { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2) var(--sp-7); }
+/* The control column is `flex: none`, which is right for a box or a select and
+   wrong for a run of radios: in a narrow window "Open to" pushed its last two
+   options out past the card's edge instead of wrapping them. */
+.settings-row-ctl:has(.settings-radios) { flex: 0 1 auto; min-width: 0; }
+.settings-radio { display: inline-flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-md); color: var(--text-2); cursor: pointer; }
 .settings-radio input { margin: 0; accent-color: var(--blue); cursor: pointer; }
 .settings-radio input:disabled, .settings-radio input:disabled + span { cursor: default; color: var(--text-4); }
 .settings-num:disabled, .settings-text:disabled, .settings-select:disabled { color: var(--text-4); cursor: default; }
@@ -504,13 +513,13 @@
 /* A slider, for the one setting that is a strength rather than a count. The
    readout beside it is what makes it a setting rather than a guess, and it is
    tabular so the row does not twitch as the number changes width. */
-.settings-range { display: flex; align-items: center; gap: 10px; flex: none; }
+.settings-range { display: flex; align-items: center; gap: var(--sp-5); flex: none; }
 .settings-range input { width: 160px; accent-color: var(--blue); }
 .settings-range input:disabled { cursor: default; }
 .settings-range output {
     width: 36px;
     text-align: right;
-    font: 400 12.5px var(--mono);
+    font: 400 var(--fs-sm) var(--mono);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
 }
@@ -525,16 +534,16 @@
    that fits it, "Pirate" is mostly empty space. Letting each pill be its own
    size packs more per line *and* clips nothing, which is the rare case where
    the denser layout is also the more readable one. */
-.settings-groups { display: flex; flex-wrap: wrap; gap: 4px 6px; }
-.settings-groups-none, .settings-groups-foot { font-size: 12px; color: var(--text-4); }
-.settings-groups-foot { flex-basis: 100%; margin-top: 6px; }
+.settings-groups { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); }
+.settings-groups-none, .settings-groups-foot { font-size: var(--fs-sm); color: var(--text-4); }
+.settings-groups-foot { flex-basis: 100%; margin-top: var(--sp-3); }
 .settings-group-pick {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--sp-4);
     background: var(--s2);
     border-radius: var(--pill);
-    padding: 4px 11px 4px 8px;
+    padding: var(--sp-2) var(--sp-6) var(--sp-2) var(--sp-4);
 }
 /* The pill stopped being one `<label>` when the chosen ones grew a number box.
    The checkbox is an invisible overlay filling its label, which is what makes
@@ -544,7 +553,7 @@
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--sp-4);
     cursor: pointer;
 }
 /* Never wrapped mid-name: a pill is one label, and the line breaks between
@@ -552,24 +561,24 @@
 .settings-group-name { white-space: nowrap; }
 .settings-group-pick:hover { background: var(--s3); }
 .settings-group-toggle input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-.settings-group-pick .settings-box { width: 14px; height: 14px; border-radius: 4px; }
-.settings-group-name { font-size: 12px; color: var(--text-2); }
-.settings-group-count { font: 400 11px var(--mono); color: var(--text-4); }
+.settings-group-pick .settings-box { width: 14px; height: 14px; border-radius: var(--r-2xs); }
+.settings-group-name { font-size: var(--fs-sm); color: var(--text-2); }
+.settings-group-count { font: 400 var(--fs-xs) var(--mono); color: var(--text-4); }
 /* Wide enough for three digits and no wider: it holds 0 to 1000, and every
    pill on the line is competing for the same row. */
 .settings-group-weight {
     flex: none;
     width: 38px;
-    padding: 1px 5px;
+    padding: 1px var(--sp-2);
     text-align: right;
-    font: 400 11px var(--mono);
+    font: 400 var(--fs-xs) var(--mono);
     color: var(--text);
     background: var(--s4);
     border: 0;
     border-radius: var(--r-sm);
 }
 .settings-group-weight:disabled { color: var(--text-4); }
-.settings-group-share { font: 400 11px var(--mono); color: var(--text-3); min-width: 24px; }
+.settings-group-share { font: 400 var(--fs-xs) var(--mono); color: var(--text-3); min-width: 24px; }
 .settings-group-share.is-muted { color: var(--text-4); }
 
 /* ── the shortcut table ───────────────────────────────── */
@@ -577,28 +586,28 @@
    for one name. The chord sits in a fixed column so the whole set can be
    scanned for a collision without reading a single label. */
 
-.settings-keys { padding: 14px 0 6px; border-top: 1px solid var(--outline-soft); }
-.settings-keys-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; }
-.settings-keys-head > span:first-child { font-size: 13px; color: var(--text); }
-.settings-keys-note { max-width: 620px; font-size: 12px; line-height: 1.6; color: var(--text-4); }
-.settings-keys-group { padding-top: 6px; }
+.settings-keys { padding: var(--sp-6) 0 var(--sp-3); border-top: 1px solid var(--outline-soft); }
+.settings-keys-head { display: flex; flex-direction: column; gap: var(--sp-2); padding-bottom: var(--sp-4); }
+.settings-keys-head > span:first-child { font-size: var(--fs-md); color: var(--text); }
+.settings-keys-note { max-width: 620px; font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--text-4); }
+.settings-keys-group { padding-top: var(--sp-3); }
 .settings-keys-group-name {
-    padding: 6px 0 2px;
-    font-size: 11px;
+    padding: var(--sp-3) 0 var(--sp-1);
+    font-size: var(--fs-xs);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
 }
 
-.settings-key-row { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
-.settings-key-label { flex: 1; min-width: 0; font-size: 13px; color: var(--text-2); }
+.settings-key-row { display: flex; align-items: center; gap: var(--sp-6); padding: var(--sp-2) 0; }
+.settings-key-label { flex: 1; min-width: 0; font-size: var(--fs-md); color: var(--text-2); }
 .settings-key-combo {
     flex: none;
     width: 150px;
     background: var(--s3);
     border-radius: var(--r-xs);
-    padding: 4px 9px;
-    font: 400 12px var(--mono);
+    padding: var(--sp-2) var(--sp-4);
+    font: 400 var(--fs-sm) var(--mono);
     color: var(--text);
     text-align: center;
 }
@@ -606,37 +615,37 @@
 .settings-key-recording {
     flex: none;
     width: 150px;
-    padding: 4px 9px;
-    font-size: 11px;
+    padding: var(--sp-2) var(--sp-4);
+    font-size: var(--fs-xs);
     color: var(--blue);
     text-align: center;
 }
 .settings-key-row[data-recording] { background: var(--blue-tint); border-radius: var(--r-xs); }
-.settings-key-acts { flex: none; display: flex; gap: 10px; min-width: 150px; justify-content: flex-end; }
+.settings-key-acts { flex: none; display: flex; gap: var(--sp-5); min-width: 150px; justify-content: flex-end; }
 
 /* The Toolbar group: one row per bar button, dragged or stepped into order. */
-.settings-bar { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.settings-bar { display: flex; flex-direction: column; gap: var(--sp-1); padding-top: var(--sp-3); }
 .settings-bar-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 5px 8px;
+    gap: var(--sp-6);
+    padding: var(--sp-2) var(--sp-4);
     border-radius: var(--r-xs);
 }
 .settings-bar-row:hover { background: var(--s2); }
 .settings-bar-row.dragging { opacity: 0.4; }
 .settings-bar-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
 .settings-bar-row[data-place="hidden"] .settings-bar-name { color: var(--text-4); }
-.settings-bar-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
-    font-size: 13px; color: var(--text-2); }
+.settings-bar-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-4);
+    font-size: var(--fs-md); color: var(--text-2); }
 .settings-bar-name svg { flex: none; color: var(--text-3); }
 .settings-bar-noglyph { flex: none; width: 14px; }
 .settings-bar-row .snip-move:disabled { opacity: 0.3; cursor: default; background: transparent; }
-.settings-bar-label { flex: none; display: flex; align-items: center; gap: 6px;
-    width: 110px; font-size: 12px; color: var(--text-3); }
+.settings-bar-label { flex: none; display: flex; align-items: center; gap: var(--sp-3);
+    width: 110px; font-size: var(--fs-sm); color: var(--text-3); }
 .settings-bar-place { flex: none; width: 130px; }
-.settings-bar-fixed { flex: none; width: 130px; font-size: 11px; color: var(--text-4); }
-.settings-bar-foot { display: flex; justify-content: flex-end; padding-top: 8px; }
+.settings-bar-fixed { flex: none; width: 130px; font-size: var(--fs-xs); color: var(--text-4); }
+.settings-bar-foot { display: flex; justify-content: flex-end; padding-top: var(--sp-4); }
 
 /* A text-only button, for the actions inside a row where a pill would be three
    times the weight of the word in it. */
@@ -644,7 +653,7 @@
     background: none;
     border: 0;
     padding: 0;
-    font: 400 12px var(--sans);
+    font: 400 var(--fs-sm) var(--sans);
     color: var(--blue);
     cursor: pointer;
 }
@@ -660,31 +669,31 @@
    back when the groups themselves were the colour of the pane; now that every
    group is a card, a lighter one read as a different kind of thing. */
 
-.cfg-sub { margin-left: 18px; padding: 16px 20px 6px; }
-.cfg-sub .settings-group-title { font-size: 14px; color: var(--text-2); }
+.cfg-sub { margin-left: var(--sp-7); padding: var(--sp-7) var(--sp-8) var(--sp-3); }
+.cfg-sub .settings-group-title { font-size: var(--fs-base); color: var(--text-2); }
 
 /* Which of the four files, and which of the two ways of looking at it. One row,
    with the view toggle pushed to the far end: the left half picks a *file* and
    the right half picks a *lens*, and a gap says so better than a label would. */
-.cfg-tabs { display: flex; align-items: center; gap: 4px; margin: 14px 0 0; flex-wrap: wrap; }
+.cfg-tabs { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-6) 0 0; flex-wrap: wrap; }
 .cfg-tabs-spacer { flex: 1; min-width: 12px; }
 .cfg-tab {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--sp-3);
     background: var(--s3);
     color: var(--text-3);
     border: 0;
     border-radius: var(--pill);
-    padding: 5px 12px;
-    font: 400 12px var(--sans);
+    padding: var(--sp-2) var(--sp-6);
+    font: 400 var(--fs-sm) var(--sans);
     cursor: pointer;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .cfg-tab:hover { background: var(--s4); color: var(--text-2); }
 .cfg-tab.on { background: var(--blue-cont); color: var(--text); }
 .cfg-tab-tag {
-    font: 400 10px var(--mono);
+    font: 400 var(--fs-2xs) var(--mono);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-4);
@@ -695,13 +704,13 @@
    asked. Yellow-tinted rather than plain, because it is a caveat about every
    control below it and not a note about one. */
 .cfg-reach {
-    margin: 12px 0 0;
-    padding: 9px 12px;
+    margin: var(--sp-6) 0 0;
+    padding: var(--sp-4) var(--sp-6);
     background: var(--s2);
     border-left: 2px solid var(--yellow);
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
-    font-size: 12px;
-    line-height: 1.6;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 .cfg-sub .cfg-reach { background: var(--s3); }
@@ -712,26 +721,26 @@
    message here that says a write did *not* happen, and it has to survive being
    looked away from. */
 .cfg-stale {
-    margin: 12px 0 0;
-    padding: 11px 13px;
+    margin: var(--sp-6) 0 0;
+    padding: var(--sp-6) var(--sp-6);
     background: var(--s2);
     border-left: 2px solid var(--red);
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
-    font-size: 12px;
-    line-height: 1.6;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 .cfg-stale-head { color: var(--text); }
-.cfg-stale p { margin: 5px 0 0; color: var(--text-4); }
-.cfg-stale summary { margin-top: 7px; cursor: pointer; color: var(--text-3); }
+.cfg-stale p { margin: var(--sp-2) 0 0; color: var(--text-4); }
+.cfg-stale summary { margin-top: var(--sp-4); cursor: pointer; color: var(--text-3); }
 .cfg-stale-text {
-    margin: 7px 0 0;
+    margin: var(--sp-4) 0 0;
     max-height: 220px;
     overflow: auto;
-    padding: 9px 11px;
+    padding: var(--sp-4) var(--sp-6);
     background: var(--bg);
     border-radius: var(--r-sm);
-    font: 400 11px/1.6 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-3);
     white-space: pre-wrap;
 }
@@ -739,13 +748,13 @@
 /* The key's real name beside its label. Everything on this page maps to a line
    in a file somebody may have to open, and a label alone does not say which. */
 .cfg-path {
-    margin-left: 8px;
-    font: 400 11px var(--mono);
+    margin-left: var(--sp-4);
+    font: 400 var(--fs-xs) var(--mono);
     color: var(--text-4);
 }
 .cfg-merged { color: var(--text-3); }
 .cfg-raw-value {
-    font: 400 11px var(--mono);
+    font: 400 var(--fs-xs) var(--mono);
     color: var(--text-3);
     overflow-wrap: anywhere;
 }
@@ -755,8 +764,8 @@
    twenty-eight rules into one draft where a single bad paste replaces the lot,
    and per row a delete is one write and a mistake loses one rule. Each row is
    a textarea because an entry is not always short. */
-.cfg-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-.cfg-list-row { display: flex; align-items: flex-start; gap: 6px; }
+.cfg-list { display: flex; flex-direction: column; gap: var(--sp-2); width: 100%; }
+.cfg-list-row { display: flex; align-items: flex-start; gap: var(--sp-3); }
 .cfg-list-value {
     flex: 1;
     min-width: 0;
@@ -766,10 +775,10 @@
     color: var(--text-2);
     border: 0;
     border-radius: var(--r-xs);
-    padding: 5px 9px;
-    font: 400 12px/1.5 var(--mono);
+    padding: var(--sp-2) var(--sp-4);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
 }
-.cfg-list-value:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-list-value:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cfg-list-value:disabled { color: var(--text-4); }
 .cfg-list-x {
     flex: none;
@@ -779,14 +788,14 @@
     color: var(--text-4);
     border: 0;
     border-radius: var(--r-xs);
-    font: 400 15px/1 var(--sans);
+    font: 400 15px/var(--lh-none) var(--sans);
     cursor: pointer;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .cfg-list-x:hover { background: var(--s4); color: var(--red); }
 .cfg-list-x:disabled { color: var(--s5); cursor: default; background: transparent; }
-.cfg-list-none { padding: 6px 0; font-size: 12px; color: var(--text-4); }
-.cfg-list-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.cfg-list-none { padding: var(--sp-3) 0; font-size: var(--fs-sm); color: var(--text-4); }
+.cfg-list-add { display: flex; gap: var(--sp-4); align-items: center; margin-top: var(--sp-4); flex-wrap: wrap; }
 /* Same trap as .cfg-kv-newvalue below: `is-long` means 100% of the row, which
    in a flex row is 100% *and* whatever it sits next to. */
 .cfg-list-add > .settings-text.is-long { width: auto; flex: 1 1 200px; min-width: 0; }
@@ -796,34 +805,34 @@
    files and an entry another file owns is not one this scope can remove —
    showing it as an editable row with no × would be a worse lie than not
    showing it at all. */
-.cfg-inherit { margin-top: 10px; padding-left: 10px; border-left: 1px solid var(--outline); }
+.cfg-inherit { margin-top: var(--sp-5); padding-left: var(--sp-5); border-left: 1px solid var(--outline); }
 .cfg-inherit-head {
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    gap: var(--sp-4);
     flex-wrap: wrap;
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--text-4);
 }
-.cfg-inherit-head code { font: 400 10px var(--mono); color: var(--text-4); }
+.cfg-inherit-head code { font: 400 var(--fs-2xs) var(--mono); color: var(--text-4); }
 .cfg-inherit-row {
-    margin-top: 3px;
-    font: 400 11px/1.6 var(--mono);
+    margin-top: var(--sp-2);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-4);
     overflow-wrap: anywhere;
 }
 
 /* Name and value rows — `env`, and anything shaped like it. */
-.cfg-kv { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-.cfg-kv-row { display: flex; align-items: center; gap: 8px; }
+.cfg-kv { display: flex; flex-direction: column; gap: var(--sp-2); width: 100%; }
+.cfg-kv-row { display: flex; align-items: center; gap: var(--sp-4); }
 .cfg-kv-name {
     flex: none;
     width: 180px;
-    font: 400 12px var(--mono);
+    font: 400 var(--fs-sm) var(--mono);
     color: var(--text-2);
     overflow-wrap: anywhere;
 }
-.cfg-kv-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.cfg-kv-add { display: flex; gap: var(--sp-4); align-items: center; margin-top: var(--sp-4); flex-wrap: wrap; }
 .cfg-kv-newname { width: 180px; flex: none; }
 /* `is-long` is `width: 100%`, which inside a flex row means "as wide as the row"
    *plus* whatever sits beside it — so the name field and the Add button pushed
@@ -831,78 +840,14 @@
    Flexing into what is left is what that class means here. */
 .cfg-kv-newvalue { width: auto; flex: 1 1 160px; min-width: 0; }
 
-/* The hooks editor. An event is a card (the command editor's), a matcher group
-   an indented block inside it, and a hook a lighter card inside that — three
-   levels because the file has three, and flattening them would hide which
-   hooks share a matcher and so run together, in order. */
-.hk { width: 100%; }
-.hk-off {
-    margin-bottom: 10px;
-    padding: 8px 10px;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text-3);
-    background: var(--s3);
-    border-left: 2px solid var(--yellow);
-    border-radius: var(--r-sm);
-}
-.hk-off strong { color: var(--text-2); font-weight: 400; }
-.hk-event .cmd-card-name { flex: 0 1 auto; min-width: 0; }
-.hk-group {
-    margin-top: 12px;
-    padding: 10px 0 0 12px;
-    border-left: 1px solid var(--outline);
-}
-.hk-group-head { display: flex; align-items: center; gap: 8px; }
-.hk-matcher { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; min-width: 0; }
-.hk-matcher .settings-text { flex: 1; min-width: 0; }
-.hk-hook {
-    margin-top: 8px;
-    padding: 10px 12px 12px;
-    background: var(--s3);
-    border: 1px solid transparent;
-    border-radius: var(--r-sm);
-}
-.hk-hook.bad { border-color: var(--red); }
-.hk-hook-head { display: flex; align-items: center; gap: 8px; }
-.hk-hook-head .settings-select { width: auto; flex: none; }
-.hk-hook-head .cfg-script { flex: 0 1 auto; min-width: 0; }
-.hk-hook .cmd-area, .hk-hook .settings-text { background: var(--s2); }
-.hk-field { padding-top: 8px; margin-top: 8px; border-top: 0; }
-.hk-inline { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
-.hk-inline > .hk-field { flex: 1 1 160px; min-width: 0; }
-.hk-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.hk-mini { font-size: 12px; }
-.hk-mini:disabled { opacity: 0.35; cursor: default; }
-.hk-more { margin-top: 10px; }
-.hk-more > summary { font-size: 11px; color: var(--text-4); cursor: pointer; }
-.hk-json { min-height: 40px; }
-.hk-add { margin-top: 12px; }
-.hk-inherit-scope { color: var(--text-3); }
-.hk-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-
-/* The review. It replaces the footer rather than opening a dialog, so what is
-   about to run sits under the hooks it came from. */
-.hk-foot.is-review { display: block; }
-.hk-review ul { margin: 4px 0 8px; padding-left: 18px; }
-.hk-review li { margin: 2px 0; font-size: 12px; line-height: 1.6; color: var(--text-3); }
-.hk-review code { font: 400 11px var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
-.hk-review-lede {
-    margin-top: 8px;
-    font: 400 11px var(--sans);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-4);
-}
-
 /* Whether the script a hook names is still there — the one question a text
    editor cannot answer. */
-.cfg-script { font-size: 11px; color: var(--green); overflow-wrap: anywhere; }
+.cfg-script { font-size: var(--fs-xs); color: var(--green); overflow-wrap: anywhere; }
 .cfg-script.bad { color: var(--red); }
 
 .cfg-statusline { width: 100%; }
 .cfg-statusline .settings-row-note { max-width: 620px; }
-.cfg-statusline code { font: 400 11px var(--mono); }
+.cfg-statusline code { font: 400 var(--fs-xs) var(--mono); }
 
 /* The file itself. A textarea, deliberately — see claudeRawCard() for why a
    vendored editor was the wrong trade. */
@@ -911,26 +856,26 @@
     min-height: 260px;
     max-height: 70vh;
     resize: vertical;
-    margin-top: 12px;
+    margin-top: var(--sp-6);
     background: var(--bg);
     color: var(--text-2);
     border: 0;
     border-radius: var(--r-sm);
-    padding: 12px 14px;
-    font: 400 12px/1.7 var(--mono);
+    padding: var(--sp-6) var(--sp-6);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--mono);
     tab-size: 2;
 }
-.cfg-json:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-json:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cfg-json:disabled { color: var(--text-4); }
 .cfg-json-foot {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 10px 0 12px;
+    gap: var(--sp-7);
+    padding: var(--sp-5) 0 var(--sp-6);
 }
-.cfg-json-note { flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; color: var(--text-4); }
-.cfg-json-note.bad { color: var(--red); font-family: var(--mono); font-size: 11px; }
-.cfg-json-acts { display: flex; align-items: center; gap: 12px; flex: none; }
+.cfg-json-note { flex: 1; min-width: 0; font-size: var(--fs-sm); line-height: var(--lh-base); color: var(--text-4); }
+.cfg-json-note.bad { color: var(--red); font-family: var(--mono); font-size: var(--fs-xs); }
+.cfg-json-acts { display: flex; align-items: center; gap: var(--sp-6); flex: none; }
 
 /* ── Claude Code's memory files ───────────────────────────────────────────
    The same group furniture as the settings above it — tabs, file line, stale
@@ -946,31 +891,31 @@
     min-height: 220px;
     max-height: 60vh;
     resize: vertical;
-    margin-top: 12px;
+    margin-top: var(--sp-6);
     background: var(--bg);
     color: var(--text-2);
     border: 0;
     border-radius: var(--r-sm);
-    padding: 12px 14px;
-    font: 400 12px/1.7 var(--mono);
+    padding: var(--sp-6) var(--sp-6);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--mono);
     white-space: pre-wrap;
     tab-size: 2;
 }
-.cfg-md:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-md:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cfg-md:disabled { color: var(--text-4); }
 
 /* The rendered view — in place of the box under Preview, beside it under
    Split. Capped and scrolling on its own, because .prose sets no height of its
    own. */
 .cfg-md-preview {
-    margin-top: 12px;
+    margin-top: var(--sp-6);
     max-height: 60vh;
     overflow: auto;
-    padding: 4px 14px 12px;
+    padding: var(--sp-2) var(--sp-6) var(--sp-6);
     background: var(--bg);
     border-radius: var(--r-sm);
 }
-.cfg-md-preview > :first-child { margin-top: 12px; }
+.cfg-md-preview > :first-child { margin-top: var(--sp-6); }
 
 /* Split: the box and what it renders to, side by side and the same height.
    Fixed rather than grown — see docsEditorCard — so the two tops line up and
@@ -981,8 +926,8 @@
 .cfg-md-split {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 12px;
-    margin-top: 12px;
+    gap: var(--sp-6);
+    margin-top: var(--sp-6);
 }
 .cfg-md-split > .cfg-md,
 .cfg-md-split > .cfg-md-preview {
@@ -995,18 +940,23 @@
 
 /* The other file, which also applies. Quieter than the yellow reach note above
    it — it is orientation rather than a warning. */
-.cfg-md-both code { font: 400 11px var(--mono); color: var(--text-3); }
+.cfg-md-both code { font: 400 var(--fs-xs) var(--mono); color: var(--text-3); }
 
-.cfg-md-count { flex: none; font: 400 11px var(--mono); color: var(--text-4); }
+.cfg-md-count { flex: none; font: 400 var(--fs-xs) var(--mono); color: var(--text-4); }
 
 /* The full-height editor. `.tall` is the modal shape this needs and nothing
    else does: as wide as the window sensibly allows and as tall, because the
-   whole reason to open it is that 60vh in a column was not enough. */
+   whole reason to open it is that 60vh in a column was not enough.
+   Split is two of the single-pane shape side by side, so it gets nearly the
+   whole window: at 1000px each half was under 500px, narrower than the
+   settings column it was meant to escape. One pane stops at 1200px, which is
+   already a long line of prose. */
 .modal.tall {
-    width: min(1000px, 100%);
+    width: min(1200px, 100%);
     max-height: 94vh;
     height: 94vh;
 }
+.modal.tall:has(> .modal-body[data-view="split"]) { width: min(1800px, 100%); }
 /* `flex: 1` and `min-height: 0` together are what make the box fill the
    dialog: .modal is already a column, but .modal-body does not grow on its
    own, and without min-height a flex child refuses to shrink below its
@@ -1016,16 +966,16 @@
     min-height: 0;
     display: flex;
     overflow: hidden;
-    padding-bottom: 12px;
+    padding-bottom: var(--sp-6);
 }
-.memo-title { font: 400 14px/1.4 var(--mono); color: var(--text-2); }
+.memo-title { font: 400 var(--fs-base)/var(--lh-snug) var(--mono); color: var(--text-2); }
 .cfg-md.big {
     flex: 1;
     min-height: 0;
     max-height: none;
     resize: none;
     margin-top: 0;
-    font-size: 13px;
+    font-size: var(--fs-md);
 }
 /* The dialog's two panes are both always in the DOM and `data-view` picks
    which show, so switching never rebuilds the textarea — its caret and its
@@ -1038,16 +988,16 @@
     max-height: none;
     margin-top: 0;
 }
-.modal.tall .modal-body[data-view="split"] { gap: 12px; }
+.modal.tall .modal-body[data-view="split"] { gap: var(--sp-6); }
 .modal.tall .modal-body[data-view="split"] > .cfg-md.big { flex: 1 1 0; min-width: 0; }
 .modal.tall .modal-body[data-view="edit"] > .cfg-md-preview { display: none; }
 .modal.tall .modal-body[data-view="preview"] > .cfg-md { display: none; }
 /* The view tabs sit at the right of the head beside the ✕. The ✕'s own
    `margin-left: auto` is what normally pushes it right; the tabs take that job
    over, so the two stay together. */
-.memo-views { margin: 0 12px 0 auto; flex-wrap: nowrap; }
+.memo-views { margin: 0 var(--sp-6) 0 auto; flex-wrap: nowrap; }
 .memo-views + .modal-close { margin-left: 0; }
-.memo-views .cfg-tab { font-size: 12px; }
+.memo-views .cfg-tab { font-size: var(--fs-sm); }
 
 @media (prefers-reduced-motion: reduce) {
     .cfg-tab, .cfg-list-x, .set-fold-caret { transition: none; }
@@ -1062,24 +1012,24 @@
    empty for `cwd`. */
 
 .cmd-card {
-    padding: 12px 14px 14px;
-    margin-top: 10px;
+    padding: var(--sp-6) var(--sp-6) var(--sp-6);
+    margin-top: var(--sp-5);
     background: var(--s2);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r);
 }
 .cmd-card.bad { border-color: var(--red); }
-.cmd-card-head { display: flex; align-items: center; gap: 8px; }
+.cmd-card-head { display: flex; align-items: center; gap: var(--sp-4); }
 /* Collapsed by default: a file of eight commands was eight screens of fields
    before you could see the list. The toggle is everything in the head but the
    delete button, which stays a sibling — a button cannot hold a button. */
-.cmd-card:not(.open) { padding-bottom: 12px; }
+.cmd-card:not(.open) { padding-bottom: var(--sp-6); }
 .cmd-card-toggle {
     flex: 1;
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     background: none;
     border: 0;
     padding: 0;
@@ -1093,46 +1043,46 @@
     flex: none;
     width: 6px;
     height: 6px;
-    margin: 0 3px 0 1px;
+    margin: 0 var(--sp-2) 0 1px;
     border-right: 1.5px solid var(--text-4);
     border-bottom: 1.5px solid var(--text-4);
     transform: rotate(-45deg);
-    transition: transform 0.12s;
+    transition: transform var(--dur-fast) var(--ease-standard);
 }
 .cmd-card-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
 .cmd-card-toggle:hover .cmd-card-id { color: var(--text); }
 .cmd-card-spacer { flex: 1; min-width: 0; }
-.cmd-card-id { font: 400 12px var(--mono); color: var(--text-2); }
-.cmd-card-name { font-size: 12px; color: var(--text-4); }
+.cmd-card-id { font: 400 var(--fs-sm) var(--mono); color: var(--text-2); }
+.cmd-card-name { font-size: var(--fs-sm); color: var(--text-4); }
 .cfg-tab-tag.bad { color: var(--red); }
 
 .cmd-orphan {
-    margin: 8px 0 0;
-    padding: 8px 10px;
-    font-size: 12px;
-    line-height: 1.6;
+    margin: var(--sp-4) 0 0;
+    padding: var(--sp-4) var(--sp-5);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
     color: var(--text-3);
     background: var(--s3);
     border-radius: var(--r-sm);
 }
 .cmd-orphan strong { color: var(--text-2); font-weight: 400; }
 
-.cmd-field { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--outline-soft); }
+.cmd-field { padding-top: var(--sp-6); margin-top: var(--sp-6); border-top: 1px solid var(--outline-soft); }
 /* An unset override is still readable — greyed rather than hidden, because a
    field that vanishes when you untick it takes the inherited value with it and
    the placeholder is the whole point. */
 .cmd-field.unset .cmd-field-label { color: var(--text-4); }
-.cmd-field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.cmd-field-label { font-size: 12px; color: var(--text-2); }
+.cmd-field-head { display: flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-3); }
+.cmd-field-label { font-size: var(--fs-sm); color: var(--text-2); }
 .cmd-field-from {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--text-4);
-    padding: 1px 6px;
+    padding: 1px var(--sp-3);
     background: var(--s3);
     border-radius: var(--pill);
 }
-.cmd-field-note { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-4); }
-.cmd-field-bad { margin: 5px 0 0; font: 400 11px var(--mono); line-height: 1.6; color: var(--red); }
+.cmd-field-note { margin: var(--sp-2) 0 0; font-size: var(--fs-xs); line-height: var(--lh-prose); color: var(--text-4); }
+.cmd-field-bad { margin: var(--sp-2) 0 0; font: 400 var(--fs-xs) var(--mono); line-height: var(--lh-prose); color: var(--red); }
 .cmd-field .settings-text,
 .cmd-field .cmd-area { width: 100%; }
 .cmd-mono { font-family: var(--mono); }
@@ -1144,8 +1094,8 @@
 .cmd-area {
     display: block;
     min-height: 26px;
-    padding: 6px 10px;
-    font: 400 12px/1.6 var(--mono);
+    padding: var(--sp-3) var(--sp-5);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--mono);
     color: var(--text);
     background: var(--s3);
     border: 1px solid transparent;
@@ -1156,12 +1106,12 @@
 .cmd-area:focus { outline: 0; border-color: var(--blue); }
 .cmd-area:disabled { color: var(--text-4); }
 
-.cmd-port { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cmd-port { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
 .cmd-port .settings-num { width: 88px; }
 .cmd-port-dash { color: var(--text-4); }
 .cmd-port-env { width: 160px; flex: none; }
 
-.cmd-env-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-env-row { display: flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-3); }
 .cmd-env-name { width: 170px; flex: none; }
 .cmd-env-value { flex: 1; min-width: 0; }
 
@@ -1170,61 +1120,61 @@
    a line repeating itself. */
 .cmd-preview {
     display: flex;
-    gap: 8px;
+    gap: var(--sp-4);
     align-items: baseline;
     flex-wrap: wrap;
-    margin: 12px 0 0;
-    padding-top: 10px;
+    margin: var(--sp-6) 0 0;
+    padding-top: var(--sp-5);
     border-top: 1px dashed var(--outline-soft);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--text-4);
 }
 .cmd-preview-lede { flex: none; }
-.cmd-preview code { font: 400 11px var(--mono); color: var(--text-3); word-break: break-all; }
+.cmd-preview code { font: 400 var(--fs-xs) var(--mono); color: var(--text-3); word-break: break-all; }
 
 .cmd-foot {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 14px 0 4px;
-    margin-top: 12px;
+    gap: var(--sp-6);
+    padding: var(--sp-6) 0 var(--sp-2);
+    margin-top: var(--sp-6);
     border-top: 1px solid var(--outline-soft);
 }
-.cmd-foot-note { font-size: 12px; color: var(--text-4); }
+.cmd-foot-note { font-size: var(--fs-sm); color: var(--text-4); }
 .cmd-foot-note.bad { color: var(--red); }
 
 /* A file the form cannot show, and the way through to the one thing that can
    repair it. */
-.cmd-broken { font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.cmd-broken { font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--text-3); }
 .cmd-broken strong { color: var(--text-2); font-weight: 400; }
-.cmd-broken .btn { margin-top: 10px; }
+.cmd-broken .btn { margin-top: var(--sp-5); }
 
 /* ── the snippet editor, in Settings ───────────────────────────────────── */
 
-.snip-settings-acts { display: flex; gap: 8px; margin: 4px 0 14px; }
+.snip-settings-acts { display: flex; gap: var(--sp-4); margin: var(--sp-2) 0 var(--sp-6); }
 
 .snip-set-group {
     --snip-accent: var(--text-3);
-    background: color-mix(in srgb, var(--snip-accent) 8%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 38%, transparent);
+    background: color-mix(in srgb, var(--snip-accent) 8%, var(--s1));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 38%, var(--s1));
     border-radius: var(--r);
-    padding: 8px 10px 4px;
-    margin-bottom: 10px;
+    padding: var(--sp-4) var(--sp-5) var(--sp-2);
+    margin-bottom: var(--sp-5);
 }
 /* Ungrouped is not a group, and must not look like one — but it keeps the
    padding, because it is still a place a drag has to be able to land. */
 .snip-set-group.is-loose { background: none; box-shadow: none; padding-left: 0; padding-right: 0; }
 
-.snip-set-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.snip-set-head { display: flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-3); }
 .snip-set-name {
     flex: 1;
     min-width: 0;
     background: transparent;
     border: 1px solid transparent;
     border-radius: var(--r-sm);
-    padding: 4px 6px;
+    padding: var(--sp-2) var(--sp-3);
     color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
-    font: 600 13.5px/1.2 var(--sans);
+    font: 600 var(--fs-base)/var(--lh-tight) var(--sans);
 }
 .snip-set-name:hover { border-color: var(--outline-soft); }
 .snip-set-name:focus { border-color: var(--outline); background: var(--s1); }
@@ -1240,7 +1190,7 @@
 }
 .snip-set-loose {
     flex: 1;
-    font: 600 12px/1.2 var(--sans);
+    font: 600 var(--fs-sm)/var(--lh-tight) var(--sans);
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -1252,37 +1202,37 @@
 .snip-set-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 4px;
+    gap: var(--sp-4);
+    padding: var(--sp-3) var(--sp-2);
     border-radius: var(--r-sm);
 }
 .snip-set-row:hover { background: var(--s2); }
 .snip-set-text { flex: 1; min-width: 0; }
 .snip-set-title {
-    font: 400 13px/1.35 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .snip-set-preview {
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.snip-set-badges { display: flex; gap: 4px; flex: none; }
+.snip-set-badges { display: flex; gap: var(--sp-2); flex: none; }
 .snip-badge {
-    font: 500 10.5px/1.6 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-prose) var(--sans);
     letter-spacing: 0.03em;
     color: var(--text-3);
     background: var(--s3);
     border-radius: var(--pill);
-    padding: 0 7px;
+    padding: 0 var(--sp-4);
     white-space: nowrap;
 }
-.snip-set-foot { padding: 2px 4px 6px; }
+.snip-set-foot { padding: var(--sp-1) var(--sp-2) var(--sp-3); }
 
 .snip-grip { flex: none; color: var(--text-4); cursor: grab; display: grid; place-items: center; }
 .snip-set-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
@@ -1294,7 +1244,7 @@
     color: var(--text-3);
     background: transparent;
     border-radius: var(--r-xs);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1;
 }
 .snip-move:hover { background: var(--s4); color: var(--text); }
@@ -1305,21 +1255,21 @@
     place-items: center;
     min-width: 24px;
     height: 24px;
-    padding: 0 6px;
+    padding: 0 var(--sp-3);
     color: var(--text-3);
     background: transparent;
     border-radius: var(--r-xs);
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--sans);
 }
 .snip-del:hover { background: var(--s4); color: var(--red); }
 /* Armed, which is the confirmation — see snipDeleteButton. */
-.snip-del.armed { color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
+.snip-del.armed { color: var(--red); background: var(--red-cont); }
 
 /* ── the snippet dialogs ───────────────────────────────────────────────── */
 
-.snip-fill-form .field:last-child { margin-bottom: 6px; }
+.snip-fill-form .field:last-child { margin-bottom: var(--sp-3); }
 
-.snip-check { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.snip-check { position: relative; display: flex; align-items: center; gap: var(--sp-4); cursor: pointer; }
 /* `.field > label` sets `display: block` at a higher specificity than a bare
    class, so a checkbox label inside a field has to out-specify it rather than
    merely come after it — and take its own type back, since that rule also styles
@@ -1327,7 +1277,7 @@
 .field > label.snip-check {
     display: flex;
     margin-bottom: 0;
-    font: 400 13.5px/1.4 var(--sans);
+    font: 400 var(--fs-base)/var(--lh-snug) var(--sans);
     color: var(--text);
 }
 .snip-check input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
@@ -1336,13 +1286,13 @@
 .snip-check .settings-box { flex: none; }
 .snip-check input:checked + .settings-box { background: var(--blue); border-color: var(--blue); }
 .snip-check input:checked + .settings-box::after { transform: rotate(40deg) scale(1); opacity: 1; }
-.snip-check input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+.snip-check input:focus-visible + .settings-box { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 
-.snip-sub { margin: 10px 0 0 26px; display: flex; align-items: center; gap: 10px; }
+.snip-sub { margin: var(--sp-5) 0 0 var(--sp-9); display: flex; align-items: center; gap: var(--sp-5); }
 /* An author `display` beats the UA rule for `hidden`, so every class in this file
    that sets one carries its own — see .quota-menu[hidden] and its neighbours. */
 .snip-sub[hidden] { display: none; }
-.snip-sub label { font: 400 12.5px/1 var(--sans); color: var(--text-3); }
+.snip-sub label { font: 400 var(--fs-md)/var(--lh-none) var(--sans); color: var(--text-3); }
 
 /* The three plain pickers in this dialog — Group, Where it goes, Permissions.
    Styled for the same reason every other select in this file is, which is not
@@ -1362,50 +1312,50 @@
     background: var(--bg);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-sm);
-    padding: 8px 10px;
+    padding: var(--sp-4) var(--sp-5);
     color: var(--text);
-    font: 400 13px/1.2 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-tight) var(--sans);
     cursor: pointer;
 }
 
-.snip-params { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
-.snip-param { display: flex; align-items: center; gap: 6px; }
+.snip-params { display: flex; flex-direction: column; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.snip-param { display: flex; align-items: center; gap: var(--sp-3); }
 .snip-param input[type="text"], .snip-param select {
     background: var(--s1);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-sm);
-    padding: 6px 8px;
+    padding: var(--sp-3) var(--sp-4);
     color: var(--text);
-    font: 400 12.5px/1.2 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-tight) var(--sans);
     min-width: 0;
 }
 .snip-param-name { flex: 0 1 130px; font-family: var(--mono) !important; }
 .snip-param-label { flex: 1 1 130px; }
 .snip-param-type { flex: 0 1 110px; }
 .snip-param-default { flex: 1 1 110px; }
-.snip-param-req { font: 400 11.5px/1 var(--sans); color: var(--text-3); }
+.snip-param-req { font: 400 var(--fs-sm)/var(--lh-none) var(--sans); color: var(--text-3); }
 
-.snip-projects { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.snip-projects { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-4); }
 .snip-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--sp-3);
     background: var(--s3);
     border-radius: var(--pill);
-    padding: 3px 6px 3px 10px;
-    font: 400 12px/1.4 var(--mono);
+    padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-5);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--mono);
     color: var(--text-2);
 }
-.snip-chip-x { color: var(--text-4); background: none; font-size: 11px; padding: 0 3px; }
+.snip-chip-x { color: var(--text-4); background: none; font-size: var(--fs-xs); padding: 0 var(--sp-2); }
 .snip-chip-x:hover { color: var(--red); }
-.snip-project-add { display: flex; gap: 6px; }
+.snip-project-add { display: flex; gap: var(--sp-3); }
 .snip-project-add input {
     flex: 1;
     background: var(--s1);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-sm);
-    padding: 7px 9px;
+    padding: var(--sp-4) var(--sp-4);
     color: var(--text);
-    font: 400 12.5px/1.2 var(--mono);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--mono);
 }
 
