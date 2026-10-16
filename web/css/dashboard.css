@@ -79,7 +79,10 @@
    fourth card, rather than a grid that wraps and eats the screen. */
 
 .live[data-mode="dock"] {
-    flex: none;
+    /* Allowed to shrink, below its own header if it must: in a short window
+       the strip is the one that gives way, never the composer (below). */
+    flex: 0 1 auto;
+    min-height: 0;
     /* A card with a plan waiting on it is taller than one that is just working,
        and the dock follows. The ceiling is what keeps this a strip rather than
        a half-and-half split: on a laptop the cards would otherwise take about
@@ -87,6 +90,20 @@
     max-height: 38vh;
     border-top: 1px solid var(--s4);
     background: var(--bg);
+}
+
+/* The conversation over the strip keeps room for its header and its composer.
+   `.conv` is `min-height: 0` so the transcript can scroll, and with the strip
+   taking up to 38vh of a short window that let it shrink below the composer,
+   which is `flex: none` — so the composer spilled out of the bottom of the
+   conversation and its Model / Effort / Permissions row sat over the strip's
+   header. An automatic minimum gives the conversation a floor of what it holds,
+   and `contain: size` on the parts that scroll keeps a long transcript (or the
+   orchestrator's board) out of that sum: they still fill whatever is left, but
+   only the head, the docks and the composer are what the floor is made of. */
+.main[data-dock="bottom"]:has(> .live[data-mode="dock"]:not([hidden])) > .conv { min-height: auto; }
+.main[data-dock="bottom"]:has(> .live[data-mode="dock"]:not([hidden])) > .conv :is(.conv-body, .orch-page) {
+    contain: size;
 }
 
 .live[data-mode="dock"] .live-head {
