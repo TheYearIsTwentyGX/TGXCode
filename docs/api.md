@@ -3786,15 +3786,27 @@ field in the request there is no `worktree` key in the response.
 process that was just started — not a word describing the outcome. Same on
 `POST /api/sessions/:id/send` and on every queue write.
 
-**The new id is not readable for a few seconds.** This returns as soon as the process
-spawns, but `GET /api/sessions/:id` reads the transcript, and `claude` has not written
-its first line yet — so the obvious client, navigate straight to the id you were just
-given, gets `404 {"error": "session not found"}` about a session that is being created
-perfectly well. Measured at roughly three and a half seconds on this machine, and it
-is a race rather than a fixed delay. Either subscribe and wait for the first `tail`,
-or retry the read on 404 for ~15s before believing it. The bridge already holds the id
+**The new id is not readable until `claude` writes its transcript — about two
+seconds.** This returns as soon as the process spawns, but `GET /api/sessions/:id`
+reads the transcript, and `claude` has not written its first line yet — so the obvious
+client, navigate straight to the id you were just given, gets
+`404 {"error": "session not found"}` about a session that is being created perfectly
+well. The bridge looks for that file by name a few times a second from the moment it
+spawns the process, so the id becomes readable within ~200ms of the first line landing
+(measured: 1.5–2.3s after this call returns, whatever directory it was started in). It
+is still a race rather than a fixed delay: either subscribe and wait for the first
+`tail`, or retry the read on 404 for ~15s before believing it. The bridge holds the id
 against pruning for five minutes for the same reason (`note()` in
 `bridge/sessions.js`), so a 404 in that window is "not yet", never "never".
+
+A `DELETE /api/sessions/:id` in that window is not refused once the transcript exists:
+the route looks for it by name itself rather than waiting for the index. Before it does
+exist there is nothing to delete, and it answers `404`.
+
+(Until this changed, a session started in a directory the bridge had not seen since it
+started — every new worktree — could stay unreadable for up to 30 seconds, because
+nothing watched the project directory `claude` had just made. A client tuned to that
+should not need to change, only stop seeing it.)
 
 `400` for a missing `cwd` or `prompt`, a directory that does not exist, or one outside
 the roots, or a `worktree` git would not make; `403` for a refused `permissionMode`,
@@ -3831,7 +3843,8 @@ never a `worktree-` branch of its own.
 `findings` the number the prompt covers, `created` whether a worktree was made. The
 session is named `Fix #N: <finding title>` (or `Fix #N: 3 review findings`) through the
 same flag a rename uses, and carries `test` when asked. The same eventual consistency
-as `POST /api/sessions`: the id may 404 on `GET /api/sessions/:id` for a few seconds.
+as `POST /api/sessions`: the id may 404 on `GET /api/sessions/:id` for the ~2s before
+`claude` writes its transcript.
 
 Refusals, in the order they are checked:
 
@@ -4001,8 +4014,8 @@ read off a file — and therefore everything documented there applies:
 
 - **`status` is a whole runner status object**, the `runner-status` payload for the
   process just started, not a word describing the outcome.
-- **The new id is not readable for a few seconds.** `GET /api/sessions/:id` will `404`
-  while `claude` writes its first line. Subscribe and wait for the first `tail`, or
+- **The new id is not readable for about two seconds.** `GET /api/sessions/:id` will
+  `404` while `claude` writes its first line. Subscribe and wait for the first `tail`, or
   retry the read for ~15s before believing it.
 
 **The draft is deleted only after the process starts.** A failure leaves it exactly
@@ -6264,13 +6277,15 @@ These are cheap now and expensive later, so they are settled:
 do not, and the message says `missing client header` rather than anything about auth.
 See §*Authentication*.
 
-**A newly created session 404s for a few seconds.** `POST /api/sessions` hands back an
-id before `claude` has written a transcript to read. See §`POST /api/sessions`.
+**A newly created session 404s for about two seconds.** `POST /api/sessions` hands back
+an id before `claude` has written a transcript to read. See §`POST /api/sessions`.
 
 **Deleting a session whose process is still shutting down.** `DELETE` unlinks the
 transcript, but an exiting `claude` may then write its bookkeeping (`last-prompt`,
 `ai-title`) back to the same path — and the session reappears as an empty row with
-0 turns. Stop it, wait, then delete; or delete twice.
+0 turns. Stop it, wait, then delete; or delete twice. The second delete finds the
+rewritten file within half a second; it used to `404` for up to 30 while the bridge had
+not noticed it.
 
 **A tool call is not final when you first see it.** It arrives with `status:
 "pending"` and no `result`, and resolves later — either as a second copy of the same

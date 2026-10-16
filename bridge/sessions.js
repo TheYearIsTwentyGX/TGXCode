@@ -30,6 +30,11 @@ const ACTIVE_WINDOW_MS = 90_000;
 // before the state attached to it is treated as orphaned. See note().
 const PENDING_TTL_MS = 5 * 60_000;
 
+// How often, and for how long, the index looks for the transcript of a session
+// this bridge just started. See _probePending().
+const PROBE_MS = 200;
+const PROBE_LIMIT_MS = 60_000;
+
 /** The two orchestration fields of a summary, both always present. */
 function orchestration(store, sessionId) {
     const part = store ? store.forSummary(sessionId) : {};
@@ -98,7 +103,10 @@ class SessionIndex extends EventEmitter {
          * @type {Map<string, number>}
          */
         this.pending = new Map();
-        this.watchers = [];
+        /** One watcher per watched directory, keyed by path. See _watchDir(). */
+        this.watchers = new Map();
+        this._watching = false;
+        this._probe = null;
         this.ready = false;
         this._saveTimer = null;
         this._rescanTimer = null;
@@ -114,10 +122,14 @@ class SessionIndex extends EventEmitter {
     }
 
     stop() {
-        for (const w of this.watchers) { try { w.close(); } catch { /* already gone */ } }
-        this.watchers = [];
+        this._watching = false;
+        for (const w of this.watchers.values()) { try { w.close(); } catch { /* already gone */ } }
+        this.watchers.clear();
         if (this._saveTimer) clearTimeout(this._saveTimer);
         if (this._rescanTimer) clearTimeout(this._rescanTimer);
+        if (this._poll) clearInterval(this._poll);
+        if (this._probe) clearInterval(this._probe);
+        this._probe = null;
     }
 
     // -- scanning ----------------------------------------------------------
@@ -142,6 +154,9 @@ class SessionIndex extends EventEmitter {
         let scanned = 0;
 
         for (const dir of projectDirs) {
+            // Before the readdir, so a file written between the two is either
+            // listed here or announced by the watch — never neither.
+            if (this._watching) this._watchDir(dir);
             let files;
             try { files = fs.readdirSync(dir); } catch { continue; }
             for (const f of files) {
@@ -227,26 +242,49 @@ class SessionIndex extends EventEmitter {
         return { scanned, changed };
     }
 
+    /**
+     * Watch the projects directory and every project directory in it — including
+     * the ones that appear later.
+     *
+     * Only the directories present at start used to be watched. A project
+     * directory is born the first time `claude` runs in a new cwd — every
+     * worktree, every fresh probe directory — and its creation fires a rescan on
+     * the parent; but nothing ever watched the new directory itself, so every
+     * write into it after that waited for the 30-second poll. On a quiet machine
+     * that was a new session missing the page's 25-second deadline to open it,
+     * and a second DELETE of a session whose exiting `claude` had written its
+     * transcript back (see CLAUDE.md) answering 404 for half a minute. On a busy
+     * one it hid: any write to a watched directory rescans everything.
+     *
+     * So rescan() now adds a watch for any directory it has not got one for, and
+     * the projects directory's own watch is what makes it run when one appears.
+     */
     _watch() {
-        const watchDir = (dir) => {
-            try {
-                const w = fs.watch(dir, { persistent: false }, () => this._scheduleRescan());
-                w.on('error', () => { /* directory removed; the next rescan notices */ });
-                this.watchers.push(w);
-            } catch { /* unwatchable directory, polling rescan still covers it */ }
-        };
-
-        watchDir(PROJECTS_DIR);
+        this._watching = true;
+        this._watchDir(PROJECTS_DIR);
         try {
             for (const e of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
-                if (e.isDirectory()) watchDir(path.join(PROJECTS_DIR, e.name));
+                if (e.isDirectory()) this._watchDir(path.join(PROJECTS_DIR, e.name));
             }
         } catch { /* nothing to watch yet */ }
 
-        // A slow safety net: watches miss events under some filesystems, and new
-        // project directories need picking up regardless.
+        // A slow safety net: watches miss events under some filesystems.
         this._poll = setInterval(() => this.rescan(), 30_000);
         this._poll.unref();
+    }
+
+    _watchDir(dir) {
+        if (this.watchers.has(dir)) return;
+        try {
+            const w = fs.watch(dir, { persistent: false }, () => this._scheduleRescan());
+            // A directory removed: forget the watch, so one made again under the
+            // same name gets a new one.
+            w.on('error', () => {
+                try { w.close(); } catch { /* already gone */ }
+                if (this.watchers.get(dir) === w) this.watchers.delete(dir);
+            });
+            this.watchers.set(dir, w);
+        } catch { /* unwatchable directory, polling rescan still covers it */ }
     }
 
     _scheduleRescan() {
@@ -549,7 +587,7 @@ class SessionIndex extends EventEmitter {
     }
 
     summary(sessionId) {
-        const rec = this.sessions.get(sessionId);
+        const rec = this.sessions.get(sessionId) || this._adoptPending(sessionId);
         return rec ? this._summary(rec) : null;
     }
 
@@ -758,6 +796,77 @@ class SessionIndex extends EventEmitter {
     note(sessionId) {
         if (sessionId) this.pending.set(sessionId, Date.now());
         this._scheduleRescan();
+        if (sessionId && !this._probe) {
+            this._probe = setInterval(() => this._probePending(), PROBE_MS);
+            // Never what keeps the process alive: the bridge exits when it is told
+            // to, whether or not a session it started ever wrote a line.
+            this._probe.unref();
+        }
+    }
+
+    /**
+     * Look for the transcripts of sessions this bridge just started, by name.
+     *
+     * The bridge knows the id of every session it starts before `claude` has
+     * written anything, so it need not wait to be told by a watch or a poll that
+     * the file exists: it asks, a few times a second, until it does. That is a
+     * stat per project directory per id — dozens, not the full rescan — and the
+     * rescan runs only once there is something to find. It stops when nothing is
+     * waiting, and gives up on an id after a minute: a `claude` that has not
+     * written by then failed to start, and the 30-second poll is still there.
+     */
+    _probePending() {
+        const cutoff = Date.now() - PROBE_LIMIT_MS;
+        let waiting = 0;
+        let found = false;
+        for (const [id, at] of this.pending) {
+            if (this.sessions.has(id) || at < cutoff) continue;
+            waiting++;
+            if (!found && this._findTranscript(id)) found = true;
+        }
+        if (!waiting) {
+            clearInterval(this._probe);
+            this._probe = null;
+        } else if (found && !this._probing) {
+            this._probing = true;
+            this.rescan().finally(() => { this._probing = false; });
+        }
+    }
+
+    /** `<projects>/<any>/<id>.jsonl` if one exists with something in it. */
+    _findTranscript(sessionId) {
+        if (!/^[\w-]+$/.test(sessionId)) return null;
+        let dirs;
+        try { dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }); } catch { return null; }
+        for (const e of dirs) {
+            if (!e.isDirectory()) continue;
+            const file = path.join(PROJECTS_DIR, e.name, sessionId + '.jsonl');
+            try { if (fs.statSync(file).size > 0) return file; } catch { /* not this one */ }
+        }
+        return null;
+    }
+
+    /**
+     * Index a just-started session's transcript now, if it has one, rather than
+     * on the next pass. For the routes that would otherwise answer 404 about a
+     * session the caller was handed the id of moments ago — DELETE above all,
+     * where a 404 used to leave the transcript on disk and its process running.
+     * Only ever for an id in `pending`, so an unknown id costs a map lookup.
+     */
+    _adoptPending(sessionId) {
+        if (!this.pending.has(sessionId)) return null;
+        const file = this._findTranscript(sessionId);
+        if (!file) return null;
+        let st;
+        try { st = fs.statSync(file); } catch { return null; }
+        const meta = scanMeta(file);
+        if (!meta) return null;
+        const rec = { file, dir: path.dirname(file), size: st.size, mtimeMs: st.mtimeMs, meta };
+        this.byFile.set(file, rec);
+        this.sessions.set(sessionId, conversationRecord(this.sessions.get(sessionId), rec));
+        this._scheduleSave();
+        this.emit('changed');
+        return this.sessions.get(sessionId);
     }
 
     /**
@@ -803,7 +912,7 @@ class SessionIndex extends EventEmitter {
      *   unknown, or if its recorded path does not resolve where it should.
      */
     remove(sessionId) {
-        const rec = this.sessions.get(sessionId);
+        const rec = this.sessions.get(sessionId) || this._adoptPending(sessionId);
         if (!rec) return null;
 
         const removed = this._removeFile(rec);
