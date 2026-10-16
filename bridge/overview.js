@@ -51,6 +51,16 @@ const MAX_CARDS = 24;
 // not the window looking at it draws the group.
 const MAX_RECENT = 12;
 
+// How long a worker's ask waits on its orchestrator before it is the user's.
+// The orchestrator page's rule — `STUCK_MS` and `needsYou` in
+// web/orchestrator-model.js, which the bridge cannot import; the test asserts
+// the two numbers agree. See `hostWorkers`.
+const STUCK_MS = 180_000;
+
+// A worker with one of these is doing something, or blocked on somebody — the
+// reasons that would have given it a card of its own.
+const ACTIVE = new Set(['ask', 'here', 'error', 'elsewhere']);
+
 /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} */
 const devCache = new Map();
 /**
@@ -72,30 +82,43 @@ const devLast = new Map();
  * @param {import('./registry').SessionRegistry} registry
  * @param {{includeTest?: boolean}} opts
  */
-function build(index, pool, registry, { includeTest = false } = {}) {
+function build(index, pool, registry, { includeTest = false, now = Date.now() } = {}) {
     const statuses = pool.statuses();
     const summaries = index.list({ limit: 100_000, includeTest });
+
+    const reasons = new Map(summaries.map(s => [s.sessionId, why(s, statuses[s.sessionId] || null)]));
+    const orchs = index.orchestrators ? [...index.orchestrators.byId.values()] : [];
+    const crew = hostWorkers({ summaries, reasons, orchs, statuses, now });
 
     const cards = [];
     // Everything the board has no reason for — the pool the recent group is
     // drawn from. Collected here rather than filtered again afterwards, which
     // also makes the two groups disjoint by construction: a session with a
-    // reason never reaches this list, so nothing can appear twice.
+    // reason never reaches this list, so nothing can appear twice. An
+    // orchestrator its workers put on the board has a reason, and so is not here.
     const idle = [];
     for (const s of summaries) {
         const runner = statuses[s.sessionId] || null;
-        const reason = why(s, runner);
+        const host = crew.hosts.get(s.sessionId);
+        const reason = host ? host.reason : reasons.get(s.sessionId);
         if (!reason) { idle.push(s); continue; }
-        cards.push(card(index, s, runner, reason));
+        cards.push(card(index, s, runner, reason, crew));
     }
+    foldWorkerSigs(cards);
 
     cards.sort(order);
-    const shown = cards.slice(0, MAX_CARDS);
+    const shown = capUnits(cards, MAX_CARDS);
 
     const since = recentSince();
     const warm = idle.filter(s => !s.archived && activityAt(s) >= since)
         .sort((a, b) => activityAt(b) - activityAt(a));
-    const recent = warm.slice(0, MAX_RECENT).map(s => card(index, s, null, 'recent'));
+    // With the runner this bridge holds, not null. A session whose turn has just
+    // ended is idle but still has its `claude` process, so the registry reports
+    // it running; a card carrying `live.running` and no runner is exactly what
+    // every client reads as "running somewhere that is not us", and the board
+    // told the user their own session was in another TGXCode window.
+    const recent = warm.slice(0, MAX_RECENT)
+        .map(s => card(index, s, statuses[s.sessionId] || null, 'recent'));
 
     // Only the sessions actually on screen keep their caches alive — both
     // groups of them. Left at `shown` alone, every recent card's task progress
@@ -117,10 +140,141 @@ function build(index, pool, registry, { includeTest = false } = {}) {
         recent,
         hidden: cards.length - shown.length,
         recentHidden: warm.length - recent.length,
-        // What the button in the header counts.
-        waiting: shown.filter(c => c.ask).length,
-        running: shown.filter(c => c.reason === 'here' || c.reason === 'elsewhere').length,
+        // What the button in the header counts. A worker's ask its orchestrator
+        // is still handling is not yet waiting on you; see `hostWorkers`.
+        waiting: shown.filter(c => c.ask && c.askFor === 'you').length,
+        // Sessions doing work. An orchestrator that is only here for its
+        // workers is not one — they are.
+        running: shown.filter(c => (c.reason === 'here' || c.reason === 'elsewhere')
+            && !(c.workers && !c.workers.own)).length,
     };
+}
+
+/**
+ * Which orchestrators carry their workers on the board, and on what terms.
+ *
+ * The rail nests an orchestrator's workers under it; the board does the same,
+ * which means an orchestrator has to be *on* the board whenever its workers
+ * are — including the usual case, where it has handed out the work and is
+ * sitting idle until somebody reports. So an orchestrator **hosts** when any
+ * open worker of its own has a reason to be on the board (busy, asking, failed,
+ * running elsewhere) or a spawn is queued behind the cap, and a host gets a card
+ * whatever its own state. Idle and closed workers are counted, not listed.
+ *
+ * Its `reason` is the stronger of its own and the one its workers lend it. The
+ * lent one is `ask` only for an ask that is the user's (below), `error` for a
+ * failed worker, and `here` otherwise. No new reason values: a client that
+ * knows the five it was told about keeps sorting correctly.
+ *
+ * **Whose ask is it.** A worker's ask is filed in its orchestrator's inbox, and
+ * the orchestrator answers most of them itself; the orchestrator page counts
+ * one as the user's only once it is *stuck* — the orchestrator paused, or not
+ * working and the ask `STUCK_MS` old (`needsYou` in web/orchestrator-model.js).
+ * This applies the same rule, so `askFor` is `orchestrator` until then and
+ * `you` after. It moves with the clock; the board is rebuilt every second, so
+ * the card's fingerprint moves with it.
+ *
+ * A worker whose orchestrator is gone, archived or not in this list (test
+ * sessions on the everyday bridge) is not hosted, and is an ordinary card.
+ *
+ * Pure: everything it reads is handed in.
+ *
+ * @returns {{hosts: Map<string, {reason: string, workers: object}>,
+ *            workerOf: Map<string, string>, askFor: Map<string, string>}}
+ */
+function hostWorkers({ summaries, reasons, orchs, statuses, now = Date.now() }) {
+    const byId = new Map(summaries.map(s => [s.sessionId, s]));
+    const hosts = new Map();
+    const workerOf = new Map();
+    const askFor = new Map();
+
+    for (const o of orchs) {
+        const self = byId.get(o.id);
+        if (!self || self.archived) continue;
+        const orchRunner = statuses[o.id] || null;
+        const working = !!orchRunner && (orchRunner.state === 'busy' || orchRunner.state === 'starting')
+            && !orchRunner.pendingPermission;
+
+        const active = [];
+        let idle = 0;
+        let finished = 0;
+        for (const w of o.workers || []) {
+            if (w.closedAt) { finished++; continue; }
+            const r = reasons.get(w.id) || null;
+            if (!ACTIVE.has(r)) { idle++; continue; }
+            active.push({ w, r, ask: (statuses[w.id] && statuses[w.id].pendingPermission) || null });
+        }
+        const queued = (o.pendingSpawns || [])
+            .map(p => ({ id: p.id, title: p.title || null, at: p.at || 0 }));
+        if (!active.length && !queued.length) continue;
+
+        let yours = false;
+        let failed = false;
+        for (const a of active) {
+            workerOf.set(a.w.id, o.id);
+            if (a.ask) {
+                const stuck = !!o.paused
+                    || (!working && now - (a.ask.askedAt || now) >= STUCK_MS);
+                a.who = stuck ? 'you' : 'orchestrator';
+                askFor.set(a.w.id, a.who);
+                if (stuck) yours = true;
+            }
+            if (a.r === 'error') failed = true;
+        }
+        const lent = yours ? 'ask' : failed ? 'error' : 'here';
+        const own = reasons.get(o.id);
+        const mine = own && own !== 'pinned' ? own : null;
+        const reason = mine && RANK[mine] <= RANK[lent] ? mine : lent;
+
+        // What needs somebody first, so the rows above a "+N more" are the ones
+        // worth seeing; otherwise the order they were started in, which never
+        // moves a row under the pointer.
+        const need = (a) => (a.who === 'you' ? 0 : a.r === 'error' ? 1 : a.ask ? 2 : 3);
+        active.sort((x, y) => need(x) - need(y) || (x.w.spawnedAt || 0) - (y.w.spawnedAt || 0));
+
+        hosts.set(o.id, {
+            reason,
+            workers: {
+                ids: active.map(a => a.w.id),
+                queued,
+                idle,
+                finished,
+                own: !!mine,
+                paused: !!o.paused,
+            },
+        });
+    }
+    return { hosts, workerOf, askFor };
+}
+
+/**
+ * A host's fingerprint covers its workers' too, so that a worker moving
+ * re-renders the card it is drawn inside. Each worker's own card keeps its own.
+ */
+function foldWorkerSigs(cards) {
+    const sigOf = new Map(cards.map(c => [c.sessionId, c.sig]));
+    for (const c of cards) {
+        if (!c.workers) continue;
+        c.sig = fingerprint({ own: c.sig, workers: c.workers.ids.map(id => sigOf.get(id) || '') });
+    }
+}
+
+/**
+ * The board's ceiling, counted in what the board draws: a host and the workers
+ * drawn inside it are one card, so a worker is never cut while its host stays,
+ * or kept while its host is cut. `cards` is already in rank order; the hosted
+ * workers keep their own places in it.
+ */
+function capUnits(cards, max) {
+    const hosts = new Set(cards.filter(c => c.workers).map(c => c.sessionId));
+    const nested = (c) => !!c.orchestratorId && hosts.has(c.orchestratorId);
+    const chosen = new Set();
+    for (const c of cards) {
+        if (nested(c)) continue;
+        if (chosen.size >= max) break;
+        chosen.add(c.sessionId);
+    }
+    return cards.filter(c => chosen.has(c.sessionId) || (nested(c) && chosen.has(c.orchestratorId)));
 }
 
 /**
@@ -209,7 +363,7 @@ function order(a, b) {
     return (b.lastTs ? Date.parse(b.lastTs) : 0) - (a.lastTs ? Date.parse(a.lastTs) : 0);
 }
 
-function card(index, s, runner, reason) {
+function card(index, s, runner, reason, crew = null) {
     const rec = index.get(s.sessionId);
     const file = rec ? rec.file : null;
 
@@ -264,6 +418,14 @@ function card(index, s, runner, reason) {
         // What it is blocked on, if anything. The whole ask, because a tool ask
         // is answered from the card and needs its request id and its input.
         ask: (runner && runner.pendingPermission) || null,
+        // Whose that ask is: `you`, or `orchestrator` for a worker's ask its
+        // orchestrator is still handling. Null with no ask. See `hostWorkers`.
+        askFor: null,
+        // The orchestrator this card is drawn inside, when that orchestrator
+        // is on the board as its host; null otherwise.
+        orchestratorId: (crew && crew.workerOf.get(s.sessionId)) || null,
+        // On a host: the workers it carries. See `hostWorkers`.
+        workers: (crew && crew.hosts.has(s.sessionId)) ? crew.hosts.get(s.sessionId).workers : null,
 
         // Content, and therefore from the transcript — never from the runner's
         // stream. See the constraint in ROADMAP.md.
@@ -279,6 +441,7 @@ function card(index, s, runner, reason) {
         standing: s.standing || null,
     };
 
+    if (c.ask) c.askFor = (crew && crew.askFor.get(s.sessionId)) || 'you';
     c.sig = fingerprint(c);
     return c;
 }
@@ -430,4 +593,7 @@ function workingDir(summary) {
 /** Yield to the event loop, so a long pass is not one long block. */
 const breathe = () => new Promise(resolve => setImmediate(resolve));
 
-module.exports = { build, refreshDevServers, recentSince, activityAt, DEVSERVER_TTL_MS };
+module.exports = {
+    build, refreshDevServers, recentSince, activityAt, hostWorkers, capUnits, foldWorkerSigs, why,
+    DEVSERVER_TTL_MS, STUCK_MS, MAX_CARDS,
+};

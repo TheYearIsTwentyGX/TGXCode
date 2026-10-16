@@ -106,6 +106,7 @@ import {
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, paintOrchestrator, toggleOrchestrator } from './orchestrator.js';
 import { orchPageTick } from './orchestrator-page.js';
+import { STUCK_MS } from './orchestrator-model.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
 import { applyLater, closeLater, loadLater, wireLater } from './composer/later.js';
@@ -1312,7 +1313,7 @@ function applyOverview(data) {
     // The board is authoritative while it is open: it can see an ask that was
     // already outstanding when this window connected, which no event would have
     // told us about.
-    state.waiting = new Set(data.sessions.filter(s => s.ask).map(s => s.sessionId));
+    state.waiting = new Set(data.sessions.filter(askIsYours).map(s => s.sessionId));
     paintLiveBadge();
     paintTaskboardBadge();
     // Not while the work-in-flight board is covering it: the cards would be
@@ -1351,11 +1352,52 @@ export function paintLiveBadge() {
         : 'Every session running right now', 'view.live');
 }
 
+/**
+ * Whether a board card's ask is waiting on you. A worker's ask its orchestrator
+ * is still handling is not, yet — `askFor` in bridge/overview.js, which follows
+ * the orchestrator page's rule for when it becomes yours.
+ */
+const askIsYours = (s) => !!s.ask && s.askFor !== 'orchestrator';
+
+/**
+ * Worker asks the badge has not counted, because the orchestrator has them.
+ *
+ * The `permission-request` event says nothing about orchestrators, and the
+ * bridge's verdict only arrives on the board's payload — which only arrives
+ * while the board is open. So a worker's ask is left off the count when it
+ * comes in, and the board's answer is asked for once it could have become
+ * yours: at `STUCK_MS`, then every half minute while any is still outstanding
+ * and still not yours (an orchestrator busy at three minutes may stop at five).
+ * An answer, by anybody, takes it off the list.
+ */
+const deferredAsks = new Set();
+let deferTimer = null;
+
+function orchestratorHas(sessionId) {
+    const row = state.sessions.find(x => x.sessionId === sessionId);
+    if (!row || !row.worker || row.worker.closed) return false;
+    const host = state.sessions.find(x => x.sessionId === row.worker.orchestratorId);
+    return !!(host && host.orchestrator && !host.archived);
+}
+
+function deferAsk(sessionId) {
+    deferredAsks.add(sessionId);
+    if (!deferTimer) deferTimer = setTimeout(recheckDeferred, STUCK_MS);
+}
+
+async function recheckDeferred() {
+    deferTimer = null;
+    if (!deferredAsks.size) return;
+    await primeWaiting();
+    for (const id of [...deferredAsks]) if (state.waiting.has(id)) deferredAsks.delete(id);
+    if (deferredAsks.size) deferTimer = setTimeout(recheckDeferred, 30_000);
+}
+
 /** Prime the badge at boot, for asks that were already outstanding. */
 async function primeWaiting() {
     try {
         const d = await get('/api/overview');
-        state.waiting = new Set(d.sessions.filter(s => s.ask).map(s => s.sessionId));
+        state.waiting = new Set(d.sessions.filter(askIsYours).map(s => s.sessionId));
         paintLiveBadge();
         paintTaskboardBadge();
     } catch { /* the first permission event will start the count off anyway */ }
@@ -2902,7 +2944,8 @@ function connect() {
         // Ahead of the early return, as with turn-complete: the asks worth
         // interrupting somebody for are the ones not already on screen.
         announceAsk(p);
-        state.waiting.add(p.sessionId);
+        if (orchestratorHas(p.sessionId)) deferAsk(p.sessionId);
+        else state.waiting.add(p.sessionId);
         paintLiveBadge();
         paintTaskboardBadge();
         if (!state.current || p.sessionId !== state.current.sessionId) return;
@@ -2917,6 +2960,7 @@ function connect() {
         clearAsk(p.sessionId);
         digestOnResolved(p);
         state.waiting.delete(p.sessionId);
+        deferredAsks.delete(p.sessionId);
         paintLiveBadge();
         paintTaskboardBadge();
         if (!state.ask || state.ask.requestId !== p.requestId) return;

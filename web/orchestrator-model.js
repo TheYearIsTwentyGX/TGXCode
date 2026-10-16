@@ -319,6 +319,15 @@ export function progress(p, { prStatusOf: fresh = () => null } = {}) {
 }
 
 /**
+ * How long a worker's ask may wait, with the orchestrator not working on it,
+ * before it is the user's to answer. bridge/overview.js applies the same rule
+ * to decide a live-board card's `askFor`, and keeps its own copy because the
+ * bridge cannot import this module; test/overview-hosts.test.js asserts the two
+ * agree.
+ */
+export const STUCK_MS = 180_000;
+
+/**
  * Everything that is waiting on the user rather than on the orchestrator, most
  * pressing first. Each is `{kind, key, …}`:
  *
@@ -333,7 +342,7 @@ export function progress(p, { prStatusOf: fresh = () => null } = {}) {
  *
  * @param {{orchRunner?: {state?, pendingPermission?}|null, now?: number, stuckMs?: number}} [o]
  */
-export function needsYou(p, { orchRunner = null, now = Date.now(), stuckMs = 180_000 } = {}) {
+export function needsYou(p, { orchRunner = null, now = Date.now(), stuckMs = STUCK_MS } = {}) {
     if (!p) return [];
     const out = [];
     if (p.paused) out.push({ kind: 'paused', key: 'paused', reason: p.paused.reason, resumeAt: p.paused.resumeAt });
