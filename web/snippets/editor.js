@@ -24,7 +24,7 @@
 import { html, useState } from '../vendor/preact.js';
 import { patch, post } from '../api.js';
 import { state } from '../state.js';
-import { dom, toast } from '../dom.js';
+import { dom, closeModal, openModal, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { icon, paint } from '../boards/parts.js';
 import { SNIP_PLACEHOLDER } from './index.js';
@@ -46,13 +46,13 @@ export function openSnipEditor(s, groupId = null) {
     opened += 1;
     paint(modal(), html`<${SnipEditor} key=${opened} snippet=${s} groupId=${groupId}
         groups=${state.snippets.groups} projects=${state.settings.projects} />`);
-    dom.snipEditScrim.hidden = false;
+    openModal(dom.snipEditScrim);
     const first = dom.snipEditScrim.querySelector('#snip-title');
     if (first) first.focus();
 }
 
 export function closeSnipEditor() {
-    dom.snipEditScrim.hidden = true;
+    closeModal(dom.snipEditScrim);
     state.snippets.editing = null;
     paint(modal(), null);
 }
@@ -97,6 +97,7 @@ function placeholderNote(body, params) {
 function SnipEditor({ snippet: s, groupId, groups, projects }) {
     const [f, setF] = useState(() => ({
         title: s ? s.title : '',
+        trigger: s ? (s.trigger || '') : '',
         body: s ? s.body : '',
         groupId: s ? (s.groupId || '') : (groupId || ''),
         insert: s ? s.insert : 'overwrite',
@@ -143,6 +144,16 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
         if (!title) { toast('Give it a title.', 'warn'); modal().querySelector('#snip-title').focus(); return null; }
         if (!body.trim()) { toast('Give it a message.', 'warn'); modal().querySelector('#snip-body').focus(); return null; }
 
+        // The bridge's rule, said beside the box. Uniqueness is the bridge's alone:
+        // it is the one that can see every snippet, and its 409 names the holder.
+        const trigger = f.trigger.trim();
+        if (/\s/.test(trigger) || trigger.length > 32) {
+            toast(/\s/.test(trigger) ? 'A trigger is one word — no spaces.'
+                : 'A trigger is at most 32 characters.', 'warn');
+            modal().querySelector('#snip-trigger').focus();
+            return null;
+        }
+
         const params = f.params.map(({ _k, ...p }) => ({ ...p, name: p.name.trim() }));
         const seen = new Set();
         for (const p of params) {
@@ -161,6 +172,7 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
         return {
             title,
             body,
+            trigger: trigger || null,
             groupId: f.groupId || null,
             params,
             insert: f.insert,
@@ -202,6 +214,14 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
                 <input id="snip-title" type="text" autocomplete="off"
                     placeholder="What this says, in a few words"
                     value=${f.title} onInput=${(e) => set({ title: e.target.value })} />
+            </div>
+            <div class="field">
+                <label for="snip-trigger">Trigger</label>
+                <input id="snip-trigger" type="text" autocomplete="off"
+                    spellcheck=${false} maxlength="32" placeholder="e.g. LGTM — optional"
+                    value=${f.trigger} onInput=${(e) => set({ trigger: e.target.value })} />
+                <div class="note">Type this then press Tab in the composer to insert the
+                    snippet where the cursor is. One word, any case.</div>
             </div>
             <div class="field">
                 <label for="snip-group">Group</label>

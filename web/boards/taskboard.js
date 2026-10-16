@@ -487,7 +487,7 @@ function tbFocusWords(d, projects, shown) {
 function tbTaskCard(t) {
     const where = t.session || {};
     return html`
-        <article key=${`task:${t.id}`} class="tb-card tb-task" data-archived=${String(!!t.archived)}
+        <article key=${`task:${t.id}`} data-task=${t.id} class="tb-card tb-task" data-archived=${String(!!t.archived)}
             onClick=${(e) => { if (tbCardClickOpens(e)) openTaskDialog(t); }}>
             <header class="tb-card-head">
                 <span class="tb-dot"></span>
@@ -510,7 +510,7 @@ function tbTaskCard(t) {
             </div>
             <div class="tb-acts">
                 <button class="tb-btn primary" type="button"
-                    onClick=${(e) => tbStartTask(t, e.currentTarget)}>Start</button>
+                    onClick=${() => tbStartTask(t)}>Start</button>
                 <button class="tb-btn" type="button" onClick=${() => openTaskDialog(t)}>View task</button>
                 <button class="tb-btn quiet" type="button" title="Not this one"
                     onClick=${() => tbDecide(t, 'dismissed')}>Dismiss</button>
@@ -657,12 +657,11 @@ function tbComposer() {
 // three seconds, but three seconds of a button that visibly did nothing is how a
 // board teaches you to click twice.
 
-async function tbStartTask(t, btn) {
+async function tbStartTask(t) {
     tbDropTask(t.id);
     // The card, and the button with it, is gone from the board by now: render is
-    // synchronous. startSuggestion's writes to `btn` land on a detached node,
-    // which is what they did when the board was built by hand as well.
-    await startSuggestion(t, btn);
+    // synchronous, so there is no "Starting" to show here.
+    await startSuggestion(t);
 }
 
 async function tbDecide(t, status) {

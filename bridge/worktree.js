@@ -24,9 +24,15 @@
 //     `worktree-exists`, with the path, and nothing is touched: re-using one would
 //     silently start a second session in somebody's work in progress, and the
 //     caller is in a better position to offer "open the one that is there".
-//   * **No removal.** Deleting a worktree throws away whatever is uncommitted in
-//     it, and that is a decision for a person looking at it, not a side effect of
-//     anything this module is asked to do.
+//   * **No removal here.** Deleting a worktree throws away whatever is
+//     uncommitted in it, and that is a decision for a person looking at it, not a
+//     side effect of anything this module is asked to do. The one exception lives
+//     in bridge/worktrees.js, the worktree janitor. There a person asks for a
+//     particular worktree to go, from the panel, and the bridge removes it only
+//     when it is clean, its tip is on a remote, its PR is merged or closed, and
+//     no session is in it. All of that is checked again at the moment of
+//     removal. The local branch is deleted only when its PR merged at exactly
+//     that tip. Nothing in the app removes a worktree on its own initiative.
 //
 // Every git call goes through `run()` from bridge/git.js — execFile, never a
 // shell, always with a cwd and a timeout — and the name and base are validated
@@ -145,4 +151,107 @@ async function createWorktree(repoCwd, name, base, { allow = null } = {}) {
     return { path: plan.path, branch: plan.branch };
 }
 
-module.exports = { createWorktree, planWorktree, nameProblem, NAME_RE };
+// ---------------------------------------------------------------------------
+// A worktree on a branch that already exists
+// ---------------------------------------------------------------------------
+//
+// `createWorktree` always makes a new `worktree-<name>` branch, which is right
+// for starting new work and wrong for fixing a pull request: a session asked to
+// push to the PR has to be *on* the PR's branch. So "Fix this" on a review
+// finding (bridge/routes/pr-reviews.js) asks two things of this module instead —
+// is that branch already checked out somewhere, and if not, check it out under
+// `.claude/worktrees/` the same way. Neither ever makes a branch of its own name.
+
+/**
+ * `git worktree list --porcelain` as `[{path, head, branch}]`. `branch` is the
+ * short name, or null for a detached HEAD. Pure, so the test can feed it text.
+ */
+function parseWorktreeList(text) {
+    const out = [];
+    let cur = null;
+    for (const line of String(text || '').split('\n')) {
+        if (line.startsWith('worktree ')) {
+            cur = { path: line.slice(9), head: null, branch: null };
+            out.push(cur);
+        } else if (cur && line.startsWith('HEAD ')) {
+            cur.head = line.slice(5);
+        } else if (cur && line.startsWith('branch ')) {
+            cur.branch = line.slice(7).replace(/^refs\/heads\//, '');
+        }
+    }
+    return out;
+}
+
+/** Why `branch` cannot be handed to git as a branch name, or null. */
+function branchProblem(branch) {
+    if (typeof branch !== 'string' || !branch || branch.length > 200
+        || branch.startsWith('-') || /[\s\0~^:?*[\\]/.test(branch) || branch.includes('..')) {
+        return 'not a usable branch name';
+    }
+    return null;
+}
+
+/**
+ * Where `branch` is checked out for the repository `repoCwd` belongs to:
+ * `{path, main}` — `main` true when it is the main checkout rather than a
+ * worktree — or null when no worktree has it.
+ */
+async function worktreeForBranch(repoCwd, branch) {
+    if (branchProblem(branch)) return null;
+    const top = await mainTop(repoCwd);
+    const list = await git.run('git', ['-C', top, 'worktree', 'list', '--porcelain']);
+    if (!list.ok) return null;
+    const hit = parseWorktreeList(list.stdout).find(w => w.branch === branch);
+    if (!hit) return null;
+    return { path: hit.path, main: git.samePath(hit.path, top) };
+}
+
+/**
+ * Check `branch` out at `<top>/.claude/worktrees/<name>`, fetching it from
+ * `origin` first. `name` taken already is tried as `<name>-2`, `-3` … — the
+ * caller asked for "a worktree for this branch", not for a particular directory.
+ *
+ * A local branch of that name is used as it stands (the session is told to pull);
+ * otherwise one is made tracking `origin/<branch>`. Resolves `{path, branch}`.
+ * Refusals: `bad-name`, `bad-branch`, `not-a-repo`, `outside-roots`,
+ * `fetch-failed` (the branch is not on origin — a fork's, usually), `git-failed`.
+ */
+async function checkoutWorktree(repoCwd, name, branch, { allow = null } = {}) {
+    if (branchProblem(branch)) throw refusal('bad-branch', `"${branch}" is ${branchProblem(branch)}`);
+    let plan = null;
+    for (let i = 1; i <= 9 && !plan; i++) {
+        const candidate = await planWorktree(repoCwd, i === 1 ? name : `${name}-${i}`);
+        if (!fs.existsSync(candidate.path)) plan = candidate;
+    }
+    if (!plan) throw refusal('worktree-exists', `every ${name}-N under .claude/worktrees is taken`);
+    if (allow && !allow(plan.path)) {
+        throw refusal('outside-roots', `${plan.path} is outside the allowed roots`, { path: plan.path });
+    }
+
+    const fetch = await git.run('git',
+        ['-C', plan.top, 'fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+        { timeout: ADD_TIMEOUT_MS });
+    if (!fetch.ok) {
+        throw refusal('fetch-failed',
+            `could not fetch ${branch} from origin: ${git.firstLine(fetch.stderr) || 'git fetch failed'}`);
+    }
+
+    const local = await git.run('git',
+        ['-C', plan.top, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`]);
+    const args = local.ok
+        ? ['-C', plan.top, 'worktree', 'add', plan.path, branch]
+        : ['-C', plan.top, 'worktree', 'add', '--track', '-b', branch, plan.path, `origin/${branch}`];
+    const add = await git.run('git', args, { timeout: ADD_TIMEOUT_MS });
+    if (!add.ok) {
+        const lines = add.stderr.split('\n').map(s => s.trim()).filter(Boolean);
+        const said = lines.find(l => /^(fatal|error):/.test(l)) || git.firstLine(add.stderr) || 'git worktree add failed';
+        throw refusal('git-failed', said);
+    }
+    git.clearCache(plan.top);
+    return { path: plan.path, branch };
+}
+
+module.exports = {
+    createWorktree, planWorktree, nameProblem, mainTop, NAME_RE,
+    parseWorktreeList, branchProblem, worktreeForBranch, checkoutWorktree,
+};

@@ -20,6 +20,14 @@
 //
 // **What auto-submit means in a dialog with no Send.** See startFromSnippet.
 //
+// **What a trigger does.** Typing a snippet's trigger and pressing Tab is one more
+// way in, and it goes through `chooseSnippet` like the rest, so a snippet with
+// placeholders asks for them exactly as a click does. It is always "insert at the
+// cursor, do not send", whatever the snippet is set to: the word you typed is where
+// the cursor is, and a keystroke in the middle of writing should not send anything
+// — LGTM's button sends, LGTM then Tab gives you the paragraph to edit. See
+// expandTrigger.
+//
 // **Why Preact.** The popover can be open while another window saves an edit, and
 // the push that brings it redrew the popover from scratch — under a pointer that
 // may have been halfway through a click. Rows are keyed by snippet id and cards by
@@ -31,7 +39,7 @@
 
 import { html } from '../vendor/preact.js';
 import { state } from '../state.js';
-import { dom, toast } from '../dom.js';
+import { dom, closeModal, openModal, toast } from '../dom.js';
 import { paint } from '../boards/parts.js';
 import { closeMenus, composers, live } from '../composer/slash.js';
 import { insertAt } from '../composer/mentions.js';
@@ -42,6 +50,8 @@ import { startNew } from '../new-session/trigger.js';
 import { openContextMenu } from '../transcript/context-menu.js';
 import { isBusy } from '../transcript/conversation.js';
 import { fillSnipBody, snipAccent, snipPreview, snipVisible } from './index.js';
+import { triggerAt } from './trigger.js';
+import { animate, isUp, present } from '../motion.js';
 
 /** What a parameter of each type is asked for with. */
 const SNIP_INPUT = {
@@ -179,13 +189,27 @@ export function drawSnips(c, { follow = false } = {}) {
                     title=${snipTitleFor(s, busy, c)}
                     onClick=${() => chooseSnippet(c, s)}
                     onContextMenu=${(e) => openSnipMenu(e, c, s)}>
-                    <span class="snip-row-title">${s.title}</span>
+                    <span class="snip-row-head">
+                        <span class="snip-row-title">${s.title}</span>
+                        ${s.trigger ? html`<span class="snip-trigger"
+                            title=${`Type ${s.trigger} then press Tab in the message box`}
+                            >${s.trigger}</span>` : null}
+                    </span>
                     <span class="snip-row-preview">${snipPreview(s)}</span>
                 </button>`;
             })}
         </section>`;
     });
-    paint(m.node, [empty, ...drawn]);
+    // One line about triggers, under the cards. Only once there is something to
+    // choose: an empty popover already says where snippets come from, and this
+    // would read as a second, competing instruction.
+    const hint = cards.length ? html`<div key="hint" class="snip-hint"
+        style=${`grid-column: 1 / span ${cards.length}`}>${
+        state.snippets.rows.some(s => s.trigger)
+            ? 'Type a snippet\'s trigger in the message box and press Tab to insert it.'
+            : 'Give a snippet a trigger in Settings, then type it and press Tab to insert it.'
+    }</div>` : null;
+    paint(m.node, [empty, ...drawn, hint]);
 }
 
 function focusSnipAt(c, i) {
@@ -210,7 +234,7 @@ export function showSnips(c, on) {
     for (const other of composers) if (other.wispr) closeWispr(other.wispr);
 
     m.index = 0;
-    m.node.hidden = false;
+    present(m.node, true, { as: 'menu' });
     m.btn.setAttribute('aria-expanded', 'true');
     drawSnips(c);
     positionSnips(c);
@@ -219,9 +243,8 @@ export function showSnips(c, on) {
 
 export function closeSnips(c, { focus = false } = {}) {
     const m = c.snips;
-    if (m.node.hidden) return;
-    m.node.hidden = true;
-    paint(m.node, null);
+    if (!isUp(m.node)) return;
+    present(m.node, false, { as: 'menu', onGone: () => paint(m.node, null) });
     m.btn.setAttribute('aria-expanded', 'false');
     if (focus) m.btn.focus();
 }
@@ -282,18 +305,52 @@ function markSnipCaret(c) {
  * end of the box instead of where you were.
  *
  * @param {object|null} over `{insert, autoSubmit}` for this one use, from the
- *   right-click menu. Spread over a *copy*: the rows in `state.snippets.rows` are
- *   what the popover, the pinned strip and the editor all draw from, and a stored
- *   decision must not move because somebody departed from it once.
+ *   right-click menu or a trigger. Spread over a *copy*: the rows in
+ *   `state.snippets.rows` are what the popover, the pinned strip and the editor
+ *   all draw from, and a stored decision must not move because somebody departed
+ *   from it once.
+ * @param {{flash?: boolean}} [how] how it should land; carried through the fill
+ *   dialog, since that is where a snippet with placeholders actually lands.
  */
-export function chooseSnippet(c, s, over = null) {
+export function chooseSnippet(c, s, over = null, how = {}) {
     // Not re-taken for an override: `openSnipMenu` took it at the gesture, before
     // the menu pulled the focus off the box, which is the only moment it is true.
     if (!over && c.snips.node.hidden) markSnipCaret(c);
     closeSnips(c);
     const use = over ? { ...s, ...over } : s;
-    if (use.params && use.params.length) openSnipFill(c, use);
-    else applySnippet(c, use, {});
+    if (use.params && use.params.length) openSnipFill(c, use, how);
+    else applySnippet(c, use, {}, how);
+}
+
+/**
+ * Tab after a trigger: replace the word with its snippet.
+ *
+ * Called from the composer's own keydown, which the slash and mention menus'
+ * capture-phase handler runs ahead of — so an open menu with rows takes Tab for
+ * its completion before this is ever asked, and nothing here has to check for it.
+ *
+ * Only with nothing selected: Tab over a selection is not "finish this word". Only
+ * among the snippets this composer would show, by the popover's own `projects`
+ * rule, so a trigger scoped to another repository is as absent here as its row is
+ * from the popover.
+ *
+ * The word's range is written to `c.snips.caret`, which is exactly what `cursor`
+ * reads, so the splice replaces the word and nothing else — now, or after the fill
+ * dialog if the snippet has placeholders. Cancel that dialog and the word stays
+ * where you typed it.
+ *
+ * @returns {boolean} whether it took the key; false leaves Tab to do what it did.
+ */
+export function expandTrigger(c) {
+    const box = c.input;
+    if (box.selectionStart !== box.selectionEnd) return false;
+    const cwd = snipCwd(c);
+    const rows = state.snippets.rows.filter(s => snipVisible(s, cwd));
+    const hit = triggerAt(box.value, box.selectionStart, rows);
+    if (!hit) return false;
+    c.snips.caret = { start: hit.start, end: hit.end };
+    chooseSnippet(c, hit.snippet, { insert: 'cursor', autoSubmit: false }, { flash: true });
+    return true;
 }
 
 /**
@@ -344,8 +401,8 @@ export function openSnipMenu(ev, c, s) {
 // it is up — no push is about the question being asked — so the inputs hold
 // their own values and are read back on confirm.
 
-function openSnipFill(c, s) {
-    state.snippets.fill = { snippet: s, composer: c };
+function openSnipFill(c, s, how = {}) {
+    state.snippets.fill = { snippet: s, composer: c, how };
     dom.snipFillTitle.textContent = s.title;
     paint(dom.snipFillForm, s.params.map((p, i) => {
         return html`<div key=${p.name} class="field">
@@ -354,7 +411,7 @@ function openSnipFill(c, s) {
                 required=${Boolean(p.required)} value=${p.default || ''} ...${SNIP_INPUT[p.type] || SNIP_INPUT.text} />
         </div>`;
     }));
-    dom.snipFillScrim.hidden = false;
+    openModal(dom.snipFillScrim);
     const first = dom.snipFillForm.querySelector('input');
     if (first) { first.focus(); first.select(); }
 }
@@ -384,11 +441,11 @@ export function confirmSnipFill() {
     const values = snipFillValues();
     if (!values) return;
     closeSnipFill();
-    applySnippet(held.composer, held.snippet, values);
+    applySnippet(held.composer, held.snippet, values, held.how);
 }
 
 export function closeSnipFill() {
-    dom.snipFillScrim.hidden = true;
+    closeModal(dom.snipFillScrim);
     paint(dom.snipFillForm, null);
     state.snippets.fill = null;
 }
@@ -407,11 +464,34 @@ export function closeSnipFill() {
  * The dialog is excluded from it because `startNew()` reads `#new-prompt` — there
  * is no override path into it — so everything there goes through the box.
  */
-function applySnippet(c, s, values) {
+function applySnippet(c, s, values, how = {}) {
     const text = fillSnipBody(s.body, s.params, values);
     const straight = s.autoSubmit && s.insert === 'overwrite' && c === live;
     if (!straight) insertSnippet(c, text, s.insert);
+    if (!straight && how.flash) flashBox(c);
     if (s.autoSubmit) submitSnippet(c, s, text, straight);
+}
+
+/**
+ * A brief tint behind the box, so a paragraph arriving from one keystroke reads as
+ * something that happened rather than as the box having always said that. A
+ * textarea cannot highlight a range without selecting it, so it is the box.
+ *
+ * The transcript's "this just changed" flash — `--blue-tint`, held to 55% and
+ * faded over `--dur-flash` — played through motion.js rather than a `.flash`
+ * class: one frame-pair ending on nothing animates back to the box's *own*
+ * background, which is transparent on the live composer and a field colour in the
+ * dialog, so neither needs its own keyframes. Colour only; under reduced motion
+ * `animate` cuts it to the short duration rather than dropping it, since a colour
+ * change is not movement. Read at call time so it follows the theme.
+ */
+function flashBox(c) {
+    const tint = getComputedStyle(document.documentElement).getPropertyValue('--blue-tint').trim();
+    if (!tint) return;
+    animate(c.input, [
+        { backgroundColor: tint, offset: 0 },
+        { backgroundColor: tint, offset: 0.55 },
+    ], { speed: 'flash' });
 }
 
 function insertSnippet(c, text, how) {
@@ -501,5 +581,6 @@ export function snipTitleFor(s, busy, c = live) {
             : busy ? 'Queue behind the running turn' : 'Send';
     // The override menu is otherwise undiscoverable: nothing about a button that
     // sends says the sending is a setting rather than the whole of what it is.
-    return `${lead}: ${what}\nRight-click for other ways to use it.`;
+    const typed = s.trigger ? `\nOr type ${s.trigger} in the message box and press Tab.` : '';
+    return `${lead}: ${what}\nRight-click for other ways to use it.${typed}`;
 }

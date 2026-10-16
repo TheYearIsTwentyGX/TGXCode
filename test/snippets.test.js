@@ -33,8 +33,8 @@ process.env.HOME = path.join(home, 'home');
 
 const {
     Snippets, STATE_FILE, VERSION, SEEDS,
-    MAX_SNIPPETS, MAX_GROUPS, MAX_PARAMS, MAX_PROJECTS,
-    matchesCwd, scanPlaceholders, fillBody,
+    MAX_SNIPPETS, MAX_GROUPS, MAX_PARAMS, MAX_PROJECTS, MAX_TRIGGER,
+    matchesCwd, scanPlaceholders, fillBody, triggerProblem, cleanTrigger,
 } = require('../bridge/snippets');
 
 // Asserted rather than assumed: if this ever pointed at the real directory the
@@ -65,7 +65,7 @@ function put(doc) {
 
 const read = () => JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
 
-const FIELDS = ['id', 'title', 'body', 'hint', 'groupId', 'params', 'insert',
+const FIELDS = ['id', 'title', 'body', 'hint', 'trigger', 'groupId', 'params', 'insert',
     'autoSubmit', 'permissionMode', 'pinned', 'order', 'projects',
     'createdAt', 'updatedAt'];
 const GROUP_FIELDS = ['id', 'name', 'accent', 'order', 'createdAt', 'updatedAt'];
@@ -84,6 +84,7 @@ console.log('\n--- the round trip ---');
     assert.strictEqual(made.pinned, false);
     assert.strictEqual(made.order, null);
     assert.deepStrictEqual(made.projects, []);
+    assert.strictEqual(made.trigger, null);
     assert.strictEqual(made.createdAt, made.updatedAt);
 
     assert.deepStrictEqual(s.get(made.id), made);
@@ -602,6 +603,110 @@ console.log('\n--- two bridges over one file ---');
     ok('a group deleted on one bridge does not take its snippets with it on either');
 }
 
+console.log('\n--- triggers ---');
+{
+    assert.strictEqual(triggerProblem(undefined), null);
+    assert.strictEqual(triggerProblem(null), null);
+    assert.strictEqual(triggerProblem(''), null, 'empty is "no trigger", not an error');
+    assert.strictEqual(triggerProblem('   '), null);
+    assert.strictEqual(triggerProblem('LGTM'), null);
+    assert.strictEqual(triggerProblem('  ;sig  '), null, 'judged after the trim');
+    assert.strictEqual(triggerProblem('x'.repeat(MAX_TRIGGER)), null);
+    assert.ok(triggerProblem('x'.repeat(MAX_TRIGGER + 1)), 'over the cap');
+    assert.ok(triggerProblem('two words'), 'a space inside');
+    assert.ok(triggerProblem('tab\there'), 'any whitespace, not just a space');
+    assert.ok(triggerProblem('line\nbreak'));
+    assert.ok(triggerProblem(42), 'not a string');
+
+    assert.strictEqual(cleanTrigger('  LGTM '), 'LGTM');
+    assert.strictEqual(cleanTrigger(''), null);
+    assert.strictEqual(cleanTrigger('two words'), null, 'unusable is dropped, not repaired');
+    assert.strictEqual(cleanTrigger(7), null);
+    ok('a trigger is one trimmed word of at most 32 characters, and empty means none');
+}
+{
+    const s = fresh();
+    const a = s.create({ title: 'A', body: 'B', trigger: ' lgtm ' });
+    assert.strictEqual(a.trigger, 'lgtm', 'trimmed on the way in');
+    const b = s.create({ title: 'B', body: 'B' });
+
+    assert.strictEqual(s.triggerOwner('LGTM').id, a.id, 'case-insensitive');
+    assert.strictEqual(s.triggerOwner('lgtm', a.id), null, 'a snippet does not clash with itself');
+    assert.strictEqual(s.triggerOwner('LgTm', b.id).id, a.id);
+    assert.strictEqual(s.triggerOwner('other'), null);
+    assert.strictEqual(s.triggerOwner(''), null, 'no trigger is nobody\'s');
+    assert.strictEqual(s.triggerOwner(null), null);
+
+    s.update(a.id, { trigger: null });
+    assert.strictEqual(s.get(a.id).trigger, null, 'null clears it');
+    assert.strictEqual(s.triggerOwner('lgtm'), null, 'and the word is free again');
+    s.update(b.id, { trigger: 'LGTM' });
+    assert.strictEqual(s.triggerOwner('lgtm').id, b.id);
+    s.update(b.id, { title: 'renamed' });
+    assert.strictEqual(s.get(b.id).trigger, 'LGTM', 'a patch without the key leaves it alone');
+    ok('triggerOwner is case-insensitive, ignores the snippet being edited, and null clears');
+}
+{
+    const s = fresh();
+    const made = s.create({ title: 'T', body: 'B', trigger: 'sig' });
+    s.flush();
+    assert.strictEqual(read().snippets[0].trigger, 'sig');
+    assert.strictEqual(new Snippets({ seed: false }).get(made.id).trigger, 'sig');
+
+    // This build always writes the key, null included — that is what lets it tell
+    // an older build's row from one whose trigger was cleared.
+    const bare = s.create({ title: 'U', body: 'B' });
+    s.flush();
+    const onDisk = read().snippets.find(r => r.id === bare.id);
+    assert.ok(Object.prototype.hasOwnProperty.call(onDisk, 'trigger'));
+    assert.strictEqual(onDisk.trigger, null);
+
+    // A hand-edited file with a trigger this build would refuse loads without it.
+    put({ version: VERSION, seeded: [], groups: [], snippets: [
+        { id: 'x', title: 'T', body: 'B', trigger: 'two words' },
+    ] });
+    assert.strictEqual(new Snippets({ seed: false }).get('x').trigger, null);
+    ok('a trigger survives a save and a reload, and the key is always written');
+}
+{
+    // The everyday bridge, until this lands, is a build that has never heard of a
+    // trigger: its clean() drops the field from every row the next time it writes.
+    // Simulated here as a newer write with the key absent.
+    const a = fresh();
+    const made = a.create({ title: 'T', body: 'B', trigger: 'sig' });
+    a.flush();
+
+    const doc = read();
+    const row = doc.snippets.find(r => r.id === made.id);
+    delete row.trigger;
+    row.title = 'edited by an older bridge';
+    row.updatedAt += 1000;
+    put(doc);
+
+    // `a` still holds the trigger. Its next write keeps the older bridge's edit
+    // *and* puts the trigger back, rather than reading the absence as "cleared".
+    a.flush();
+    const back = new Snippets({ seed: false }).get(made.id);
+    assert.strictEqual(back.title, 'edited by an older bridge', 'the newer edit still wins');
+    assert.strictEqual(back.trigger, 'sig', 'and the trigger is carried across');
+
+    // A newer build that genuinely cleared it writes `trigger: null` — the key is
+    // there — so that is a decision and is respected.
+    const b = new Snippets({ seed: false });
+    b.update(made.id, { trigger: null });
+    b.flush();
+    a.flush();
+    assert.strictEqual(new Snippets({ seed: false }).get(made.id).trigger, null,
+        'a cleared trigger is not resurrected by a stale holder');
+    ok('an older build\'s write cannot clear a trigger; a newer build\'s null can');
+}
+{
+    // Version stays at 1 on purpose: an older bridge reads any other version as an
+    // empty store and would flush its startup snapshot over the file.
+    assert.strictEqual(VERSION, 1);
+    ok('the document version is unchanged, so older bridges keep merging rather than overwriting');
+}
+
 console.log('\n--- seeding ---');
 {
     try { fs.unlinkSync(STATE_FILE); } catch { /* first run */ }
@@ -615,6 +720,7 @@ console.log('\n--- seeding ---');
     assert.strictEqual(lgtm.permissionMode, null, 'LGTM never moved the mode selector');
     assert.ok(lgtm.hint, 'the button keeps the sentence it used to carry as a title');
     assert.ok(lgtm.body.includes('take it from here'));
+    assert.strictEqual(lgtm.trigger, 'LGTM', 'a fresh seed answers to LGTM then Tab');
 
     // Written at once rather than on the debounce: the record of having offered a
     // seed is the only thing standing between a deleted one and its return.
@@ -643,10 +749,25 @@ console.log('\n--- seeding ---');
     ok('an emptied store stays empty — the record is what decides, not the list');
 }
 {
+    // A file seeded before triggers existed: LGTM is there, without the key. The
+    // shipped trigger is for new seeds only — nobody's existing row is rewritten,
+    // and nothing is written at all, since the seed has already been offered.
+    const doc = { version: VERSION, seeded: ['seed-lgtm'], groups: [], snippets: [
+        { id: 'seed-lgtm', title: 'LGTM', body: 'mine now', pinned: true, order: 0 },
+    ] };
+    put(doc);
+    const s = new Snippets();
+    assert.strictEqual(s.get('seed-lgtm').trigger, null);
+    assert.strictEqual(s.get('seed-lgtm').body, 'mine now');
+    assert.deepStrictEqual(read(), doc, 'an already-seeded file is not written by booting');
+    ok('an existing LGTM is not given the shipped trigger');
+}
+{
     // A file written before seeding existed has no record, so it is owed one.
     put({ version: VERSION, groups: [], snippets: [{ id: 'mine', title: 'T', body: 'B' }] });
     const s = new Snippets();
     assert.ok(s.get('seed-lgtm'), 'a pre-seed file gets the shipped snippets');
+    assert.strictEqual(s.get('seed-lgtm').trigger, 'LGTM');
     assert.ok(s.get('mine'), 'and keeps what was already there');
     assert.deepStrictEqual(read().seeded, ['seed-lgtm']);
     ok('a file written before seeding existed is seeded once, and keeps its own rows');

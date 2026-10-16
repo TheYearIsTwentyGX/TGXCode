@@ -17,6 +17,7 @@ import { live } from '../composer/slash.js';
 import { isBusy } from '../transcript/conversation.js';
 import { snipAccent, snipVisible } from './index.js';
 import { chooseSnippet, openSnipMenu, snipTitleFor } from './popover.js';
+import { flip } from '../motion.js';
 
 /**
  * Draw the strip.
@@ -41,15 +42,31 @@ export function renderPins(busy = isBusy() && !state.agent) {
     const rows = state.snippets.rows.filter(s => s.pinned && snipVisible(s, cwd));
     const group = new Map(state.snippets.groups.map(g => [g.id, g]));
     const off = dom.btnSend.disabled;
-    paint(dom.pins, rows.map((s) => {
+    // A pin that comes or goes as you move between projects fades, and the rest
+    // slide over to make room or close the gap. Web Animations only, so nothing
+    // Preact owns is written to.
+    flip(dom.pins, (n) => n.dataset.snip, () => paint(dom.pins, rows.map((s) => {
         const accent = snipAccent(group.get(s.groupId));
         return html`<button key=${s.id} class="btn-pin-snip" type="button" data-snip=${s.id}
             style=${accent ? `--snip-accent: ${accent}` : null}
             disabled=${off}
             title=${snipTitleFor(s, busy)}
             onClick=${() => chooseSnippet(live, s)}
-            onContextMenu=${(e) => openSnipMenu(e, live, s)}>${s.title}</button>`;
-    }));
+            onContextMenu=${(e) => openSnipMenu(e, live, s)}>${s.title}${
+                pinTrigger(s) ? html`<span class="snip-trigger">${s.trigger}</span>` : null
+            }</button>`;
+    })));
+}
+
+/**
+ * Whether a pin has room to say its trigger. Only when the trigger says something
+ * the title does not — LGTM's button reading "LGTM LGTM" would be the strip
+ * spending its width on a stutter — and only while it is short, because the strip
+ * is one row beside Send. The tooltip says it either way.
+ */
+function pinTrigger(s) {
+    return s.trigger && s.trigger.length <= 8
+        && s.trigger.toLowerCase() !== String(s.title).trim().toLowerCase();
 }
 
 /**

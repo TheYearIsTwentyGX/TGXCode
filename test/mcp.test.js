@@ -44,9 +44,9 @@ const server = http.createServer((req, res) => {
     });
 });
 
-function startMcp(port) {
+function startMcp(port, extra = []) {
     const child = spawn(process.execPath, [
-        path.join(__dirname, '..', 'bridge', 'mcp.js'), '--port', String(port), '--session', 'me',
+        path.join(__dirname, '..', 'bridge', 'mcp.js'), '--port', String(port), '--session', 'me', ...extra,
     ], { env: { ...process.env, XDG_DATA_HOME: home }, stdio: ['pipe', 'pipe', 'inherit'] });
     let buf = '';
     const waiting = new Map();
@@ -198,6 +198,29 @@ const TASK = {
         assert.strictEqual(r.isError, true);
         assert.strictEqual(r.text, 'x is in the past');
         ok('schedule_session sends at and from, and refuses bypass, neither, and both');
+
+        // set_summary, as an orchestrator: the brief's structured fields are in the
+        // schema, and only the ones the model passed reach the bridge — a field
+        // left out must stay out, because the bridge reads absent as "keep it".
+        const orch = startMcp(port, ['--role', 'orchestrator']);
+        try {
+            const tools = (await orch.rpc('tools/list', {})).result.tools;
+            const ss = tools.find(t => t.name === 'set_summary');
+            assert.ok(ss, 'an orchestrator has set_summary');
+            assert.deepStrictEqual(Object.keys(ss.inputSchema.properties).sort(),
+                ['decisions', 'goal', 'mergeOrder', 'text']);
+            answers.set('POST /api/sessions/me/orchestrator/summary', { status: 200, body: { summary: {} } });
+            r = await orch.call('set_summary', { text: 'brief', mergeOrder: [212, 213],
+                decisions: [{ text: 'Ship it?', options: ['Yes', 'No'] }] });
+            assert.strictEqual(r.isError, false);
+            assert.deepStrictEqual(seen[0].body, { text: 'brief', mergeOrder: [212, 213],
+                decisions: [{ text: 'Ship it?', options: ['Yes', 'No'] }] });
+            r = await orch.call('set_summary', { text: 'prose only' });
+            assert.deepStrictEqual(seen[0].body, { text: 'prose only' });
+        } finally {
+            orch.child.kill();
+        }
+        ok('set_summary carries the brief\'s goal, decisions and merge order, and only when given');
     } finally {
         mcp.child.kill();
         server.close();

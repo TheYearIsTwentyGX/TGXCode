@@ -1,0 +1,340 @@
+// An orchestrator's plumbing, and the one line above the composer that goes with
+// it — bridge/orchestrators.js has what an orchestrator is.
+//
+// The orchestrator is drawn as a page of its own (web/orchestrator-page.js):
+// that is what opens by default, with the conversation as a column beside it.
+// This file is what that page and everything else stand on:
+//
+//   - **loading** the payload for the session on screen, and replacing it whole
+//     when the `orchestrator` event says it moved;
+//   - **the role**, turned on and off from the header button;
+//   - the line in `#orch-dock`: in the plain conversation, a strip saying how
+//     the workers stand and how to get back to the page (and the pause, with
+//     Resume); on a worker, a line naming its orchestrator, so the way back up is
+//     never more than a click;
+//   - the pieces the page reuses — the inbox list, the settings form, Resume.
+//
+// Preact, rendered from `state.orch`, which is the bridge's `orchestrator`
+// payload for the session on screen. Nothing here touches its own DOM.
+
+import { html, render } from './vendor/preact.js';
+import { state } from './state.js';
+import { dom, toast } from './dom.js';
+import { get, post, put } from './api.js';
+import { ago, clip } from './format.js';
+import { grow, isUp, morph } from './motion.js';
+import { orchPageUp, paintOrchPage, setOrchPageMode } from './orchestrator-page.js';
+import { needsYou, progress } from './orchestrator-model.js';
+
+const KIND_LABEL = {
+    plan: 'Plan', permission: 'Permission', ask: 'Question for it', question: 'Question',
+    update: 'Update', done: 'Done', turn: 'Turn report', note: 'Note',
+};
+
+export function goTo(id) {
+    // Imported at call time: conversation.js imports this module, and a static
+    // import back would make the two wait on each other at load.
+    import('./transcript/conversation.js').then(m => m.openSession(id));
+}
+
+/** Fetch the payload for the session on screen, if it has a part in one. */
+export async function loadOrchestrator() {
+    const s = state.current;
+    state.orch = null;
+    if (!s || (!s.orchestrator && !s.worker)) { paintOrchestrator(); return; }
+    const id = s.orchestrator ? s.sessionId : s.worker.orchestratorId;
+    try {
+        const p = await get(`/api/sessions/${id}/orchestrator`);
+        if (!state.current || state.current.sessionId !== s.sessionId) return;
+        state.orch = p.enabled ? p : null;
+    } catch {
+        state.orch = null;
+    }
+    paintOrchestrator();
+}
+
+/** The `orchestrator` event: replace the payload if it is about what is on screen. */
+export function onOrchestratorEvent(p) {
+    const s = state.current;
+    if (!s) return;
+    const mine = s.sessionId === p.orchestratorId
+        || (s.worker && s.worker.orchestratorId === p.orchestratorId);
+    if (!mine) return;
+    state.orch = p.enabled ? p : null;
+    paintOrchestrator();
+}
+
+/** Turn the role on or off for the session on screen. */
+export async function toggleOrchestrator() {
+    const s = state.current;
+    if (!s) return;
+    if (s.worker) {
+        toast('A worker cannot be an orchestrator — orchestrators only go one level deep.', 'error');
+        return;
+    }
+    const on = !s.orchestrator;
+    if (!on && !window.confirm('Stop this session being an orchestrator? Its workers carry on as '
+        + 'ordinary sessions, and its inbox is discarded.')) return;
+    try {
+        const p = await put(`/api/sessions/${s.sessionId}/orchestrator`, { enabled: on });
+        s.orchestrator = on ? { inbox: 0, workers: 0, paused: false } : null;
+        state.orch = p.enabled ? p : null;
+        toast(on
+            ? (p.restarted === 'after-turn'
+                ? 'Marked as an orchestrator. It gets its tools when this turn ends.'
+                : 'Marked as an orchestrator. It gets its tools on the next message.')
+            : 'No longer an orchestrator.', 'ok');
+    } catch (err) {
+        toast(`Could not change that: ${err.message}`, 'error');
+    }
+    paintOrchestratorButton();
+    paintOrchestrator();
+}
+
+export function paintOrchestratorButton() {
+    const s = state.current;
+    if (!dom.btnOrch || !s) return;
+    const on = !!s.orchestrator;
+    dom.btnOrch.hidden = !!s.worker;
+    dom.btnOrch.classList.toggle('on', on);
+    dom.btnOrch.setAttribute('aria-pressed', String(on));
+    dom.btnOrch.title = on ? 'This session is an orchestrator — click to turn that off'
+        : 'Make this session an orchestrator of worker sessions';
+}
+
+/**
+ * Draw everything orchestrator-shaped for the session on screen: the page, and
+ * the line in `#orch-dock`, growing it open or shrinking it shut as it comes and
+ * goes.
+ *
+ * The line sits in the flex column under the transcript, so the transcript
+ * lengthens and shortens with it frame by frame rather than jumping. A closing
+ * one keeps what it showed until it has shut, so it does not empty first and
+ * then collapse an empty box. On the page there is no line: the page is where
+ * all of it is.
+ */
+export function paintOrchestrator() {
+    const d = dom.orchDock;
+    if (!d) return;
+    const s = state.current;
+    const p = state.orch;
+    paintOrchPage();
+    const show = !!s && !!p && !orchPageUp() && (s.sessionId === p.orchestratorId || !!s.worker);
+    if (!show) {
+        grow(d, false, { onGone: () => render(null, d) });
+        return;
+    }
+    const tree = s.worker ? workerLine(s, p) : strip(p);
+    if (isUp(d)) { morph(d, () => render(tree, d)); return; }
+    render(tree, d);
+    grow(d, true);
+}
+
+/**
+ * Hold the dock's place while a session's orchestrator payload is on the wire.
+ *
+ * Called as a conversation is opened, from what the rail already knows: a
+ * session that has no part in an orchestrator loses the dock at once, rather
+ * than when its transcript finishes loading, and one that has a part shows a
+ * placeholder instead of the dock of the session you just left.
+ */
+export function holdOrchestrator(s) {
+    const d = dom.orchDock;
+    if (!d) return;
+    state.orch = null;
+    // An orchestrator opening onto its page draws the page's own placeholder;
+    // there is no line under it to hold.
+    if (!s || (!s.orchestrator && !s.worker) || orchPageUp()) { paintOrchestrator(); return; }
+    const tree = html`<div class="orch orch-loading" role="status" aria-label="Loading the orchestrator">
+        <div class="skel orch-skel-line"></div>
+    </div>`;
+    if (isUp(d)) { morph(d, () => render(tree, d)); return; }
+    render(tree, d);
+    grow(d, true);
+}
+
+function workerLine(s, p) {
+    const self = p.workers.find(w => w.id === s.sessionId);
+    return html`<div class="orch-worker-line">
+        <span class="tag-orch">worker</span>
+        <span>${'Started by an orchestrator'}${self && self.closedAt ? ' · closed' : ''}</span>
+        <button class="orch-link" type="button" onClick=${() => goTo(p.orchestratorId)}>
+            Open the orchestrator</button>
+    </div>`;
+}
+
+/**
+ * The plain conversation's line back to the page: how the workers stand, what
+ * is waiting on you, and the button that brings the page back. The pause, when
+ * there is one, is the whole line — it is the one thing that stops everything.
+ */
+function strip(p) {
+    if (p.paused) {
+        return html`<div class="orch-paused">
+            <span>${`Paused — ${p.paused.reason}.`}${p.paused.resumeAt
+                ? html` <span class="orch-wake">${`Carries on by itself at ${clockAt(p.paused.resumeAt)}.`}</span>`
+                : null}</span>
+            <button type="button" onClick=${resume}>Resume</button>
+        </div>`;
+    }
+    const prStatusOf = (id) => { const r = state.railPrs.get(id); return r ? r.status : null; };
+    const g = progress(p, { prStatusOf });
+    const needs = needsYou(p, { orchRunner: state.runner })
+        .filter(n => !(n.kind === 'decision' && n.decision.answeredAt)).length;
+    return html`<div class="orch-strip">
+        ${needs ? html`<span class="orch-strip-needs">${`${needs} need${needs === 1 ? 's' : ''} you`}</span>` : null}
+        <span class="orch-strip-facts">${`${g.running} of ${g.max} running`
+            + `${g.queued ? ` · ${g.queued} queued` : ''} · ${g.finished} of ${g.total} finished`}</span>
+        <button class="lbtn" type="button" onClick=${() => {
+            setOrchPageMode(p.orchestratorId, 'overview');
+            // This button goes with the strip; the header's switch is where it went.
+            requestAnimationFrame(() => { const b = document.querySelector('#orch-seg button[aria-pressed="true"]'); if (b) b.focus(); });
+        }}>Overview</button>
+    </div>`;
+}
+
+function workerTitle(p, id) {
+    const w = id && p.workers.find(x => x.id === id);
+    return w ? (w.title || 'untitled worker') : null;
+}
+
+/** The inbox, newest first — the page's Activity fold. */
+export function inboxList(p) {
+    const items = p.inbox.slice(0, 40);
+    if (!items.length) return html`<div class="orch-empty">Nothing has arrived yet.</div>`;
+    return html`<ul class="orch-items">${items.map(i => html`
+        <li key=${i.id} class="orch-item" data-status=${i.status} data-kind=${i.kind}>
+            <div class="orch-item-head">
+                <span class="orch-kind">${KIND_LABEL[i.kind] || i.kind}</span>
+                ${i.workerId ? html`<button class="orch-link" type="button" title=${workerTitle(p, i.workerId) || 'worker'}
+                    onClick=${() => goTo(i.workerId)}>
+                    ${clip(workerTitle(p, i.workerId) || 'worker', 40)}</button>` : null}
+                <span class="orch-when">${ago(i.at)}</span>
+                <span class="orch-status">${statusWord(i)}</span>
+                ${(i.status === 'new' || i.status === 'read') ? html`
+                    <button class="orch-x" type="button" title="Dismiss" onClick=${() => dismiss(p, i)}>×</button>`
+                    : null}
+            </div>
+            <details class="orch-text">
+                <summary>${clip(i.text, 160) || '(empty)'}</summary>
+                <pre>${i.text}</pre>
+            </details>
+        </li>`)}</ul>`;
+}
+
+function statusWord(i) {
+    if (i.status === 'new') return 'unread';
+    if (i.status === 'read') return i.requestId ? 'read · waiting' : 'read';
+    if (i.status === 'stale') return 'gone';
+    return `${i.outcome || 'done'}${i.by ? ` · by ${i.by}` : ''}`;
+}
+
+// The windows "all limits" checks, in the order a person reads them.
+const LIMITS = [
+    ['five_hour', 'Five-hour'], ['seven_day', 'Weekly'],
+    ['seven_day_opus', 'Weekly, Opus'], ['seven_day_sonnet', 'Weekly, Sonnet'],
+];
+
+/** "4:00 PM", or "Fri 4:00 PM" when it is not today — when a pause lifts. */
+export function clockAt(ms) {
+    const d = new Date(ms);
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const day = d.toDateString() === new Date().toDateString()
+        ? time : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+    // How far off, which is the number somebody glancing at it wants.
+    const mins = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+    return `${day} (in ${mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`})`;
+}
+
+/** The orchestrator's own settings — the page's settings popover. */
+export function settings(p) {
+    const s = p.settings;
+    const save = (patch) => saveSettings(p, patch);
+    const off = !s.usageStop.enabled;
+    const all = s.usageStop.window === 'all';
+    // Text and fields share one run of inline flow, so a narrow popover wraps
+    // them as phrases — a field stays with the words before it (.orch-nw) — and
+    // a checkbox keeps its label beside it, wrapped lines hanging under the text
+    // rather than the box. The spaces are written on the same line as the
+    // words: htm drops whitespace that holds a newline.
+    return html`<div class="orch-settings">
+        <label class="orch-line"><span class="orch-nw">At most <input type="number" name="maxRunning"
+            min="1" max="10" defaultValue=${s.maxRunning} key=${`max:${s.maxRunning}`}
+            onChange=${(e) => save({ maxRunning: Number(e.target.value) })} /></span> workers running <span class="orch-nw">at once</span></label>
+        <label class="orch-check"><input type="checkbox" checked=${s.worktree}
+            onChange=${(e) => save({ worktree: e.target.checked })} /><span>Start each worker in its own worktree</span></label>
+        <label class="orch-check"><input type="checkbox" checked=${s.usageStop.enabled}
+            onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} /><span>${all
+            ? 'Stop everything past any of these limits '
+            : html`<span class="orch-nw">Stop everything at <input type="number" name="percent"
+                min="1" max="100" defaultValue=${s.usageStop.percent} key=${`pct:${s.usageStop.percent}`} disabled=${off}
+                onChange=${(e) => save({ usageStop: { percent: Number(e.target.value) } })} /></span> % of `}<select
+                value=${s.usageStop.window} disabled=${off}
+                onChange=${(e) => save({ usageStop: { window: e.target.value } })}>
+                <option value="five_hour">the five-hour window</option>
+                <option value="seven_day">the weekly window</option>
+                <option value="seven_day_opus">the weekly Opus window</option>
+                <option value="seven_day_sonnet">the weekly Sonnet window</option>
+                <option value="all">all limits</option>
+            </select></span></label>
+        ${all ? html`<div class="orch-limits">${LIMITS.map(([w, label]) => html`
+            <label key=${w}>${label}
+                <input type="number" name=${`limit-${w}`} min="1" max="100" placeholder="off"
+                    defaultValue=${s.usageStop.limits[w] ?? ''} disabled=${off}
+                    key=${`lim:${w}:${s.usageStop.limits[w] ?? ''}`}
+                    onChange=${(e) => {
+                        const v = e.target.value.trim();
+                        save({ usageStop: { limits: { [w]: v === '' ? null : Number(v) } } });
+                    }} />%</label>`)}
+            <div class="orch-note">Leave one empty to ignore that window.</div>
+        </div>` : null}
+        <label class="orch-check"><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
+            onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} /><span>Carry on by itself when the window resets</span></label>
+        <div class="orch-note">The defaults for new orchestrators, and text added to every
+            orchestrator's instructions, are in Settings › Orchestrators.</div>
+    </div>`;
+}
+
+/** Whether a reply about this orchestrator is still about what is on screen. */
+const stillShowing = (orchId) => !!state.orch && state.orch.orchestratorId === orchId;
+
+async function saveSettings(p, patch) {
+    // A number field is keyed by its value, so that a change from another
+    // window replaces what it shows; the one just saved is replaced too, and
+    // focus goes with it unless it is put back.
+    const had = document.activeElement && document.activeElement.closest('.orch-settings')
+        ? document.activeElement.name : null;
+    try {
+        const next = await put(`/api/sessions/${p.orchestratorId}/orchestrator`, { settings: patch });
+        // Saved, but the window may have moved to another session meanwhile.
+        if (stillShowing(p.orchestratorId)) state.orch = next;
+    } catch (err) {
+        toast(`Could not save that: ${err.message}`, 'error');
+    }
+    paintOrchestrator();
+    if (had && (!document.activeElement || document.activeElement === document.body)) {
+        const n = document.querySelector(`.orch-settings [name="${had}"]`);
+        if (n) n.focus();
+    }
+}
+
+async function dismiss(p, i) {
+    try {
+        await post(`/api/sessions/${p.orchestratorId}/orchestrator/inbox/${i.id}/dismiss`, {});
+    } catch (err) {
+        toast(`Could not dismiss that: ${err.message}`, 'error');
+    }
+}
+
+export async function resume() {
+    const p = state.orch;
+    if (!p) return;
+    try {
+        const next = await post(`/api/sessions/${p.orchestratorId}/orchestrator/resume`, {});
+        if (stillShowing(p.orchestratorId)) state.orch = next;
+        toast('Resumed. Queued workers start, and the orchestrator is told what is waiting.', 'ok');
+    } catch (err) {
+        toast(`Could not resume: ${err.message}`, 'error');
+    }
+    paintOrchestrator();
+}

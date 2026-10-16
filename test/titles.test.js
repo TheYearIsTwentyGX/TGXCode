@@ -21,7 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { scanMeta, commandText, stripEnvelope } = require('../bridge/transcript.js');
+const { scanMeta, commandText, stripEnvelope, buildEvents } = require('../bridge/transcript.js');
 const { scheduledTitle } = require('../bridge/sessions.js');
 
 let pass = 0;
@@ -86,6 +86,33 @@ const said = (text, timestamp) => ({
     assert.strictEqual(stripEnvelope(cmd), cmd);
     assert.strictEqual(stripEnvelope('a<system-reminder>x</system-reminder>b'), 'ab');
     ok('stripEnvelope still leaves a command invocation for buildEvents to parse');
+}
+
+{
+    // ...and buildEvents takes them out of `text` once it has parsed them. A
+    // client that renders `text` as the message — the Android app reads nothing
+    // else of ours — otherwise drew a slash command as a block of bookkeeping XML.
+    const ev = (content) => buildEvents([{
+        type: 'user', uuid: 'u1', timestamp: '2026-10-13T10:00:00Z',
+        message: { role: 'user', content },
+    }]).events.filter(e => e.kind === 'user');
+
+    const [pure] = ev('<command-message>review</command-message>\n'
+        + '<command-name>/review</command-name>\n<command-args>now</command-args>');
+    assert.ok(pure, 'a command turn with nothing else in it is still an event');
+    assert.deepStrictEqual(pure.command, { name: 'review', args: 'now' });
+    assert.strictEqual(pure.text, '');
+
+    const [noArgs] = ev('<command-message>x</command-message>\n<command-name>/x</command-name>');
+    assert.deepStrictEqual(noArgs.command, { name: 'x', args: '' });
+    assert.ok(!noArgs.text.includes('<command-'));
+
+    // Prose that only mentions a tag is not an invocation, and keeps every word.
+    const prose = 'why does <command-message>x</command-message> appear?';
+    const [said] = ev(prose);
+    assert.strictEqual(said.command, null);
+    assert.strictEqual(said.text, prose);
+    ok('a user event carries the command parsed and none of its tags in text');
 }
 
 // --- the title that comes out of it --------------------------------------

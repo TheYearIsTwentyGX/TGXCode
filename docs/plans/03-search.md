@@ -26,7 +26,38 @@ thousands of events long.
 
 ## Design
 
-### A. Full-text across all transcripts
+### A. Full-text across all transcripts — **built, as an index**
+
+What shipped is `bridge/search-index.js`, `GET /api/search` (docs/api.md has the
+contract) and the Search transcripts panel in `web/search.js`. It departs from
+the design below on the one point the design was most emphatic about, and the
+reasons are worth keeping beside the original argument:
+
+- **The corpus outgrew brute force.** The estimate below was ~300MB; by the time
+  this was built it was ~965MB of main transcripts, most of it tool output. A
+  cold pass over that is several seconds of the bridge's only thread per
+  keystroke, and streaming the results does not give the thread back.
+- **The staleness worry had already been answered.** `bridge/turn-index.js` is
+  an incremental per-session index kept honest against a file Claude Code
+  appends to — a `consumed` offset, a first-line hash, a rebuild on a file that
+  shrank or was swapped — and it has tests. The search index copies that shape
+  exactly rather than inventing a second one.
+- **The index is small because most bytes are not worth searching.** Your
+  messages and Claude's prose are kept (clipped at 16 000 characters each); tool
+  calls are kept clipped hard (~1 200 characters) and searched only when asked.
+  On this machine that is 36MB of index for 965MB of transcript, and a query
+  over all of it is 15–25ms warm.
+- **Built in the background, a slice at a time.** A query has a ~600ms budget
+  and says how many sessions it did not catch up (`pending`); a warmer fills the
+  rest a 192KB slice per timer tick (a few ms of parsing, the worst ~18ms on a
+  single multi-megabyte line), so a cold start never stalls the bridge for long.
+
+Also not done from the design below: the `key:value` grammar, `/regex/`, and
+streaming results. A query is words (all in one message) and `"phrases"`.
+Results open at the hit's turn through the turn rail's own jump, then flash the
+exact message.
+
+The original design, as written:
 
 **Do not build an index.** A persistent inverted index over a corpus that is
 appended to constantly is a lot of machinery and a lot of ways to be subtly

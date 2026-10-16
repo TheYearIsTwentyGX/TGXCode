@@ -11,9 +11,12 @@ import { get } from '../api.js';
 import { dom, el } from '../dom.js';
 import { state } from '../state.js';
 import { AGENT_VIEW, SESSION_VIEW } from './conversation.js';
+import { inboxSummary } from './rows.js';
 import { agentRows, closeAgent, openAgent } from './subagents.js';
 import { fillTool, todoItemsOf, toolSummary } from './tools.js';
 import { revealNode, turnText } from './turn-rail.js';
+import { ensureAttached, layoutBox } from './window.js';
+import { present } from '../motion.js';
 
 // ── find in conversation ─────────────────────────────────────────────────
 //
@@ -108,6 +111,12 @@ function searchableText(ev) {
             break;
         case 'handoff':
             parts.push(ev.fromTitle, ev.title, ev.fromProject, ev.text);
+            break;
+        case 'orchestrator-inbox':
+            parts.push(inboxSummary(ev));
+            break;
+        case 'orchestrator-message':
+            parts.push(ev.fromTitle, ev.text);
             break;
         case 'system':
             parts.push(ev.subtype, ev.text);
@@ -281,6 +290,7 @@ export function paintFind() {
     let at = null;
 
     for (const row of inBand(rows, view)) {
+        if (!(row.fold || row.node).isConnected) continue;
         if (row.fold) {
             // Nothing of the row itself is visible; the fold says how many are
             // in there and opening it is what shows them.
@@ -354,8 +364,12 @@ function paintable(view, pane) {
  * wrong — it reads as being at the top of the window, and both searches below
  * are binary and need the answer to be monotonic down the list. A fold is a real
  * box in the right place, and several rows sharing one is fine.
+ *
+ * Through layoutBox for the same reason: a row the window has taken out of the
+ * document has no box either, so it answers with its chunk's, which is in the
+ * right place for the search. paintFind skips those rows — nothing to paint.
  */
-const rowBox = (row) => (row.fold || row.node).getBoundingClientRect();
+const rowBox = (row) => layoutBox(row.fold || row.node);
 
 /** The first row at or below `edge`, or -1. Binary, hence rowBox above. */
 function firstRowFrom(rows, edge) {
@@ -485,7 +499,7 @@ export function openFind() {
         || !dom.taskScrim.hidden) return;
 
     f.open = true;
-    dom.find.hidden = false;
+    present(dom.find, true, { as: 'drop' });
     syncFindSubs();
     // You are reading, not tailing. Without this the next chunk of a live turn
     // scrolls the pane out from under the match you just landed on.
@@ -504,7 +518,7 @@ export function closeFind({ focus = false } = {}) {
     f.hits = [];
     f.matched = [];
     f.painted = [];
-    dom.find.hidden = true;
+    present(dom.find, false, { as: 'drop' });
     if (CSS.highlights) {
         CSS.highlights.delete('cs-find');
         CSS.highlights.delete('cs-find-at');
@@ -603,6 +617,10 @@ export async function gotoHit(i) {
     const view = activeView();
     const entry = view.nodes.get(h.evId);
     if (!entry) { renderFindCount(); return; }
+
+    // Back into the document first, if the window had taken it out — ranges in
+    // a detached row measure as nothing, and the jump would land nowhere.
+    if (!view.isAgent) ensureAttached(entry.node);
 
     // Materialize what the match is inside, and do it *now*. Assigning `open`
     // does fire the toggle listener renderTool leaves for this — but a

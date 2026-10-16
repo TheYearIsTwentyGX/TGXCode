@@ -109,14 +109,22 @@ function readJson(file, { maxBytes = MAX_FILE_BYTES } = {}) {
  * is what keeps two bridges from racing on the same path — the everyday
  * instance and a dev instance both run out of this code.
  *
+ * `mode` is set on the temporary file before the rename, because the rename
+ * replaces the inode and with it the permissions: a hook script saved without
+ * it comes back without its executable bit, and a hook that cannot be executed
+ * fails as quietly as one whose script was deleted. bridge/hook-scripts.js is
+ * the caller that needs it; a JSON file is fine with the umask's answer.
+ *
  * @param {string} file
  * @param {string} text already serialised; this module has no opinion about it
+ * @param {{mode?: number}} [opts]
  */
-function writeAtomic(file, text) {
+function writeAtomic(file, text, { mode } = {}) {
     const tmp = `${file}.${process.pid}.tmp`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     try {
         fs.writeFileSync(tmp, text);
+        if (mode !== undefined) fs.chmodSync(tmp, mode);
         fs.renameSync(tmp, file);
     } catch (err) {
         // A failed rename leaves the temporary file behind, and the next run

@@ -27,7 +27,9 @@ import { ago, clip } from '../format.js';
 import { PR_ICON } from '../icons.js';
 import { projectColor, prWords, showDash } from '../app.js';
 import { openSession } from '../transcript/conversation.js';
+import { openWorktrees } from '../worktrees.js';
 import { icon, paint } from './parts.js';
+import { reviewChip, reviewKey, reviewPanel } from '../pr-review.js';
 
 export async function loadDash({ refresh = false } = {}) {
     if (state.dash.loading) return;
@@ -125,6 +127,8 @@ function dashProject(p) {
                 <span class="dproj-name">${p.name}</span>
                 ${p.repo ? html`<span class="dproj-repo">${p.repo}</span>` : null}
                 <span class="dproj-counts">${counts.join(' · ')}</span>
+                ${p.cwd ? html`<button type="button" class="dproj-wt" title="List this project’s worktrees and remove the finished ones"
+                    onClick=${() => openWorktrees({ cwd: p.cwd, name: p.name })}>Worktrees</button>` : null}
             </header>
             <div class="dproj-body">${p.workspaces.map(w => dashRow(p, w))}</div>
         </section>`;
@@ -167,7 +171,22 @@ function dashRow(project, w) {
             ].filter(Boolean).join('\n')}
             >${icon(PR_ICON[status] || 'pr', 12)}<span class="pr-num">${`#${pr.number}`}</span><span
                 class="pr-title">${clip(pr.title, 46)}</span></a>`);
+        // The nightly review, beside the PR it reviewed. Opening it draws the
+        // findings under this row; see web/pr-review.js.
+        if (pr.review && pr.repo) {
+            const key = reviewKey(pr.repo, pr.number);
+            signals.push(reviewChip(pr.review, {
+                key: `${pr.url}-review`, cls: 'sig', open: state.dash.reviewOpen === key,
+                onToggle: () => {
+                    state.dash.reviewOpen = state.dash.reviewOpen === key ? null : key;
+                    renderDash();
+                },
+            }));
+        }
     }
+    const reviewing = state.dash.reviewOpen
+        ? w.prs.find(pr => pr.repo && reviewKey(pr.repo, pr.number) === state.dash.reviewOpen)
+        : null;
 
     return html`
         <article key=${filesId} class="wsrow" data-kind=${w.kind}>
@@ -187,6 +206,7 @@ function dashRow(project, w) {
                         ? html`<li key="more" class="more">${`and ${g.files - g.sample.length} more`}</li>`
                         : null}
                 </ul>` : null}
+            ${reviewing ? reviewPanel(reviewing, w.dir || project.cwd, { rerender: renderDash }) : null}
             <div class="ws-sessions">
                 ${w.sessions.map(s => dashSession(s))}
                 ${w.moreSessions ? html`<span key="more" class="ws-more">${`+${w.moreSessions} older`}</span>` : null}

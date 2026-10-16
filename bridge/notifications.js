@@ -427,6 +427,20 @@ class NotificationLog {
     }
 
     /**
+     * Every row filed at or after `ms`, oldest first, loud or quiet.
+     *
+     * For the away digest (bridge/digest.js), which wants a time window rather
+     * than a page: a reverse walk that stops at the first older row, since the
+     * rows are kept in filing order. Test rows follow list()'s rule.
+     */
+    since(ms, { includeTest = false } = {}) {
+        let i = this.rows.length;
+        while (i > 0 && this.rows[i - 1].at >= ms) i--;
+        const out = this.rows.slice(i);
+        return includeTest ? out : out.filter(r => !this.isTest(r.sessionId));
+    }
+
+    /**
      * How many loud rows are still unread.
      *
      * Over the whole log rather than over a page of it, which is the point: the

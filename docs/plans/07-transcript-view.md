@@ -57,6 +57,15 @@ turn ticks:
 
 ## C. Virtualization
 
+**Status:** built, though not as drawn below. Deferred building landed as
+`fillTool` (tool bodies on first expand) and the opening window as
+`web/transcript/earlier.js` (last eight turns plus `/range`). Windowing landed
+as `web/transcript/window.js`: settled rows are wrapped in chunks that are
+detached behind spacers of their *measured* height, rather than lazy `node`
+fields with estimated heights, so every `entry.node` reader kept working. Its
+header records the decision, and `content-visibility: auto` was measured again
+and rejected (see the note under `.ev` in `web/css/transcript.css`).
+
 **Why.** `openSession` (`app.js:327`) builds a DOM node for every event and
 syntax-highlights each one eagerly. `codePre` caps a single block at 40 000
 characters, but there is no cap on the number of blocks. A long session is slow

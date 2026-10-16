@@ -429,8 +429,8 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
-    ['agentBrowser', 'devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'standing', 'startup',
-        'toolbar', 'wispr']);
+    ['agentBrowser', 'devbrowser', 'digest', 'keyboard', 'orchestrator', 'preview', 'projects', 'quota',
+        'standing', 'startup', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -575,6 +575,18 @@ assert.throws(() => prefs.save({ scope: 'user', patch: { agentBrowser: { mode: '
 prefs.save({ scope: 'user', patch: { agentBrowser: { mode: null } } });
 assert.deepStrictEqual(prefs.forCwd().agentBrowser, DEFAULTS.agentBrowser);
 ok('agentBrowser saves, refuses a mode it does not know, and clears');
+
+assert.deepStrictEqual(DEFAULTS.digest, { enabled: true, awayMinutes: 20 });
+prefs.save({ scope: 'user', patch: { digest: { enabled: false, awayMinutes: 45 } } });
+assert.deepStrictEqual(prefs.forCwd().digest, { enabled: false, awayMinutes: 45 });
+for (const bad of [0, 481, 2.5, '20']) {
+    assert.throws(() => prefs.save({ scope: 'user', patch: { digest: { awayMinutes: bad } } }),
+        (e) => e.code === 'value', `awayMinutes ${JSON.stringify(bad)} was taken`);
+}
+assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { digest: { enabled: false } } }));
+prefs.save({ scope: 'user', patch: { digest: { enabled: null, awayMinutes: null } } });
+assert.deepStrictEqual(prefs.forCwd().digest, DEFAULTS.digest);
+ok('digest saves, refuses a threshold out of range, is user-only, and clears');
 
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.

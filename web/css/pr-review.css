@@ -1,0 +1,207 @@
+/* The nightly pull-request review, inside the app — web/pr-review.js.
+
+   A verdict chip beside a PR (the dashboard's row signals and the conversation
+   header), and the findings it opens: under the dashboard row, or in
+   #pr-review-pop under the header. Only existing tokens; the verdict decides a
+   single hue, `--prr-tint`, and everything else is mixed from it. */
+
+.prr-chip,
+.prr-panel { --prr-tint: var(--text-3); }
+:is(.prr-chip, .prr-panel)[data-verdict="BLOCK"] { --prr-tint: var(--red); }
+:is(.prr-chip, .prr-panel)[data-verdict="CONCERNS"] { --prr-tint: var(--yellow); }
+:is(.prr-chip, .prr-panel)[data-verdict="CLEAN"] { --prr-tint: var(--green); }
+
+/* ── the chip ─────────────────────────────────────────────────────────────── */
+
+.prr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    height: 20px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--pill);
+    background: color-mix(in srgb, var(--prr-tint) 14%, transparent);
+    color: var(--prr-tint);
+    font: 500 11.5px/1 var(--sans);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.prr-chip:hover,
+.prr-chip.on { background: color-mix(in srgb, var(--prr-tint) 26%, transparent); }
+.prr-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* Reviewed an older commit than the branch now has: still worth reading, but
+   not a verdict on what is there. */
+.prr-chip[data-stale="1"] { opacity: 0.62; }
+.prr-chip[data-stale="1"]:hover,
+.prr-chip[data-stale="1"].on { opacity: 1; }
+
+.prr-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+/* On the dashboard it is a `.sig` and takes that row's height. */
+.prr-chip.sig { height: 26px; padding: 0 11px; }
+
+/* ── the panel ────────────────────────────────────────────────────────────── */
+
+.prr-panel {
+    position: relative;
+    margin: 8px 0 4px;
+    padding: 10px 12px 8px;
+    border: 1px solid var(--s4);
+    border-left: 3px solid var(--prr-tint);
+    border-radius: var(--r-sm);
+    background: var(--s2);
+    font: 400 13px/1.45 var(--sans);
+    color: var(--text-2);
+}
+
+.prr-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+}
+.prr-verdict { font-weight: 600; color: var(--prr-tint); }
+.prr-meta { color: var(--text-3); font-size: 12px; }
+.prr-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+.prr-title {
+    margin: 6px 0 0;
+    color: var(--text-3);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.prr-note { margin: 0; color: var(--text-3); }
+
+.prr-link {
+    border: 0;
+    padding: 0 4px;
+    background: none;
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    text-decoration: none;
+    cursor: pointer;
+}
+.prr-link:hover { color: var(--text); text-decoration: underline; }
+
+.prr-fix {
+    flex: none;
+    height: 24px;
+    padding: 0 10px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.prr-fix:hover:not(:disabled) { background: var(--s4); }
+.prr-fix.all {
+    border-color: transparent;
+    background: var(--blue-cont);
+    color: var(--blue);
+}
+.prr-fix.all:hover:not(:disabled) { background: color-mix(in srgb, var(--blue) 26%, transparent); }
+.prr-fix:disabled { opacity: 0.6; cursor: default; }
+
+.prr-close {
+    border: 0;
+    background: none;
+    color: var(--text-3);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+.prr-close:hover { color: var(--text); }
+
+/* ── findings ─────────────────────────────────────────────────────────────── */
+
+.prr-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+}
+.prr-finding {
+    --sev: var(--text-3);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 0;
+    border-top: 1px solid var(--outline-soft);
+}
+.prr-finding[data-severity="critical"] { --sev: var(--red); }
+.prr-finding[data-severity="warning"] { --sev: var(--yellow); }
+.prr-finding details { flex: 1; min-width: 0; }
+.prr-finding summary {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    cursor: pointer;
+    list-style: none;
+    padding-top: 3px;
+}
+.prr-finding summary::-webkit-details-marker { display: none; }
+.prr-finding .prr-fix { margin-top: 0; }
+
+.prr-sev {
+    flex: none;
+    min-width: 64px;
+    color: var(--sev);
+    font: 600 10.5px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.prr-ftitle { flex: 1; min-width: 0; color: var(--text); }
+.prr-finding details[open] .prr-ftitle { font-weight: 500; }
+.prr-where {
+    flex: none;
+    max-width: 34ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-3);
+    font: 400 11.5px/1 var(--mono);
+}
+
+.prr-body,
+.prr-raw {
+    margin: 6px 0 2px 72px;
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+}
+.prr-raw { margin-left: 0; max-height: 50vh; overflow-y: auto; }
+:is(.prr-body, .prr-raw) p { margin: 0 0 6px; }
+:is(.prr-body, .prr-raw) ul,
+:is(.prr-body, .prr-raw) ol { margin: 0 0 6px; padding-left: 18px; }
+:is(.prr-body, .prr-raw) code { font: 400 12px/1.4 var(--mono); }
+:is(.prr-body, .prr-raw) > :last-child { margin-bottom: 0; }
+
+/* ── under the conversation header ────────────────────────────────────────── */
+
+.prr-pop {
+    max-width: 1000px;
+    max-height: 55vh;
+    overflow-y: auto;
+    margin: 0 auto;
+}
+.prr-pop[hidden] { display: none; }
+.prr-pop .prr-panel { margin: 8px 0 0; }
+.conv-sub .prr-chip { height: 18px; font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+    .prr-chip, .prr-fix { transition: none; }
+}

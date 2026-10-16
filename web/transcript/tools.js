@@ -18,11 +18,38 @@ import { peerByName } from '../composer/mentions.js';
 import { statusMark } from './checklist.js';
 import { openSession } from './conversation.js';
 import { markFindDirty } from './find.js';
+import { openImage } from './image-viewer.js';
 import { kvView } from './review.js';
 import { renderEvent, row } from './rows.js';
 import { openAgent, STATUS_WORD, statusOfCall } from './subagents.js';
 
 // ── tools ────────────────────────────────────────────────────────────────
+
+/** A worker's title from the orchestrator payload on screen, or its id clipped. */
+function workerName(id) {
+    const w = state.orch && state.orch.workers.find(x => x.id === id);
+    return w ? (w.title || 'a worker') : (id ? `worker ${String(id).slice(0, 8)}` : 'a worker');
+}
+
+function orchestratorToolSummary(tool, i) {
+    switch (tool) {
+        case 'spawn_worker': return i.title || clip(i.prompt || '', 80);
+        case 'send_to_worker': return `to ${workerName(i.worker)}: ${clip(i.text || '', 60)}`;
+        case 'read_worker': return `${workerName(i.worker)} · ${i.mode || 'digest'}`;
+        case 'stop_worker':
+        case 'close_worker': return workerName(i.worker);
+        case 'set_summary': return clip(String(i.goal || i.text || '').split('\n')[0], 80);
+        case 'answer_worker': {
+            const item = state.orch && state.orch.inbox.find(x => x.id === i.itemId);
+            const who = item ? workerName(item.workerId) : 'a worker';
+            const plan = item && item.kind === 'plan';
+            const verb = i.decision === 'deny' ? (plan ? 'sent back the plan from' : 'denied')
+                : plan ? 'approved the plan from' : 'allowed';
+            return `${verb} ${who}${i.feedback ? ' · with a note' : ''}`;
+        }
+        default: return '';
+    }
+}
 
 /** One-line summary of what a tool call is doing, shown on the collapsed row. */
 export function toolSummary(ev) {
@@ -42,6 +69,12 @@ export function toolSummary(ev) {
         const said = typeof i.text === 'string' ? i.text : '';
         return said ? `to ${who}: ${clip(said, 60)}` : `to ${who}`;
     }
+
+    // An orchestrator's own tools, which name workers by id. The page is where an
+    // orchestrator is read now, and its conversation is a column beside it —
+    // a row of uuids there says nothing, a worker's title says what happened.
+    const orch = ev.name && /__(spawn_worker|send_to_worker|answer_worker|read_worker|stop_worker|close_worker|set_summary)$/.exec(ev.name);
+    if (orch) return orchestratorToolSummary(orch[1], i);
 
     switch (ev.name) {
         case 'Bash': return i.command || i.description || '';
@@ -83,7 +116,6 @@ export function renderTool(ev) {
 
     const det = el('details', { class: 'tool', 'data-status': status },
         el('summary', {},
-            el('span', { class: 'caret' }, '▶'),
             el('span', { class: 'tname' }, ev.name),
             el('span', { class: 'targ' }, summary),
             el('span', { class: 'tmeta' },
@@ -185,6 +217,15 @@ function toolBody(ev) {
         out.push(note('Still running.'));
     }
 
+    // --- images --------------------------------------------------------------
+    // A Read of a picture, a browser screenshot. The event only describes them;
+    // the bytes come from the bridge now that the dropdown is open.
+    const images = Array.isArray(r.images) ? r.images : [];
+    if (images.length) {
+        out.push(section(images.length > 1 ? 'Images' : 'Image',
+            el('div', { class: 'tool-images' }, ...images.map((img, n) => toolImage(ev, img, n)))));
+    }
+
     if (r.interrupted) out.push(note('Interrupted before it finished.'));
     if (r.backgroundTaskId) out.push(note(`Background task ${r.backgroundTaskId}.`));
 
@@ -253,6 +294,49 @@ function toolBody(ev) {
     }
 
     return out;
+}
+
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+
+/**
+ * What Save offers: the file's own name for a Read, a made-up one otherwise.
+ *
+ * The extension follows the bytes, not the path. Claude Code re-encodes a large
+ * PNG as a JPEG before sending it, and the transcript keeps what was sent, so a
+ * Read of `conversation.png` can hold a JPEG — saved under its own name it
+ * would be a file whose extension lies about it.
+ */
+function imageName(ev, img, n) {
+    const ext = IMAGE_EXT[img.mediaType] || 'png';
+    const p = ev.input && typeof ev.input.file_path === 'string' ? ev.input.file_path : '';
+    const base = p.split(/[\\/]/).pop();
+    if (base) {
+        const m = /^(.+)\.([A-Za-z0-9]+)$/.exec(base);
+        const had = m ? m[2].toLowerCase() : '';
+        if (had === ext || (ext === 'jpg' && had === 'jpeg')) return base;
+        return `${m ? m[1] : base}.${ext}`;
+    }
+    return `${(ev.name || 'tool').replace(/\W+/g, '-')}-${String(ev.id).slice(-8)}${n ? `-${n + 1}` : ''}.${ext}`;
+}
+
+function toolImage(ev, img, n) {
+    const src = `/api/sessions/${encodeURIComponent(state.current.sessionId)}/tool-image`
+        + `?toolUseId=${encodeURIComponent(ev.id)}&n=${n}`;
+    const name = imageName(ev, img, n);
+    const node = el('img', {
+        // Not `loading: 'lazy'`: the body is only built once the row is opened,
+        // which is already the lazy part, and Chromium never started a lazy
+        // image inside the transcript's scroller at all.
+        class: 'tool-image', src, alt: ev.input && ev.input.file_path || 'tool result image',
+        decoding: 'async',
+        // Reserves the space before the bytes arrive, so the transcript under
+        // an opened row does not jump. CSS caps it to the column.
+        width: img.width || null, height: img.height || null,
+        title: 'Click to enlarge',
+        onclick: () => openImage({ src, name }),
+        onerror: () => node.replaceWith(note('Image no longer available.')),
+    });
+    return node;
 }
 
 function section(title, node) {

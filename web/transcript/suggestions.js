@@ -1,6 +1,18 @@
 // Suggested follow-ups: the panel of tasks the conversation raised, the dialog
 // that shows one at a readable width, and starting or dismissing one.
 //
+// The list, `#tasks-list`, and the dialog's action row, `#task-dlg-acts`, are
+// drawn with Preact the way web/rail.js draws the rail. Both re-render on the
+// suggestions push and on every decision, and a rebuild folded the card you had
+// open, dropped the hover, and swallowed a click on a button that was replaced
+// between mousedown and mouseup. Cards are keyed by the task's tool_use id. A
+// card's `open` comes from `state.taskOpen`, which its `toggle` keeps in step,
+// so a render never fights what you did with the caret. The Start button's
+// "Starting" is `state.taskStarting` rather than a write to the button — which
+// also means the card and the dialog say it together. Everything else in the
+// dialog (title, why, the rendered prompt, cwd) and the counts and strip are
+// outside the render containers and stay hand-written.
+//
 // This imports app.js and sibling modules here, which import it back. That is
 // safe only because nothing in this file reads an imported binding while the
 // module is evaluating — every use is inside a function called later. Keep it
@@ -8,7 +20,8 @@
 // and throws in the temporal dead zone, and only loading the page shows it.
 
 import { get, post } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { html, render } from '../vendor/preact.js';
+import { dom, closeModal, openModal, toast } from '../dom.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
 import { openNew } from '../new-session/dialog.js';
@@ -55,7 +68,7 @@ export function renderTasks() {
     const present = tasks.length > 0 || state.tasksPending;
     slidePane(dom.tasks, present);
     if (!tasks.length) {
-        dom.tasksList.replaceChildren();
+        render(null, dom.tasksList);
         dom.tasksCount.textContent = present ? '…' : '';
         dom.tasksStripCount.textContent = present ? '…' : '';
         return;
@@ -74,7 +87,7 @@ export function renderTasks() {
     dom.tasks.classList.toggle('shut', state.tasksShut);
     if (state.tasksShut) return;   // nothing behind the strip needs building
 
-    dom.tasksList.replaceChildren(...tasks.map(taskCard));
+    render(tasks.map(taskCard), dom.tasksList);
 }
 
 /**
@@ -90,66 +103,59 @@ function taskCard(ev) {
     // conversation. `acted` is still wanted below for the tint.
     const open = state.taskOpen.get(ev.id) === true;
 
-    const det = el('details', {
-        class: 'task', 'data-status': acted ? acted.status : 'open',
-        'data-task': ev.id,
-        open,
-        ontoggle: (e) => state.taskOpen.set(ev.id, e.currentTarget.open),
-    },
-    el('summary', {},
-        el('span', { class: 'caret' }, '▶'),
-        el('span', { class: 'task-name' }, ev.title || firstLine(ev.prompt)),
-        // A button inside the summary, which is legal and works — but the click
-        // has to be stopped, or it reaches the summary and folds the card at the
-        // same moment the dialog opens over it.
-        el('button', {
-            class: 'task-open', type: 'button', title: 'Read this at full width',
-            'aria-label': 'Read this at full width',
-            onclick: (e) => { e.preventDefault(); e.stopPropagation(); openTaskDialog(ev); },
-        }, '⤢'),
-    ));
-
-    const body = el('div', { class: 'task-body' });
-    if (ev.why) body.append(el('div', { class: 'task-why' }, ev.why));
+    // A button inside the summary, which is legal and works — but the click has
+    // to be stopped, or it reaches the summary and folds the card at the same
+    // moment the dialog opens over it.
+    //
     // The prompt in full. It is the thing being offered and the only way to
     // judge the offer; a preview would mean starting a session on a message you
     // have not read.
-    body.append(el('div', { class: 'task-prompt prose', html: renderMarkdown(ev.prompt) }));
-    // Only when it is somewhere other than where this conversation is happening.
-    // Almost every task runs in the session's own directory, and repeating that
-    // path down the panel is three lines of noise saying nothing — but a task
-    // pointed at a *different* checkout is worth knowing about before you start it.
-    if (ev.cwd && ev.cwd !== (state.current && state.current.cwd)) {
-        body.append(el('div', { class: 'task-cwd' }, ev.cwd));
-    }
-
-    body.append(taskActions(ev));
-
-    det.append(body);
-    return det;
+    //
+    // The cwd only when it is somewhere other than where this conversation is
+    // happening. Almost every task runs in the session's own directory, and
+    // repeating that path down the panel is three lines of noise saying nothing
+    // — but a task pointed at a *different* checkout is worth knowing about
+    // before you start it.
+    const elsewhere = ev.cwd && ev.cwd !== (state.current && state.current.cwd);
+    return html`<details key=${ev.id} class="task"
+        data-status=${acted ? acted.status : 'open'} data-task=${ev.id} open=${open}
+        onToggle=${(e) => state.taskOpen.set(ev.id, e.currentTarget.open)}>
+        <summary><span class="caret">▶</span><span class="task-name">${
+            ev.title || firstLine(ev.prompt)}</span><button class="task-open" type="button"
+            title="Read this at full width" aria-label="Read this at full width"
+            onClick=${(e) => { e.preventDefault(); e.stopPropagation(); openTaskDialog(ev); }}
+            >⤢</button></summary>
+        <div class="task-body">
+            ${ev.why ? html`<div class="task-why">${ev.why}</div>` : null}
+            <div class="task-prompt prose"
+                dangerouslySetInnerHTML=${{ __html: renderMarkdown(ev.prompt) }}></div>
+            ${elsewhere ? html`<div class="task-cwd">${ev.cwd}</div>` : null}
+            ${taskActions(ev)}
+        </div>
+    </details>`;
 }
 
 /**
  * What you can do about a task: the same three buttons wherever it is shown.
  *
- * Built fresh each time rather than moved between the card and the dialog, so
- * the two can be on screen at once and neither steals the other's controls.
+ * A fresh vnode for each place rather than one set of nodes moved between the
+ * card and the dialog, so the two can be on screen at once and neither steals
+ * the other's controls.
  */
 function taskActions(ev) {
     const acted = state.suggestions.get(ev.id) || null;
+    const openIt = () => { closeTaskDialog(); openSession(acted.startedId); };
+    const linky = (label, onClick) =>
+        html`<button class="linky" type="button" onClick=${onClick}>${label}</button>`;
 
+    // "offer again" is an undo, because a task that has gone quiet with no way
+    // back is a task that lies once the session it names has been deleted.
     if (acted && acted.status === 'started') {
-        return el('div', { class: 'task-done' },
-            el('span', {}, 'Started'),
-            acted.startedId
-                ? el('button', { class: 'linky', type: 'button',
-                    onclick: () => { closeTaskDialog(); openSession(acted.startedId); } }, 'open it')
-                : null,
-            // Undo, because a task that has gone quiet with no way back is a task
-            // that lies once the session it names has been deleted.
-            el('button', { class: 'linky', type: 'button',
-                onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
-        );
+        return html`<div class="task-done">
+            <span>Started</span>
+            ${acted.startedId ? linky('open it', openIt) : null}
+            ${linky('offer again', () => actOnSuggestion(ev, null))}
+        </div>`;
     }
     // Said by whoever did the work, usually an agent through `set_task_status`,
     // with a note that is most often the pull request. A URL is made a link and
@@ -157,35 +163,31 @@ function taskActions(ev) {
     if (acted && acted.status === 'completed') {
         const note = acted.note || '';
         const url = /^https?:\/\/\S+$/.test(note) ? note : null;
-        return el('div', { class: 'task-done' },
-            el('span', {}, 'Done'),
-            url ? el('a', { class: 'linky', href: url, target: '_blank', rel: 'noopener' }, url)
-                : (note ? el('span', {}, note) : null),
-            acted.startedId
-                ? el('button', { class: 'linky', type: 'button',
-                    onclick: () => { closeTaskDialog(); openSession(acted.startedId); } }, 'open it')
-                : null,
-            el('button', { class: 'linky', type: 'button',
-                onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
-        );
+        return html`<div class="task-done">
+            <span>Done</span>
+            ${url ? html`<a class="linky" href=${url} target="_blank" rel="noopener">${url}</a>`
+                : (note ? html`<span>${note}</span>` : null)}
+            ${acted.startedId ? linky('open it', openIt) : null}
+            ${linky('offer again', () => actOnSuggestion(ev, null))}
+        </div>`;
     }
     if (acted && acted.status === 'dismissed') {
-        return el('div', { class: 'task-done' },
-            el('span', {}, 'Dismissed'),
-            acted.note ? el('span', {}, acted.note) : null,
-            el('button', { class: 'linky', type: 'button',
-                onclick: () => actOnSuggestion(ev, null) }, 'undo'),
-        );
+        return html`<div class="task-done">
+            <span>Dismissed</span>
+            ${acted.note ? html`<span>${acted.note}</span>` : null}
+            ${linky('undo', () => actOnSuggestion(ev, null))}
+        </div>`;
     }
-    return el('div', { class: 'task-btns' },
-        el('button', { class: 'more-btn primary', type: 'button',
-            onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
-        el('button', { class: 'more-btn', type: 'button',
-            onclick: () => { closeTaskDialog(); openNew({ cwd: ev.cwd || '', prompt: ev.prompt }); } },
-        'Edit first'),
-        el('button', { class: 'more-btn', type: 'button',
-            onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
-    );
+    const starting = state.taskStarting.has(ev.id);
+    return html`<div class="task-btns">
+        <button class="more-btn primary" type="button" disabled=${starting}
+            onClick=${() => startSuggestion(ev)}>${starting ? 'Starting' : 'Start'}</button>
+        <button class="more-btn" type="button"
+            onClick=${() => { closeTaskDialog(); openNew({ cwd: ev.cwd || '', prompt: ev.prompt }); }}
+            >Edit first</button>
+        <button class="more-btn" type="button"
+            onClick=${() => actOnSuggestion(ev, 'dismissed')}>Dismiss</button>
+    </div>`;
 }
 
 // ── a task at a readable width ───────────────────────────────────────────
@@ -216,18 +218,18 @@ export function openTaskDialog(ev) {
     dom.taskDlgCwd.hidden = !ev.cwd;
 
     paintTaskDialogActions(ev);
-    dom.taskScrim.hidden = false;
+    openModal(dom.taskScrim);
     dom.taskDlgCopy.focus();
 }
 
 /** Rebuild just the buttons, for a decision taken while the dialog is open. */
 function paintTaskDialogActions(ev) {
-    dom.taskDlgActs.replaceChildren(taskActions(ev));
+    render(taskActions(ev), dom.taskDlgActs);
 }
 
 export function closeTaskDialog() {
     if (dom.taskScrim.hidden) return;
-    dom.taskScrim.hidden = true;
+    closeModal(dom.taskScrim);
     const id = state.taskDialog;
     state.taskDialog = null;
     // Back to the summary the dialog was opened from, so the keyboard does not
@@ -244,10 +246,13 @@ export function closeTaskDialog() {
  * thing the new session should do is say what it intends. It is also what the
  * Start dialog defaults to.
  */
-export async function startSuggestion(ev, btn) {
+export async function startSuggestion(ev) {
     const sessionId = taskSessionId(ev);
-    if (!sessionId) return;
-    if (btn) { btn.disabled = true; btn.textContent = 'Starting'; }
+    if (!sessionId || state.taskStarting.has(ev.id)) return;
+    // Held in state rather than written to the button, which Preact owns: the
+    // card and the dialog both say "Starting", and a render mid-request keeps it.
+    state.taskStarting.add(ev.id);
+    paintStarting(ev);
     try {
         // One call that starts the session *and* records it, so a failure
         // cannot leave the task offered beside the session already doing it —
@@ -267,14 +272,22 @@ export async function startSuggestion(ev, btn) {
             status: 'started', startedId: r.sessionId, via: 'session', at: Date.now(),
         });
         state.taskOpen.delete(ev.id);
+        state.taskStarting.delete(ev.id);
         renderTasks();
         closeTaskDialog();
         toast('Session started.', 'ok');
         openSessionSoon(r.sessionId);
     } catch (err) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Start'; }
+        state.taskStarting.delete(ev.id);
+        paintStarting(ev);
         toast(`Could not start it: ${err.message}`, 'error');
     }
+}
+
+/** Redraw both places a task's Start button can be. */
+function paintStarting(ev) {
+    renderTasks();
+    if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
 }
 
 /**
