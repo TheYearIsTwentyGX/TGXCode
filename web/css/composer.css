@@ -945,6 +945,47 @@
     white-space: nowrap;
 }
 
+/* The title and, where it has one, the trigger. Flex so the chip keeps its width
+   and the title is the one that gives way to an ellipsis. */
+.snip-row-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-3);
+    min-width: 0;
+}
+.snip-row-head .snip-row-title { flex: 0 1 auto; min-width: 0; }
+
+/* A snippet's trigger: the word you type before Tab. Mono because it is something
+   you type exactly, and small because it is a reminder rather than a label. Shared
+   by the popover rows, the pinned buttons and the Settings list. */
+.snip-trigger {
+    flex: none;
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
+    color: var(--text-3);
+    background: var(--s4);
+    border-radius: var(--r-sm);
+    padding: 0 var(--sp-2);
+    white-space: nowrap;
+}
+.btn-pin-snip .snip-trigger {
+    margin-left: var(--sp-3);
+    color: inherit;
+    background: color-mix(in srgb, var(--snip-accent) 14%, transparent);
+}
+
+/* The one line under the cards that says triggers exist. The popover's columns
+   are all implicit, so `1 / -1` would span nothing; drawSnips sets the span to the
+   number of cards and this puts it on a row of its own, under them rather than
+   beside them as one more column. */
+.snip-hint {
+    grid-row: 2;
+    padding: 0 var(--sp-2);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--sans);
+    color: var(--text-4);
+}
+
+#snip-trigger { font-family: var(--mono); max-width: 20ch; }
+
 .snip-empty {
     padding: var(--sp-5) var(--sp-4);
     font: 400 var(--fs-md)/var(--lh-base) var(--sans);

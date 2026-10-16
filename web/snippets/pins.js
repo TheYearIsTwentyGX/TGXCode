@@ -52,8 +52,21 @@ export function renderPins(busy = isBusy() && !state.agent) {
             disabled=${off}
             title=${snipTitleFor(s, busy)}
             onClick=${() => chooseSnippet(live, s)}
-            onContextMenu=${(e) => openSnipMenu(e, live, s)}>${s.title}</button>`;
+            onContextMenu=${(e) => openSnipMenu(e, live, s)}>${s.title}${
+                pinTrigger(s) ? html`<span class="snip-trigger">${s.trigger}</span>` : null
+            }</button>`;
     })));
+}
+
+/**
+ * Whether a pin has room to say its trigger. Only when the trigger says something
+ * the title does not — LGTM's button reading "LGTM LGTM" would be the strip
+ * spending its width on a stutter — and only while it is short, because the strip
+ * is one row beside Send. The tooltip says it either way.
+ */
+function pinTrigger(s) {
+    return s.trigger && s.trigger.length <= 8
+        && s.trigger.toLowerCase() !== String(s.title).trim().toLowerCase();
 }
 
 /**

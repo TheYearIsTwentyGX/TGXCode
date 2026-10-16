@@ -25,7 +25,6 @@ import { openAgent, STATUS_WORD, statusOfCall } from './subagents.js';
 
 // ── tools ────────────────────────────────────────────────────────────────
 
-/** One-line summary of what a tool call is doing, shown on the collapsed row. */
 /** A worker's title from the orchestrator payload on screen, or its id clipped. */
 function workerName(id) {
     const w = state.orch && state.orch.workers.find(x => x.id === id);
@@ -52,6 +51,7 @@ function orchestratorToolSummary(tool, i) {
     }
 }
 
+/** One-line summary of what a tool call is doing, shown on the collapsed row. */
 export function toolSummary(ev) {
     const i = ev.input || {};
 

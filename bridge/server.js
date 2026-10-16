@@ -26,6 +26,8 @@ const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
 const { ClaudeVersion } = require('./claude-version');
 const { ClaudeDocs } = require('./claude-docs');
+const { HookScripts } = require('./hook-scripts');
+const { HookSources } = require('./hook-sources');
 const keymap = require('./keymap');
 const { Spinner } = require('./spinner');
 const { Suggestions } = require('./suggestions');
@@ -87,6 +89,12 @@ const claudeConfig = new ClaudeConfig({
 // bridge/claude-docs.js for why a whole text file is a different module from a
 // key inside a JSON one.
 const claudeDocs = new ClaudeDocs();
+
+// The Hooks page's two reaches past the settings files: the scripts hooks run,
+// and the hooks plugins, skills and agents bring. See the headers of
+// bridge/hook-scripts.js and bridge/hook-sources.js.
+const hookScripts = new HookScripts();
+const hookSources = new HookSources();
 
 // The words a turn in progress calls itself, out of the groups those settings
 // enable. Shares the Prefs instance rather than making its own, so the two
@@ -673,7 +681,8 @@ const searchWarmer = new Warmer(index.searchIndex,
     () => index.searchCandidates({ includeTest: true }));
 
 const ROUTE_DEPS = {
-    index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
+    index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, hookScripts, hookSources,
+    spinner, suggestions,
     beacon, drafts, later, standing, snippetStore, templates, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,

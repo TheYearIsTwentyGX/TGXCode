@@ -209,7 +209,7 @@ stay open, with a task's mode and worktree refused as starting a session refuses
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
-**every method of `/api/claude-config` and anything under it, the GET included**;
+**every method of `/api/claude-config` and anything under it, the GET included** — which covers the Hooks page's `/api/claude-config/hook-script` and `/api/claude-config/hook-sources`;
 **every method of `/api/claude-docs` likewise**;
 `POST /api/sessions/:id/attachments/open`.
 
@@ -2477,6 +2477,7 @@ LGTM button on the composer.
       "title": "LGTM",
       "body": "LGTM — take it from here and land it.\n\n- If this work is not on a pull request yet…",
       "hint": "open a PR for this work if there is not one, run the checks, and merge it once they pass",
+      "trigger": "LGTM",
       "groupId": null,
       "params": [],
       "insert": "overwrite", "autoSubmit": true, "permissionMode": null,
@@ -2487,6 +2488,7 @@ LGTM button on the composer.
       "title": "Review a branch",
       "body": "Review {{branch}} against main, and cap it at {{count}} findings.",
       "hint": null,
+      "trigger": null,
       "groupId": "d4c0a1b2-77e3-4a55-8c19-0f2b6d3e91aa",
       "params": [
         { "name": "branch", "label": "Branch", "type": "text",
@@ -2515,6 +2517,7 @@ LGTM button on the composer.
 | `title` | string, non-empty, trimmed. What the row and the pinned button say |
 | `body` | string, non-empty — **and not trimmed**, unlike a draft's `prompt`. An `insert` of `append` or `cursor` makes leading and trailing whitespace part of what the snippet means |
 | `hint` | string or null — the sentence a pinned button shows on hover. Null means *use the first line of the body*, which is a guess; a hint is a decision |
+| **`trigger`** | **string or null.** A word that, typed in a composer and followed by Tab, is replaced by this snippet's body at the cursor. Trimmed, **no whitespace**, at most **32** characters, and **unique case-insensitively** across snippets — so `LGTM` and `lgtm` cannot both exist. Matching is case-insensitive too. Expanding a trigger always inserts at the cursor and **never sends**, whatever `insert` and `autoSubmit` say; a snippet with `params` asks for them first, as any other use does. Uniqueness is enforced per bridge at write time, so two bridges can in principle leave two snippets holding one word — expand the first in display order. **May be absent from a row on disk** written by a build older than this field; it reads as `null` here, but see the note on older bridges below |
 | `groupId` | string or null. Null is ungrouped, which is a place in the popover rather than a group with no name. **May name a group that is not in `groups`** — draw it ungrouped and leave the field alone; another bridge may be about to write that group, and it heals itself |
 | `params` | array of `{name, label, type, required, default}`, possibly empty — see below |
 | `insert` | `overwrite`, `append` or `cursor` — where the body lands in the compose box |
@@ -2571,14 +2574,26 @@ where a row sat in the array. Two rows genuinely can share an `order` — the fi
 hand-editable, and two bridges number independently.
 
 **On first run the store seeds itself with `LGTM`**, the button this feature replaced,
-pinned and set to send itself. Seeded **once ever**: the file records which shipped
+pinned and set to send itself, with the trigger `LGTM`. The trigger arrived after
+seeding did, and the seed rule below means it reaches **only stores seeded from then
+on**: an existing `LGTM` row is never rewritten to add one — set it in the editor. Seeded **once ever**: the file records which shipped
 snippets it has been offered, so deleting it is permanent and a later release adding a
 second shipped snippet will not bring it back. Deleting
 `~/.local/share/tgxcode/snippets.json` outright is how to get the shipped ones
 again.
 
 Global — not per-session and not per-project. `projects` is the only scoping and it
-hides rather than partitions.
+hides rather than partitions. That includes triggers: a client should expand only the
+snippets it would show for the composer's directory.
+
+**Older bridges and `trigger`.** The file is shared by every bridge on the machine, and
+a bridge from before triggers drops the field from every row the next time it writes.
+The document version was deliberately **not** bumped for it: an older bridge reads any
+other version as an empty store and its next write would replace the whole file. A
+bridge that knows about triggers always writes the key (`null` included), and when it
+merges a newer row that lacks the key it keeps the trigger it holds. So a trigger can
+read as `null` for a while after an older bridge writes, and comes back the next time
+a newer bridge that still holds it saves anything.
 
 Also pushed as the `snippets-changed` SSE event, which is how the UI reads it. That
 event carries this same payload, so a client never has to come back here after the
@@ -3541,7 +3556,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
-| `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
+| `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed'\|'script', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own, and on every successful `PUT /api/claude-config/hook-script` — with `scope: 'script'` and `file` the script's absolute path, a fifth value no settings write produces — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
@@ -4135,20 +4150,24 @@ message is marked `failed` and its text is still in the row.
 
 ### `POST /api/snippets`
 
-`{title, body, hint?, groupId?, params?, insert?, autoSubmit?, permissionMode?, pinned?,
-order?, projects?}` → `{snippet}`, the row as `GET /api/snippets` describes it,
+`{title, body, hint?, trigger?, groupId?, params?, insert?, autoSubmit?, permissionMode?,
+pinned?, order?, projects?}` → `{snippet}`, the row as `GET /api/snippets` describes it,
 `undeclared` and `unused` included.
 
 `400` for a missing `title` or `body`; a `title` over **200** characters or a `body` over
 **20000**; an `insert` that is not one of the three; an `order` that is not an integer or
 null; a `groupId` naming a group that does not exist; more than **20** params or **20**
 `projects`; and a param whose `name` is not `[A-Za-z_]\w*` or repeats an earlier one — a
-param's name is its identity, so a duplicate is not a thing that can be stored.
+param's name is its identity, so a duplicate is not a thing that can be stored. Also
+`400` for a `trigger` that is not a string or null, contains whitespace once trimmed, or
+is over **32** characters. `null`, `""` and whitespace alone all mean *no trigger*.
 
 `403` for a `permissionMode` of `bypassPermissions` or `dontAsk` from a remote caller.
 
 `409` past **200 snippets** — a ceiling and not a lifetime budget, so deleting one makes
-room.
+room. **Also `409` for a `trigger` another snippet already holds**, compared
+case-insensitively: `{"error": "\"LGTM\" is already the trigger for \"LGTM\""}` — the
+message names the snippet holding it. Checked after every `400` and the `403`.
 
 **Two fields normalise rather than refuse, and two do not, and the split is deliberate.**
 An unrecognised param `type` reads as `text` and an unrecognised group `accent` reads as
@@ -4164,8 +4183,8 @@ which is a different test.
 
 ### `PATCH /api/snippets/:id`
 
-Any subset of `{title, body, hint, groupId, params, insert, autoSubmit, permissionMode,
-pinned, order, projects}` → `{snippet}`.
+Any subset of `{title, body, hint, trigger, groupId, params, insert, autoSubmit,
+permissionMode, pinned, order, projects}` → `{snippet}`.
 
 **A genuine partial**, drafts' rule: a field left out is left alone. `null` is a value and
 absence is not — `{"groupId": null}` ungroups a snippet, `{}` changes nothing but the
@@ -4178,7 +4197,8 @@ renaming a param while fixing the `{{…}}` that refers to it has to be one save
 half-fail.
 
 Every field is validated as it is on create, so the refusals are the same, plus `404` for
-an unknown id. **The body is checked before the id is looked up**, so a refused mode is a
+an unknown id. A snippet does not clash with its own trigger, so re-sending it — or
+changing only its case — is not a `409`; `{"trigger": null}` clears it. **The body is checked before the id is looked up**, so a refused mode is a
 `403` whether or not the snippet exists — the same order `PATCH /api/drafts/:id` uses and
 for the same reason.
 
@@ -4562,10 +4582,17 @@ file's alone, which under-reported exactly the case that matters.) Each entry:
 | `command` | string or null | a `command` hook's command, `$HOME` folded back; `null` for every other type |
 | `target` | string or null | what the hook does, whatever its type — the command, the URL, the prompt, or `server / tool` — whitespace collapsed, clipped to 200 characters |
 | `timeout` | int or null | seconds, when the hook sets one |
-| `script` | `{file, exists}` or null | when a path could be picked out of the command |
+| `script` | `{file: string, path: string, exists: boolean, executable: boolean or null}` or null | when a path could be picked out of the command. `file` has `$HOME` folded back, for display; `path` is absolute, and is what `GET /api/claude-config/hook-script` takes. `executable` is `null` when the file does not exist |
 
 `script.exists: false` is the useful part: a hook whose script has been deleted
-fails silently and nothing in Claude Code says so.
+fails silently and nothing in Claude Code says so. `executable: false` is the
+same failure by another route.
+
+The path is the first token of the command with a `/` in it, `~` and `$HOME`
+expanded. **`$CLAUDE_PROJECT_DIR` and `${CLAUDE_PROJECT_DIR}` are resolved
+against `cwd`** — the project this read is about, which for a user-level hook is
+the project it would run in. Read without a `cwd`, a script named through that
+variable has no answer and `script` is `null` for it.
 
 `hookEvents`, `hookTypes` and `toolNames` are the catalogue for the hooks
 editor, and like the rest of the catalogue they are hints with no authority.
@@ -4725,6 +4752,116 @@ person looks at it.
 `409` is neither the caller's mistake nor a file it may not write, which is why
 it is not folded into `400` or `403`: the request was well formed and would have
 been accepted a moment earlier.
+
+### `GET /api/claude-config/hook-script?cwd=<path>&path=<file>`
+
+**Local callers only**, like everything under `/api/claude-config`. Reads a hook's script
+so that the Hooks page can show and edit it. Unlike `/api/claude-docs`, the client names
+the file, so the bridge decides whether it may be touched. A `path` is allowed when either:
+
+- it is the script of a hook in a settings file in the chain for `cwd` — the same
+  `script.path` that `GET /api/claude-config` reports — **and** it lies inside the
+  allowed roots or `~/.claude`. That second condition exists because the first token with
+  a `/` in it is sometimes the interpreter (`/usr/bin/env bash …`), and a hook mentioning
+  a system binary must not make that binary editable; or
+- it is under `~/.claude/hooks/` or `<cwd>/.claude/hooks/`, at any depth. This is where a
+  new script is created.
+
+`~` is expanded and `..` is folded away before either test. Any other path gets
+`403 {code:'path'}`, including one a hook *used* to name before the file was edited. A
+plugin's scripts are not allowed: they are not in the chain, and the plugin's next update
+would overwrite an edit.
+
+| field | type | |
+|---|---|---|
+| `file` | string | the absolute path, resolved |
+| `referenced` | boolean | `true` when a hook in the chain names it, `false` for a file allowed only because it is under a `hooks` directory |
+| `exists` | boolean | |
+| `text` | string or null | the contents. `null` when it does not exist, is `truncated`, or is `binary` |
+| `stamp` | string or null | the precondition a `PUT` sends back. `null` when the file does not exist |
+| `size` | number | bytes |
+| `mode` | number or null | permission bits (`0o755` is `493`) |
+| `executable` | boolean | any execute bit is set |
+| `truncated` | boolean | larger than `maxBytes`. No text is sent at all, because a Save over a partial text would delete the rest |
+| `binary` | boolean | contains a NUL byte. No text, and a `PUT` is refused |
+| `symlink` | boolean | a symlink, or a path that resolves outside its directory. Every `PUT` is refused |
+| `writable` | boolean | `false` for a symlink, or a file or directory that cannot be written |
+| `maxBytes` | number | the cap shared by read and write (256KB) |
+
+### `PUT /api/claude-config/hook-script`
+
+```json
+{ "cwd": "/home/me/proj", "path": "/home/me/proj/.claude/hooks/guard.sh",
+  "stamp": "1765…:120", "text": "#!/usr/bin/env bash\n…", "executable": true }
+```
+
+Replaces a script's contents, or creates the script. The same path rules as the `GET`
+apply. The file is written **byte for byte** through a temp file and a rename. `stamp`
+works as it does on `PUT /api/claude-docs`: it is **required**, `null` means "create it,
+and refuse if it already exists", and a mismatch is refused with the current file in the
+body.
+
+**The file's mode survives the write.** A rename replaces the inode, so the old mode is
+read and put back. `executable: true` adds the execute bits, and a new file sent with it
+is created `0755`. Without it, a new file gets the umask's default, which is a script no
+hook can run. A client creating a script should send `true`.
+
+Answers `200` with the same shape as the `GET`, read again after the write. Broadcasts
+`claude-config` with `scope: 'script'`.
+
+| Status | `code` | |
+|---|---|---|
+| 400 | `dir` | `cwd` is outside the allowed roots |
+| 400 | `body` | `text` is not a string, or contains a NUL byte |
+| 400 | `stamp` | no `stamp` |
+| 403 | `path` | not a path this route will touch — see the `GET` |
+| 403 | `readonly` | a symlink, a binary, or a file over the cap that is already on disk |
+| 403 | `write` | the file or its directory could not be written |
+| 409 | `stale` | `stamp` no longer matches. The body carries `stamp` and `text` — the file as it is now, or `null` if it was deleted |
+| 409 | `exists` | `stamp: null` but the file is there. The body carries `stamp` |
+| 413 | `size` | larger than `maxBytes`. The body carries `maxBytes` |
+
+### `GET /api/claude-config/hook-sources?cwd=<path>`
+
+**Local callers only.** Lists the hooks that come from somewhere other than a settings
+file — plugins, skills and agents — so that a client can answer "what runs on this
+event?" in full. Everything here is read-only. Each part is listed whether or not it has
+hooks for a given event; a client filters by event itself.
+
+```json
+{
+  "plugins": [{ "id": "superpowers@claude-plugins-official", "name": "superpowers",
+                "enabled": false, "file": "…/hooks/hooks.json", "hooks": [ … ] }],
+  "skills":  [{ "name": "deploy", "file": "…/SKILL.md", "origin": "user",
+                "events": ["PostToolUse"], "yaml": "hooks:\n  PostToolUse: …" }],
+  "agents":  [ …the same shape as skills… ]
+}
+```
+
+- **`plugins[]`** is one entry per installed plugin that has a `hooks/hooks.json`, read
+  from `~/.claude/plugins/installed_plugins.json`. `enabled` is `enabledPlugins[id]` from
+  the merged settings, so it matches `effective.enabledPlugins` exactly. A plugin missing
+  from that map is `false`, and **its hooks do not run**.
+  - `hooks[]` uses the row shape of the `hooks` summary in `GET /api/claude-config`, with
+    `scope: 'plugin'`. `${CLAUDE_PLUGIN_ROOT}` is substituted into `command` and `target`,
+    so `script.exists` can be checked. As a result, `command` shows the resolved path, not
+    the variable.
+  - A `hooks.json` that does not parse appears with `hooks: []` and `problem` set to a
+    string.
+- **`skills[]` and `agents[]`** list `~/.claude/skills/*/SKILL.md`,
+  `<cwd>/.claude/skills/*/SKILL.md`, `~/.claude/agents/*.md` and `<cwd>/.claude/agents/*.md`,
+  plus each plugin's `skills/` and `agents/`. Only files whose frontmatter has a `hooks:`
+  key are included.
+  - **The YAML is not parsed.** The bridge has no YAML parser. `yaml` is the `hooks:` block
+    exactly as written, and `events` is the keys one level under it.
+  - In an agent, `Stop` is reported as **`SubagentStop`**, because that is when an agent's
+    `Stop` hook runs.
+  - `name` is the frontmatter's `name`, or the directory or file name when there is none.
+  - `origin` is one of `user`, `project` or `plugin:<id>`.
+  - Entries from a plugin carry `enabled`, as on `plugins[]`.
+
+Results are cached for five seconds per `cwd`.
+
 
 ### `GET /api/claude-docs?cwd=<path>`
 
@@ -5532,7 +5669,9 @@ laid out for a page**: `{state: string|null (null: no process), pending:
 "tool"|"plan"|"question"|null, turns: number, todo: null | {done, total, now:
 string|null}, tools: [{name, n}] (most used first), files: [string] (paths edited),
 diffStat: string|null (the output of git diff --stat HEAD), lastMessage: string|null
-(at most 3000 chars)}`. `tail` is `{text, turns}`, `full` is `{text, offset, next:
+(at most 3000 chars)}`. **A worker with no transcript yet** (just spawned, still
+starting) reads as `{text, headline: null, fields: null}` in `digest` mode, and as
+`{text}` alone in `tail` and `full` — `text` says to try again in a few seconds. `tail` is `{text, turns}`, `full` is `{text, offset, next:
 number|null, total}`, and **`ask` is not a read**: it sends the worker a message
 asking it to summarise itself, and the answer arrives later as a `turn` item. Every
 mode but `ask` only reads.

@@ -34,6 +34,7 @@
 <link rel="stylesheet" href="./css/boards.css">
 <link rel="stylesheet" href="./css/analytics.css">
 <link rel="stylesheet" href="./css/settings.css">
+<link rel="stylesheet" href="./css/hooks.css">
 <link rel="stylesheet" href="./css/narrow.css">
 <link rel="stylesheet" href="./css/viewers.css">
 <link rel="stylesheet" href="./css/colours.css">
@@ -133,6 +134,20 @@
         <rect x="15.5" y="9" width="3" height="8" rx="1" stroke="currentColor" stroke-width="1.6"/>
       </svg>
       <span>Analytics</span>
+    </button>
+
+    <!-- Every hook that can run in a project, and the editor for them. Starts in
+         the More menu (see TOOLBAR in web/settings/toolbar.js): it is a page
+         you visit to configure, not one you watch. -->
+    <button id="btn-hooks" class="bar-btn" type="button" aria-pressed="false"
+            title="Claude Code hooks — what runs when, from every file, plugin and skill">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M7 4v7a5 5 0 0 0 10 0V8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        <path d="M14 10.5l3-3 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="7" cy="4" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M5 20h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Hooks</span>
     </button>
 
     <!-- What already reached you, after the fact. A toast is gone the moment
@@ -1066,6 +1081,17 @@
         <div id="an-range" class="an-range" role="group" aria-label="Range"></div>
       </header>
       <div id="an-body" class="dash-body an-body"></div>
+    </section>
+
+    <!-- Claude Code hooks: every source, and the editor. Drawn by web/hooks/page.js. -->
+    <section id="hooks" class="dash hkp" hidden aria-label="Hooks">
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Hooks</h1>
+          <p id="hkp-sub" class="dash-sub">What runs when Claude Code does something.</p>
+        </div>
+      </header>
+      <div id="hkp-body" class="dash-body hkp-body"></div>
     </section>
 
     <!-- One card per running session, needs-you first. Fed by a single SSE

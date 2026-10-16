@@ -168,6 +168,16 @@ const HOME = os.homedir();
     // later is refused by default rather than by being remembered.
     check('as is anything under that prefix',
         (await call('GET', '/api/claude-config/anything', { headers: PHONE })).status, 403);
+    // The Hooks page's routes sit under that prefix on purpose. Named here so a
+    // move out from under it fails a test rather than opening a write of an
+    // executable file to a phone.
+    check('the hook-script read is refused remotely',
+        (await call('GET', '/api/claude-config/hook-script', { headers: PHONE })).status, 403);
+    check('the hook-script write is refused remotely', (await call('PUT', '/api/claude-config/hook-script', {
+        headers: PHONE, body: { path: '/tmp/x', stamp: null, text: '' },
+    })).status, 403);
+    check('and so is the list of plugin, skill and agent hooks',
+        (await call('GET', '/api/claude-config/hook-sources', { headers: PHONE })).status, 403);
     // Claude Code's memory files, refused the same way — the same three checks,
     // because the same three things could go wrong. A project's CLAUDE.md is
     // repository source and a user's describes the machine; neither is

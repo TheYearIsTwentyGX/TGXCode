@@ -299,11 +299,11 @@ start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskboard`, `ports`,
-`spinner`, `changes`, `restart`, `handoff`, `drafts`, `later`, `snippets`,
+`spinner`, `changes`, `restart`, `handoff`, `drafts`, `later`, `snippets`, `snippet-trigger`, `caret`,
 `templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
 `claude-docs`, `ask-result`, `commands`, `message-date`, `folded`,
-`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `worker-read`, `code-reviews` and `tool-image` on their own — no bridge needed
+`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `worker-read`, `code-reviews`, `tool-image`, `hook-scripts` and `hook-sources` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an
 unpaired remote device sees before and after pairing, and what the nightly restart

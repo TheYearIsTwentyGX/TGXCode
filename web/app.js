@@ -18,6 +18,7 @@ import { html } from './vendor/preact.js';
 import { paint, tickCardClocks } from './boards/parts.js';
 import { loadDash, paintDashBadge, renderDash } from './boards/dashboard.js';
 import { applySessionSpend, loadAnalytics, loadSessionSpend, renderAnalytics } from './boards/analytics.js';
+import { loadHooks, renderHooks } from './hooks/page.js';
 import { closeHeaderReview, forgetReviews } from './pr-review.js';
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
@@ -103,7 +104,7 @@ import {
     flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
-import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
+import { onOrchestratorEvent, paintOrchestrator, toggleOrchestrator } from './orchestrator.js';
 import { orchPageTick } from './orchestrator-page.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
@@ -848,6 +849,10 @@ function clearCurrent() {
     state.runs.clear();
     state.termTab = 'shell';
     renderCommands();
+    // An orchestrator deleted while on screen: its page, its drawer, the
+    // minute timer and the payload all go with it.
+    state.orch = null;
+    paintOrchestrator();
     subscribe();            // stop the bridge tailing a file that is gone
     rememberView();         // and the address stops naming it too
 }
@@ -1251,6 +1256,9 @@ export function rememberView() {
     } else if (state.analytics.open) {
         q.set('view', 'analytics');
         if (state.live.open) q.set('live', '1');
+    } else if (state.hooks.open) {
+        q.set('view', 'hooks');
+        if (state.live.open) q.set('live', '1');
     } else if (state.sx.open) {
         q.set('view', 'search');
         if (state.live.open) q.set('live', '1');
@@ -1374,7 +1382,7 @@ const DASH_STALE_MS = 45_000;
 // assignments repeated inside five functions, which is exactly the shape that
 // goes wrong when a sixth arrives: adding Settings would have meant editing
 // five other functions, none of which would have complained about being missed.
-const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings', 'analytics', 'sx'];
+const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings', 'analytics', 'hooks', 'sx'];
 
 // Which `live.*` key says whether the board stays up over each panel.
 const LIVE_OVER_KEY = {
@@ -1382,6 +1390,8 @@ const LIVE_OVER_KEY = {
     drafts: 'overDrafts', sched: 'overSchedules', settings: 'overSettings',
     // No setting of its own: the board is covered by it, like Settings by default.
     analytics: null,
+    // Nor this: hooks are configuration, read and written like Settings.
+    hooks: null,
     // No setting of its own: a search is a short errand, and nothing keeps the
     // board up over it.
     sx: null,
@@ -1415,7 +1425,7 @@ export function closePanels() {
     const close = {
         taskboard: showTaskboard, dash: showDash, notes: showNotes,
         drafts: showDrafts, sched: showSched, settings: showSettings,
-        analytics: showAnalytics, sx: showSearch,
+        analytics: showAnalytics, hooks: showHooks, sx: showSearch,
     };
     for (const p of PANELS) if (state[p].open) close[p](false);
 }
@@ -1502,7 +1512,8 @@ export function paintPanels() {
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
         [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
         [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open],
-        [dom.btnSettings, state.settings.open], [dom.btnAnalytics, state.analytics.open]]) {
+        [dom.btnSettings, state.settings.open], [dom.btnAnalytics, state.analytics.open],
+        [dom.btnHooks, state.hooks.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -1558,6 +1569,33 @@ export function showAnalytics(on) {
     if (on) {
         if (Date.now() - state.analytics.at > ANALYTICS_STALE_MS) loadAnalytics();
         else renderAnalytics();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+// ── hooks ───────────────────────────────────────────────────────────────
+//
+// Every hook that can run in a project, and the editor for the settings files'
+// own (web/hooks/page.js). A panel like Analytics, with one difference: its
+// draft is kept in state.hooks while the panel is closed, so closing is never a
+// question — the page asks only when the *file* a draft belongs to changes.
+
+export function showHooks(on) {
+    state.hooks.open = on;
+    if (on) closeOtherPanels('hooks');
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+    if (on) {
+        // Always re-read on the way in: `claude` writes these files itself, and a
+        // page opened on what was true an hour ago is a draft waiting to conflict.
+        if (!state.hooks.hooksDirty) loadHooks();
+        else renderHooks();
     } else if (state.live.open) {
         renderLive();
         if (state.current) termPane.refit();
@@ -2727,6 +2765,9 @@ function connect() {
     // local-only down every open channel would be a poor trade for saving a
     // fetch.
     es.addEventListener('claude-config', async () => {
+        // The Hooks page reads the same files. A dirty draft is kept by
+        // loadHooks() and draws its own banner once the block moved under it.
+        if (state.hooks.open && !state.hooks.saving) loadHooks();
         const s = state.claudeCfg;
         if (!state.settings.open || s.saving) return;
         // A draft in the JSON tab is never destroyed to show somebody what
@@ -3584,7 +3625,7 @@ dom.planPane.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // While the feedback box is open it owns the keyboard: Enter sends it, Esc
     // closes it, and Y/A/F/N are letters somebody is in the middle of typing.
-    if (dom.planFoot.querySelector('.perm-feedback')) return;
+    if (state.planFeedback) return;
     if (e.key === 'Escape') { e.preventDefault(); setPlanAside(true); return; }
     if (isTyping(e.target)) return;
     // Setting a plan aside is about this window. Answering one is not ours to do
@@ -3593,8 +3634,8 @@ dom.planPane.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     if (k === 'y') { e.preventDefault(); answerAsk({ decision: 'allow', mode: 'auto' }); }
     else if (k === 'a') { e.preventDefault(); answerAsk({ decision: 'allow', mode: 'acceptEdits' }); }
-    else if (k === 'f') { e.preventDefault(); openFeedback(dom.planFoot, 'approve'); }
-    else if (k === 'n') { e.preventDefault(); openFeedback(dom.planFoot, 'reject'); }
+    else if (k === 'f') { e.preventDefault(); openFeedback('approve'); }
+    else if (k === 'n') { e.preventDefault(); openFeedback('reject'); }
 });
 
 // A mode is picked for the conversation in front of you, so it is remembered
@@ -4063,6 +4104,7 @@ dom.tbSearch.addEventListener('keydown', (e) => {
 });
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.btnAnalytics.addEventListener('click', () => showAnalytics(!state.analytics.open));
+dom.btnHooks.addEventListener('click', () => showHooks(!state.hooks.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
 dom.btnNotes.addEventListener('click', () => showNotes(!state.notes.open));
@@ -4109,7 +4151,6 @@ dom.setProject.addEventListener('change', () => {
     // A JSON draft is about a file in the *old* project, so it goes — with a
     // confirm, because it is somebody's typing.
     const cfg = state.claudeCfg;
-    // The hooks draft too, which is the one that most needs asking about.
     if (!claudeMayLeave()) {
         dom.setProject.value = settingsProject();
         return;
@@ -4203,6 +4244,9 @@ const VIEWS = {
     'view.schedules': (on) => showSched(on),
     'view.settings': (on) => showSettings(on),
     'view.analytics': (on) => showAnalytics(on),
+    // No shortcut of its own — the Ctrl digits are spent — but the palette
+    // and Ctrl+1's close-everything go through here like the rest.
+    'view.hooks': (on) => showHooks(on),
 };
 
 export function showView(command) {
@@ -4246,6 +4290,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.analytics.open) { showAnalytics(false); return; }
+    if (e.key === 'Escape' && state.hooks.open) { showHooks(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
     // Schedules was missing from this ladder — Escape closed the other four
@@ -4529,6 +4574,7 @@ function restoreView(q) {
     const sc = q.get('view') === 'schedules';
     const st = q.get('view') === 'settings';
     const an = q.get('view') === 'analytics';
+    const hk = q.get('view') === 'hooks';
     const sx = q.get('view') === 'search';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
@@ -4537,6 +4583,7 @@ function restoreView(q) {
     if (sc) showSched(true);
     if (st) showSettings(true);
     if (an) showAnalytics(true);
+    if (hk) showHooks(true);
     if (sx) showSearch(true);
     if (q.get('focus') === '1') setFocus(true);
 
