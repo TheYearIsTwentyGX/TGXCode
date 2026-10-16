@@ -104,7 +104,7 @@ import {
     flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
-import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
+import { onOrchestratorEvent, paintOrchestrator, toggleOrchestrator } from './orchestrator.js';
 import { orchPageTick } from './orchestrator-page.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
@@ -849,6 +849,10 @@ function clearCurrent() {
     state.runs.clear();
     state.termTab = 'shell';
     renderCommands();
+    // An orchestrator deleted while on screen: its page, its drawer, the
+    // minute timer and the payload all go with it.
+    state.orch = null;
+    paintOrchestrator();
     subscribe();            // stop the bridge tailing a file that is gone
     rememberView();         // and the address stops naming it too
 }

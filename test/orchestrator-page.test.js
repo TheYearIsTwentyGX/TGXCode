@@ -65,6 +65,32 @@ const pr = (number, status = 'open') => ({ number, url: `https://github.com/o/r/
     }
 
     {
+        // A plan sent back, in plan mode: planning again, on the Plan stage, and
+        // nothing drawn as approved.
+        const denied = item({ kind: 'plan', requestId: 'r1', status: 'resolved', outcome: 'deny' });
+        let s = workerStage(worker({ state: 'busy' }), [denied], { mode: 'plan' });
+        assert.strictEqual(s.at, 1);
+        assert.notStrictEqual(s.steps[1], 'done');
+        // Out of plan mode it gets on with the work, but the approval it never
+        // had is still not drawn as one.
+        s = workerStage(worker({ state: 'busy' }), [denied], { mode: 'auto' });
+        assert.strictEqual(s.at, 3);
+        assert.deepStrictEqual(s.steps.slice(0, 3), ['done', 'todo', 'now']);
+
+        // Approved once, then a second plan waiting: on Approved, waiting.
+        const first = item({ kind: 'plan', requestId: 'r2', status: 'resolved', outcome: 'plan-approved' });
+        const second = item({ kind: 'plan', requestId: 'r3', status: 'read' });
+        s = workerStage(worker({ state: 'busy', pending: 'plan' }), newestFirst(first, second));
+        assert.strictEqual(s.at, 2);
+        assert.strictEqual(s.steps[1], 'now');
+        // …and that second plan sent back, in plan mode: planning again.
+        const back = { ...second, status: 'resolved', outcome: 'deny' };
+        s = workerStage(worker({ state: 'busy' }), newestFirst(first, back), { mode: 'plan' });
+        assert.strictEqual(s.at, 1);
+        ok('a sent-back or second plan is never drawn as approved');
+    }
+
+    {
         // A PR: on the PR stage, coloured by the app's fresher status over the
         // payload's, and Merged once it is merged.
         const w = worker({ closedAt: T0 + 5 * MIN, pr: pr(12, 'open') });
@@ -211,6 +237,15 @@ const pr = (number, status = 'open') => ({ number, url: `https://github.com/o/r/
         m = mergeOrder({ ...p, summary: { text: 'x', mergeOrder: [] } });
         assert.strictEqual(m.fromBrief, false);
         assert.deepStrictEqual(m.rows.map(r => r.number), [1, 3], 'without a brief, in the order the workers started');
+        assert.deepStrictEqual(m.rows.map(r => r.key), ['o/r#1', 'o/r#3']);
+
+        // Two repositories' #7: two rows with two keys, not one row twice.
+        const other = { ...pr(7), repo: 'o/other' };
+        m = mergeOrder({ workers: [worker({ id: 'X', pr: pr(7) }), worker({ id: 'Y', spawnedAt: T0 + 1, pr: other })] });
+        assert.deepStrictEqual(m.rows.map(r => [r.key, r.workerId]), [['o/r#7', 'X'], ['o/other#7', 'Y']]);
+        // A number the brief names twice is listed once.
+        m = mergeOrder({ ...p, summary: { text: 'x', mergeOrder: [3, 3, 1] } });
+        assert.deepStrictEqual(m.rows.map(r => [r.n, r.number]), [[1, 3], [2, 1]]);
         ok('the merge order follows the brief, keeps what it names, and falls back to start order');
     }
 
