@@ -2135,6 +2135,9 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`live`** | **object or null** — the registry entry, as on a session summary |
 | **`runner`** | **object or null — eight fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind, stalled}`. `stalled` is a bool — see §*`runner-status`*. `lastActivityAt` is deliberately not here: the card's signature would change on every line the turn streams |
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
+| **`askFor`** | **`"you"`, `"orchestrator"` or null** — null exactly when `ask` is. `"orchestrator"` only on a worker card whose orchestrator is carrying it (`orchestratorId` set) and is still handling its asks; it becomes `"you"` once the ask is *stuck* — the orchestrator paused, or not working (not `busy`/`starting`, or itself waiting on an ask) and the ask's `askedAt` at least 3 minutes old. The orchestrator page's rule (`needsYou`). It moves with the clock alone, and moves `sig` when it does. Either way the ask is answerable from the card; the first answer wins and the orchestrator is told |
+| **`orchestratorId`** | **string or null** — on a worker card, the orchestrator whose card it is drawn inside (that card's `workers.ids` lists it). Null for every other card, including a worker whose orchestrator is not on the board, archived or gone — that one is an ordinary card |
+| **`workers`** | **object or null** — on an orchestrator's card when it carries workers, null otherwise: `{ids: string[], queued: [{id, title, at}], idle: number, finished: number, own: boolean, paused: boolean}`. `ids` are the session ids of its *active* open workers — a reason of `ask`, `here`, `error` or `elsewhere` — whose cards are elsewhere in `sessions`, ordered asks that are yours first, then errors, then asks the orchestrator has, then by when each was started. `queued` are spawns waiting behind the orchestrator's `maxRunning` and have no session yet (`title` a string or null, `at` epoch ms, or 0 when the spawn recorded none). `idle` counts open workers with nothing to show, `finished` closed ones. `own` is false when the orchestrator is on the board only because of its workers — it has no reason of its own, or only `pinned`, which does not count. Part of `sig`, and so are the worker cards it lists: a change on any of them moves this card's `sig` |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
 | `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
 | **`devservers`** | **array of objects or null** — `{port, title, owned, http}`, listening ports only, attributed and probed exactly as on `/api/sessions/:id/devservers`. `owned` means DevBrowser's title for the port is this session's worktree or project name. It is a hint for whether opening a tab should also name it, and says nothing about whose server it is; `null` until the first probe has run |
@@ -2147,7 +2150,21 @@ its nodes can compare `sig` and rebuild only the cards that moved — which is w
 UI does. Treat it as opaque: it is a fingerprint, not an identifier, and its only promise
 is that it changes when something else on the card does.
 
-`waiting` is the count worth putting on a badge.
+`waiting` is the count worth putting on a badge: cards with an `ask` whose `askFor` is
+`"you"`. A worker's ask its orchestrator is still handling is not counted for its first
+3 minutes (see `askFor`), though the worker card still carries it. `running` counts
+`here` and `elsewhere` cards, leaving out an orchestrator whose `workers.own` is false.
+
+**Orchestrators carry their workers.** An orchestrator with any active open worker or a
+queued spawn is on the board whatever its own state — the common case is an orchestrator
+sitting idle while its workers run — with `workers` set and a `reason` borrowed from them
+when it has none of its own that is stronger: `ask` if a worker's ask is yours, else
+`error` if a worker failed, else `here`. No new `reason` values. The worker cards stay in
+`sessions`, each with `orchestratorId`, so a client that ignores both fields sees exactly
+the cards it saw before plus the orchestrator's; the web board lifts them out and draws
+them as rows inside the orchestrator's card. The 24-card ceiling counts an orchestrator
+and the workers it carries as one, so neither is ever cut without the other, and an
+orchestrator on the board this way is never also in `recent`.
 
 `sessions` is "running now, plus pinned" and is the answer to *who is blocked on me*.
 `recent` is a second list, of sessions with nothing running but touched recently, for a
