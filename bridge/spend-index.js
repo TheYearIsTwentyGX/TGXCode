@@ -455,7 +455,7 @@ class SpendIndex {
             if (!rec) continue;
             const m = rec.meta;
             if (isTemp(m.projectCwd) || isTemp(m.cwd)) continue;
-            if (!includeTest && index.flags && index.flags.test.has(id)) continue;
+            if (!includeTest && index.flags && index.flags.isTest(id)) continue;
             const cwd = m.projectCwd || m.cwd || null;
             out.push({ sessionId: id, projectCwd: cwd, projectName: projectName(cwd),
                 buckets: this._bucketsOf(files) });

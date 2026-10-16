@@ -202,7 +202,7 @@ const totalOf = (state) => Object.values(state.buckets)
         index.sessions.set('s2', meta('s2', '/tmp/probe'));
         assert.strictEqual(rollup(spend.entries(index), { days: 60, now }).projects.length, 1);
         index.sessions.set('s2', meta('s2', '/home/u/lib'));
-        index.flags = { test: new Set(['s2']) };
+        index.flags = { isTest: (id) => id === 's2' };
         assert.strictEqual(rollup(spend.entries(index), { days: 60, now }).projects.length, 1);
         assert.strictEqual(rollup(spend.entries(index, { includeTest: true }),
             { days: 60, now }).projects.length, 2);

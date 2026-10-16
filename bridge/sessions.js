@@ -310,7 +310,7 @@ class SessionIndex extends EventEmitter {
             const m = rec.meta;
             if (project && m.projectCwd !== project) continue;
             if (inTemp(m)) continue;
-            if (!includeTest && this.flags && this.flags.test.has(m.sessionId)) continue;
+            if (!includeTest && this.flags && this.flags.isTest(m.sessionId)) continue;
             if (q) {
                 // The schedule's name too, or filtering on the name shown in
                 // the rail would fail to find the very rows showing it — the
@@ -323,7 +323,7 @@ class SessionIndex extends EventEmitter {
                     : null;
                 const hay = [m.title, m.firstPrompt, m.lastPrompt, m.cwd,
                     m.worktree && m.worktree.name, m.sessionId, sched && sched.title,
-                    this.flags && this.flags.titles.get(m.sessionId)]
+                    this.flags && this.flags.get(m.sessionId).title]
                     .filter(Boolean).join(' ').toLowerCase();
                 if (!hay.includes(q)) continue;
             }
@@ -828,7 +828,8 @@ class SessionIndex extends EventEmitter {
         // removed on purpose must not be held alive by having been recent.
         this.pending.delete(sessionId);
         const left = this.knownIds();
-        if (this.flags) this.flags.prune(left);
+        // By id first: a stamp spares a fresh flag from prune, not from a delete.
+        if (this.flags) { this.flags.forget(sessionId); this.flags.prune(left); }
         if (this.suggestions) this.suggestions.prune(left);
         this._scheduleSave();
         this.emit('changed');

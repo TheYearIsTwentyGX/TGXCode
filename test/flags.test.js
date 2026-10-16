@@ -62,7 +62,9 @@ async function reload(flags) {
 
         again.set('s3', { title: 'Gone soon' });
         again.set('s4', { title: 'Stays' });
-        assert.strictEqual(again.prune(new Set(['s4'])), true);
+        // Without the grace period: these were all flagged a moment ago, which
+        // otherwise reads as another bridge's session not yet on disk.
+        assert.strictEqual(again.prune(new Set(['s4']), 0), true);
         assert.strictEqual(again.get('s3').title, null);
         assert.strictEqual(again.get('s4').title, 'Stays');
         await reload(again);
@@ -107,6 +109,91 @@ async function reload(flags) {
         assert.strictEqual(after.titleSource, 'custom-title');
         await reload(flags);
         ok('a name beats the transcript and the schedule, and clearing it gives them back');
+    }
+
+    // Two Flags on one file are two bridges: the everyday one and a dev one share
+    // flags.json, and each used to write its whole in-memory copy over the other's.
+    const settle = () => new Promise(r => setTimeout(r, 500));
+    // Skip the once-a-second throttle rather than sleep through it.
+    const now = (f) => { f._checkedAt = 0; return f; };
+    {
+        fs.rmSync(STATE_FILE, { force: true });
+        const everyday = new Flags();
+        everyday.set('pin-me', { pinned: true });
+        everyday.set('named', { title: 'Users name' });
+        await settle();
+        const dev = new Flags();
+        dev.set('probe', { test: true });
+        await settle();
+        // The everyday bridge has never heard of `probe` and writes after it.
+        everyday.set('archive-me', { archived: true });
+        await settle();
+        const disk = new Flags();
+        assert.strictEqual(disk.get('probe').test, true, 'the dev bridge\'s label survives the everyday bridge\'s write');
+        assert.strictEqual(disk.get('archive-me').archived, true);
+        ok('a write from one bridge keeps what another bridge wrote');
+
+        assert.strictEqual(now(everyday).isTest('probe'), true);
+        assert.strictEqual(everyday.get('probe').test, true);
+        ok('a bridge sees a test label set by another bridge after it started');
+
+        // And the other way: the dev bridge, loaded with the user's pin and name,
+        // must not put them back after the user changes them in the everyday window.
+        everyday.set('pin-me', { pinned: false });
+        everyday.set('named', { title: 'Renamed' });
+        await settle();
+        dev.set('probe', { title: 'Probe' });
+        await settle();
+        const after = new Flags();
+        assert.strictEqual(after.get('pin-me').pinned, false);
+        assert.strictEqual(after.get('named').title, 'Renamed');
+        assert.strictEqual(after.get('probe').title, 'Probe');
+        assert.strictEqual(after.get('probe').test, true);
+        ok('a dev bridge\'s write does not revert the user\'s pins and names');
+
+        // Unsaved changes of this bridge win over a reload of the other's write.
+        dev.set('x', { pinned: true });
+        everyday.set('y', { pinned: true });
+        await settle();
+        const both = new Flags();
+        assert.ok(both.get('x').pinned && both.get('y').pinned);
+        ok('two bridges saving in the same debounce window keep both changes');
+    }
+    {
+        fs.rmSync(STATE_FILE, { force: true });
+        const a = new Flags();
+        a.set('fresh', { test: true });
+        // A file written before stamps existed: an old id has none.
+        await settle();
+        const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+        raw.archived.push('ancient');
+        fs.writeFileSync(STATE_FILE, JSON.stringify(raw));
+        const b = new Flags();
+        // `b` has no transcript for either and no `pending` entry for `fresh`.
+        b.prune(new Set());
+        assert.strictEqual(b.get('fresh').test, true, 'a just-flagged id from another bridge is spared');
+        assert.strictEqual(b.get('ancient').archived, false, 'an unstamped orphan is still pruned');
+        b.prune(new Set(), 0);
+        assert.strictEqual(b.get('fresh').test, false, 'and the stamp only buys a grace period');
+        await settle();
+        assert.strictEqual(new Flags().get('fresh').test, false);
+        ok('prune spares an id flagged in the last few minutes, and only that');
+    }
+    {
+        fs.rmSync(STATE_FILE, { force: true });
+        const f = new Flags();
+        f.set('t', { test: true });
+        await settle();
+        let stats = 0;
+        const real = fs.statSync;
+        fs.statSync = (...a) => { stats++; return real(...a); };
+        try {
+            f._checkedAt = 0;
+            for (let i = 0; i < 500; i++) f.get(`row-${i}`);
+            for (let i = 0; i < 500; i++) f.isTest(`row-${i}`);
+        } finally { fs.statSync = real; }
+        assert.ok(stats <= 1, `a 1000-row read should stat the file at most once, did ${stats}`);
+        ok('reading a long list costs one stat, not one per row');
     }
 
     fs.rmSync(home, { recursive: true, force: true });
