@@ -257,7 +257,8 @@ const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
  */
 function cleanOrigin(o) {
     if (!o || typeof o !== 'object' || !['draft', 'dialog'].includes(o.from)) return null;
-    return { from: o.from, draftId: str(o.draftId, 100), title: str(o.title, 200) };
+    return { from: o.from, draftId: str(o.draftId, 100), title: str(o.title, 200),
+        draftCreatedAt: Number.isFinite(o.draftCreatedAt) ? o.draftCreatedAt : null };
 }
 
 /**

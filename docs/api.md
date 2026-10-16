@@ -5447,9 +5447,12 @@ event:
 ```
 
 or `{orchestratorId, enabled: false}` for a session that is not one. Times are epoch
-ms. **`origin`** is `{from: "draft"|"dialog", draftId: string|null, title: string|null}`:
-where a worker or queued spawn began, when it was a task the user handed over rather than
-the orchestrator's own idea (`null` otherwise). **`openTasks`** is every task not yet
+ms. **`origin`** is `{from: "draft"|"dialog", draftId: string|null, draftCreatedAt:
+number|null, title: string|null}`: where a worker or queued spawn began, when it was a
+task the user handed over rather than the orchestrator's own idea (`null` otherwise).
+`draftId` and `draftCreatedAt` are the draft's id and `createdAt` as it was handed over,
+both `null` for a task from the dialog; they are what Take back restores (below).
+`draftCreatedAt` is `null` too on a task filed before it existed. **`openTasks`** is every task not yet
 started, taken back or gone, oldest first — kept apart from `inbox` because that is only
 the newest 100, and a task left alone for a day must not fall off a client's page. Its
 rows are the task's settings without the full prompt; `text` is the first 8000
@@ -5614,7 +5617,19 @@ draftRemoved: boolean}`.
 
 `{}` → `{ok: true, draft}` — the draft it became, in `GET /api/drafts`'s shape. Its
 title is the task's, or failing that the draft's it came from; a worktree hint is not
-kept, having no field in a draft. An orchestrator that had already read the task gets a
+kept, having no field in a draft.
+
+**The id after Take back.** A task handed over from a draft comes back **as that draft**:
+`draft.id` is the id it had before it was sent (the task's `origin.draftId`), and
+`createdAt` is when it was first written, so a client that remembered the id —
+to `PATCH`, `DELETE` or `…/start` it, or to find it in `GET /api/drafts` — finds it
+again rather than a `404`. `updatedAt` is now, so it sorts to the top. Two cases
+get a **new** id instead: a task from the Start dialog (`origin.from: "dialog"`), which
+was never a draft, and a draft whose old id is somehow held by another draft in the
+store by then — the bridge never overwrites one. So treat the returned `draft.id` as
+the answer rather than assuming it; it equals `origin.draftId` whenever that was
+possible. The same holds for tasks an orchestrator going away puts back in Drafts.
+Before October 2026 every Take back made a new id. An orchestrator that had already read the task gets a
 `note` saying it was taken back; one that had not is told nothing. `404` for no such
 task; `409` once it has been started or is otherwise settled, or when the drafts store
 is full; `403` to a remote caller for a mode it could not save as a draft. Fires
@@ -5630,8 +5645,22 @@ boolean}]}` — every orchestrator a task can be sent to, for a picker. **Live o
 first** — `live` means this bridge has a process for it that is not stopped or in error;
 `state` is that process's state, or `"stopped"` — then newest `lastActivity` (epoch ms)
 first. `running` counts workers mid-turn and starts in progress, against `maxRunning`;
-`queued` is pending spawns; `openTasks` tasks not yet started. Archived orchestrators are
-left out, and test ones on any bridge but a development one, as `GET /api/sessions` does.
+`queued` is pending spawns; `openTasks` tasks not yet started.
+
+**Left out:** archived orchestrators; test ones on any bridge but a development one; and
+ones whose `cwd` or `projectCwd` is `/tmp` or under it. The last two are exactly
+`GET /api/sessions`'s rules, so an orchestrator listed here is one the session list shows
+(archived ones aside, which a task should not go to). `/tmp` is left out because an
+orchestrator there is an agent's probe rather than somebody's plan — it cannot make a
+worktree, and it is not in the session list, so a task handed to it would go somewhere
+the user cannot follow. Until October 2026 `/tmp` ones were listed here though the
+session list hid them.
+
+**This route is the answer to "is there an orchestrator to send to".** The desktop asks
+it both for the picker and to decide whether Ctrl+K offers "Send draft … to
+orchestrator…", rather than looking for `orchestrator` on `GET /api/sessions` rows; a
+client offering the action should do the same, so it never offers a picker that opens
+onto nothing.
 
 #### `GET /api/sessions/:id/orchestrator`
 

@@ -1093,7 +1093,7 @@ function inTemp(meta) {
 }
 
 module.exports = {
-    SessionIndex, projectName, isTemp, ACTIVE_WINDOW_MS,
+    SessionIndex, projectName, isTemp, inTemp, ACTIVE_WINDOW_MS,
     // Exported for test/titles.test.js: which title wins is a rule, not a
     // formatting detail, and it is not reachable from a request without a
     // transcript and a schedule that matches it.

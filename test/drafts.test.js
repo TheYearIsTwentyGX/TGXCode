@@ -328,5 +328,38 @@ const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'effort', 'permissionMo
     ok(`the ${MAX_DRAFTS}-draft cap refuses the next one, and lifts when one is deleted`);
 }
 
+// --- coming back -------------------------------------------------------
+//
+// A draft handed to an orchestrator is deleted, and taking the task back makes
+// it again. It must come back as *itself*: a client holding the old id would
+// otherwise 404 on a draft that is plainly on the board.
+
+{
+    const d = fresh();
+    const made = d.create({ cwd: '/a', prompt: 'Hand this over' });
+    d.remove(made.id);
+    const back = d.create({ cwd: '/a', prompt: 'Hand this over' }, { id: made.id, createdAt: made.createdAt });
+    assert.strictEqual(back.id, made.id, 'the old id is restored');
+    assert.strictEqual(back.createdAt, made.createdAt, 'and so is when it was first written');
+    assert.ok(back.updatedAt >= made.updatedAt, 'coming back is news: it is stamped as just updated');
+    assert.strictEqual(d.get(made.id).prompt, 'Hand this over');
+
+    // Removed and restored inside one debounce: the pending deletion must not
+    // take the restored row out at the write.
+    d.flush();
+    assert.ok(new Drafts().get(made.id), 'it survives the write and a reload');
+
+    // An id somebody already holds is not taken over.
+    const clash = d.create({ cwd: '/a', prompt: 'Another' }, { id: made.id });
+    assert.notStrictEqual(clash.id, made.id, 'a clash gets a fresh id');
+    assert.strictEqual(d.get(made.id).prompt, 'Hand this over', 'and the holder is untouched');
+
+    // A createdAt from the future is not believed.
+    const odd = d.create({ cwd: '/a', prompt: 'Odd' }, { id: 'old-one', createdAt: Date.now() + 86_400_000 });
+    assert.strictEqual(odd.id, 'old-one');
+    assert.strictEqual(odd.createdAt, odd.updatedAt);
+    ok('a restored draft keeps its id and age, survives the write, and never takes over another\'s id');
+}
+
 fs.rmSync(home, { recursive: true, force: true });
 console.log(`\n${pass} groups passed`);

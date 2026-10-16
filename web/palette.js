@@ -32,7 +32,7 @@ import * as keys from './keys.js';
 import { ago } from './format.js';
 import { openSession } from './transcript/conversation.js';
 import { rank } from './palette/score.js';
-import { entries } from './palette/registry.js';
+import { entries, refreshSources } from './palette/registry.js';
 import { loadOptional } from './palette/builtin.js';
 
 const ORDER = ['Sessions', 'Views', 'Actions'];   // then any other group, then Search
@@ -61,6 +61,7 @@ export function openPalette() {
     const input = dom.paletteScrim.querySelector('input');
     if (input) input.focus();
     loadOptional(() => { if (state.palette.open) drawPalette(); });
+    refreshSources().then(() => { if (state.palette.open) drawPalette(); });
 }
 
 export function closePalette() {

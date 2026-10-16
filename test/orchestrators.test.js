@@ -410,7 +410,7 @@ function harness(name) {
     assert.deepStrictEqual(t, {
         prompt: 'Fix the thing', cwd: '/w', title: null, model: 'haiku', effort: 'low',
         permissionMode: 'plan', test: true, worktree: { name: 'wt', base: 'main' },
-        origin: { from: 'draft', draftId: 'D1', title: 'Fix' },
+        origin: { from: 'draft', draftId: 'D1', draftCreatedAt: null, title: 'Fix' },
     }, 'only the known fields, cleaned');
     assert.strictEqual(cleanTask({ prompt: '', cwd: '/w' }), null, 'no prompt is no task');
     assert.strictEqual(cleanTask({ prompt: 'p' }), null, 'no directory is no task');
@@ -478,7 +478,7 @@ function harness(name) {
     assert.strictEqual(s.item('O', room.id).settledAt, null);
 
     // Origin survives the file, on a worker and a queued spawn alike.
-    const origin = { from: 'draft', draftId: 'D', title: 'From a draft' };
+    const origin = { from: 'draft', draftId: 'D', draftCreatedAt: 42, title: 'From a draft' };
     s.addWorker('O', { id: 'W1', title: 'w', origin });
     s.queueSpawn('O', { prompt: 'later', title: 'q', opts: {}, origin });
     s.flush();
@@ -923,13 +923,18 @@ function harness(name) {
         // A task through its whole life, against the fake pool.
         const h = harness('task-flow');
         const made = [];
-        const fakeDrafts = { create: (d) => { const row = { id: `D${made.length + 1}`, ...d }; made.push(row); return row; } };
+        // Drafts#create's restore, as far as this needs it: the old id, else a new one.
+        const fakeDrafts = { create: (d, restore) => {
+            const row = { id: (restore && restore.id) || `D${made.length + 1}`, ...d };
+            made.push(row);
+            return row;
+        } };
         let changed = 0;
         orchestration.init({ ...h.deps, drafts: fakeDrafts, draftsChanged: () => { changed++; } });
         orchestration.enable('O', null);
         const orch = h.pool.ensure('O');
 
-        const origin = { from: 'draft', draftId: 'D0', title: 'Tidy the rail' };
+        const origin = { from: 'draft', draftId: 'D0', draftCreatedAt: 5, title: 'Tidy the rail' };
         const filed = orchestration.fileTask('O', { prompt: 'Tidy the rail', cwd: home, model: 'haiku',
             effort: 'low', permissionMode: 'plan', test: true, origin });
         assert.strictEqual(filed.paused, false);
@@ -963,10 +968,16 @@ function harness(name) {
             (e) => e.status === 404);
 
         // Take back: unread, quietly; read, with a note for the orchestrator.
-        const quiet = orchestration.fileTask('O', { prompt: 'Second thoughts', cwd: home, title: 'Second' });
+        const quiet = orchestration.fileTask('O', { prompt: 'Second thoughts', cwd: home, title: 'Second',
+            origin: { from: 'draft', draftId: 'D-orig', draftCreatedAt: 1234, title: 'Second' } });
         const back = orchestration.withdrawTask('O', quiet.item.id);
         assert.strictEqual(back.draft.prompt, 'Second thoughts');
         assert.strictEqual(back.draft.title, 'Second');
+        assert.strictEqual(back.draft.id, 'D-orig', 'taken back, it is the draft it was handed over as');
+        const fromDialog = orchestration.fileTask('O', { prompt: 'Never a draft', cwd: home,
+            origin: { from: 'dialog', draftId: null, title: 'Never a draft' } });
+        assert.match(orchestration.withdrawTask('O', fromDialog.item.id).draft.id, /^D\d+$/,
+            'one from the dialog was never a draft, and gets a new id');
         assert.strictEqual(h.store.item('O', quiet.item.id).outcome, 'withdrawn');
         assert.ok(!h.store.unread('O').some(i => i.kind === 'note'), 'nothing to tell about an unread task');
         const read = orchestration.fileTask('O', { prompt: 'Seen it', cwd: home });
@@ -997,13 +1008,38 @@ function harness(name) {
         h.store.setPaused('O', null);
 
         // Going away: what it never started goes back to Drafts.
+        orchestration.fileTask('O', { prompt: 'Left behind', cwd: home,
+            origin: { from: 'draft', draftId: 'D-left', title: 'Left behind' } });
         const before = made.length;
         changed = 0;
         orchestration.disable('O');
-        assert.strictEqual(made.length - before, 2, 'both open tasks became drafts again');
+        assert.strictEqual(made.length - before, 3, 'every open task became a draft again');
         assert.ok(made.slice(before).some(d => d.prompt === 'While paused'));
+        assert.ok(made.slice(before).some(d => d.id === 'D-left'), 'a draft goes back under its own id');
         assert.ok(changed > 0, 'and the windows were told');
         ok('a task wakes the orchestrator, starts once with the user\'s settings, and is never lost');
+    }
+
+    {
+        // GET /api/orchestrators: the one list the picker draws and the Ctrl+K
+        // row asks. /tmp is left out as the session list leaves it out — the two
+        // disagreeing was a palette row that opened onto "No orchestrators yet".
+        const h = harness('list');
+        const where = { REAL: '/home/someone/proj', SCRATCH: '/tmp/claude-1000/probe', TMP: '/tmp',
+            TMPISH: '/tmpfoo/proj', ARCH: '/home/someone/proj', TEST: '/home/someone/proj' };
+        const index = { ...h.deps.index, summary: (id) => ({ sessionId: id, title: id, cwd: where[id],
+            projectCwd: where[id], archived: id === 'ARCH', test: id === 'TEST', permissionMode: 'auto' }) };
+        orchestration.init({ ...h.deps, index });
+        for (const id of Object.keys(where)) orchestration.enable(id, null);
+        const ids = orchestration.list({ includeTest: false }).map(r => r.orchestratorId).sort();
+        assert.deepStrictEqual(ids, ['REAL', 'TMPISH'],
+            '/tmp and below, archived and test are left out; /tmpfoo is not /tmp');
+        assert.ok(orchestration.list({ includeTest: true }).some(r => r.orchestratorId === 'TEST'),
+            'a dev bridge lists test ones');
+        // A worktree session started in /tmp but walked into a checkout is not scratch.
+        where.SCRATCH = '/home/someone/proj';
+        assert.ok(orchestration.list({ includeTest: false }).some(r => r.orchestratorId === 'SCRATCH'));
+        ok('the orchestrator list leaves out /tmp, archived and test ones, as the session list does');
     }
 
     {
@@ -1011,7 +1047,7 @@ function harness(name) {
         const draftsRoute = require('../bridge/routes/drafts');
         const orchRoute = require('../bridge/routes/orchestrators');
         const stored = { id: 'D9', cwd: home, prompt: 'From the board\nmore', title: null, model: null,
-            effort: null, permissionMode: 'bypassPermissions', test: false };
+            effort: null, permissionMode: 'bypassPermissions', test: false, createdAt: 1700 };
         const fakeDrafts = { get: (id) => (id === 'D9' ? stored : null) };
         const modeRefusal = (m, who) => (who.remote && m === 'bypassPermissions' ? 'no' : null);
         const deps = { drafts: fakeDrafts, modeRefusal, normalizeMode: (m) => m || 'auto' };
@@ -1022,8 +1058,8 @@ function harness(name) {
 
         const a = orchRoute.taskSource({ draftId: 'D9' }, local);
         assert.strictEqual(a.draftId, 'D9');
-        assert.deepStrictEqual(a.task.origin, { from: 'draft', draftId: 'D9', title: 'From the board' },
-            'an untitled draft is named by its first line');
+        assert.deepStrictEqual(a.task.origin, { from: 'draft', draftId: 'D9', draftCreatedAt: 1700,
+            title: 'From the board' }, 'an untitled draft is named by its first line, and its id and age kept');
         assert.strictEqual(a.task.permissionMode, 'bypassPermissions', 'a local caller keeps the mode it chose');
         assert.strictEqual(orchRoute.taskSource({ draftId: 'D9' }, remote).status, 403,
             'a phone cannot hand over a mode it could not start');

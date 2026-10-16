@@ -56,7 +56,7 @@ import { paint } from './boards/parts.js';
 import { renderLive } from './boards/live.js';
 import { tbCardClickOpens } from './boards/taskboard.js';
 import { openNew } from './new-session/dialog.js';
-import { sendToOrchestrator } from './orch-picker.js';
+import { knownOrchestrators, refreshOrchestrators, sendToOrchestrator } from './orch-picker.js';
 import { registerSource } from './palette/registry.js';
 import { termPane } from './term-pane.js';
 import { openSessionSoon } from './transcript/conversation.js';
@@ -362,10 +362,12 @@ function drSend(d) {
 }
 
 // Ctrl+K: one quiet row per draft, found by typing — "send", "orch", or a word
-// of the draft's title. Only while the session list has an orchestrator in it,
-// since the picker would otherwise open onto nothing.
+// of the draft's title. Only while there is an orchestrator to send to, by the
+// picker's own list — refreshed as the palette opens — since the picker would
+// otherwise open onto nothing. Not the session list: that filters differently,
+// and the row and the picker must not disagree.
 registerSource('drafts.send', () => {
-    if (!state.drafts.rows.length || !state.sessions.some(s => s.orchestrator)) return [];
+    if (!state.drafts.rows.length || !knownOrchestrators().length) return [];
     return state.drafts.rows.map(d => ({
         id: `drafts.send.${d.id}`, group: 'Actions', quiet: true,
         title: `Send draft \u201c${d.title || firstLine(d.prompt)}\u201d to orchestrator\u2026`,
@@ -373,7 +375,7 @@ registerSource('drafts.send', () => {
         keywords: 'send draft orchestrator task hand over',
         run: () => drSend(d),
     }));
-});
+}, { refresh: () => (state.drafts.rows.length ? refreshOrchestrators() : null) });
 
 /**
  * Open it in the dialog it was written in.
