@@ -566,6 +566,20 @@ function harness(name) {
     }
 
     {
+        // A test orchestrator's workers are test sessions without being asked to
+        // be, or they land in the everyday window — the flag's whole purpose.
+        const h = harness('test-inherit');
+        orchestration.enable('O', { worktree: false });
+        h.flagRows.set('O', { test: true });
+        const w = await orchestration.spawn('O', { prompt: 'probe', title: 'W', worktree: false });
+        assert.strictEqual(h.flagRows.get(w.sessionId).test, true, 'a test orchestrator makes test workers');
+        h.flagRows.set('O', { test: false });
+        const r = await orchestration.spawn('O', { prompt: 'real', title: 'R', worktree: false });
+        assert.notStrictEqual(h.flagRows.get(r.sessionId).test, true, 'an ordinary one does not');
+        ok('a worker inherits its orchestrator\'s test flag');
+    }
+
+    {
         const h = harness('cap');
         orchestration.enable('O', { maxRunning: 1, worktree: false });
         const a = await orchestration.spawn('O', { prompt: 'first', title: 'A', worktree: false });

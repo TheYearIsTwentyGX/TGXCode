@@ -373,7 +373,7 @@ project filter on `GET /api/sessions?project=`.
 | `sessionId`, `title`, `titleSource`, `cwd`, `projectCwd`, `projectName`, `gitBranch`, `model`, `permissionMode`, `version`, `sessionKind`, `lastPrompt` | strings, any of them null |
 | `firstTs`, `lastTs`, `lastUserTs` | ISO 8601 strings or null |
 | `userMessages`, `assistantMessages`, `toolCalls`, `bytes`, `mtimeMs` | numbers |
-| `pinned`, `archived`, `test`, `active` | bools |
+| `pinned`, `archived`, `test`, `active` | bools. These flags live in one file every bridge on the machine shares, and a bridge picks up another's change within about a second — so a session labelled `test` on a development bridge is hidden from the everyday bridge's lists too. (Until this release a bridge read them only at startup, so a test session started after the everyday bridge did was listed there, unlabelled.) |
 | **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
 | **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
 | **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
@@ -5454,6 +5454,10 @@ started, taken back or gone, oldest first — kept apart from `inbox` because th
 the newest 100, and a task left alone for a day must not fall off a client's page. Its
 rows are the task's settings without the full prompt; `text` is the first 8000
 characters of it. See *Tasks from the user* below.
+
+**A worker of a `test` orchestrator is a `test` session**, and so is a worker started from
+a task whose `test` is true — the flag is set at spawn, not asked for, so a client need not
+pass it. A worker of an ordinary orchestrator from an ordinary task is not.
 
 A worker's **`pr`** is the newest pull request its transcript links (the last of
 the session summary's `prs`), or null. `status` and `label` are what the bridge's
