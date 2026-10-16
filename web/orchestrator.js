@@ -185,8 +185,11 @@ function strip(p) {
         ${needs ? html`<span class="orch-strip-needs">${`${needs} need${needs === 1 ? 's' : ''} you`}</span>` : null}
         <span class="orch-strip-facts">${`${g.running} of ${g.max} running`
             + `${g.queued ? ` · ${g.queued} queued` : ''} · ${g.finished} of ${g.total} finished`}</span>
-        <button class="lbtn" type="button" onClick=${() => setOrchPageMode(p.orchestratorId, 'overview')}>
-            Overview</button>
+        <button class="lbtn" type="button" onClick=${() => {
+            setOrchPageMode(p.orchestratorId, 'overview');
+            // This button goes with the strip; the header's switch is where it went.
+            requestAnimationFrame(() => { const b = document.querySelector('#orch-seg button[aria-pressed="true"]'); if (b) b.focus(); });
+        }}>Overview</button>
     </div>`;
 }
 
@@ -251,7 +254,7 @@ export function settings(p) {
     const all = s.usageStop.window === 'all';
     return html`<div class="orch-settings">
         <label>At most
-            <input type="number" min="1" max="10" defaultValue=${s.maxRunning}
+            <input type="number" name="maxRunning" min="1" max="10" defaultValue=${s.maxRunning}
                 key=${`max:${s.maxRunning}`}
                 onChange=${(e) => save({ maxRunning: Number(e.target.value) })} />
             workers running at once</label>
@@ -261,7 +264,7 @@ export function settings(p) {
         <label><input type="checkbox" checked=${s.usageStop.enabled}
             onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} />
             Stop everything ${all ? 'past any of these limits' : html`at
-            <input type="number" min="1" max="100" defaultValue=${s.usageStop.percent}
+            <input type="number" name="percent" min="1" max="100" defaultValue=${s.usageStop.percent}
                 key=${`pct:${s.usageStop.percent}`} disabled=${off}
                 onChange=${(e) => save({ usageStop: { percent: Number(e.target.value) } })} />
             % of`}
@@ -275,7 +278,7 @@ export function settings(p) {
             </select></label>
         ${all ? html`<div class="orch-limits">${LIMITS.map(([w, label]) => html`
             <label key=${w}>${label}
-                <input type="number" min="1" max="100" placeholder="off"
+                <input type="number" name=${`limit-${w}`} min="1" max="100" placeholder="off"
                     defaultValue=${s.usageStop.limits[w] ?? ''} disabled=${off}
                     key=${`lim:${w}:${s.usageStop.limits[w] ?? ''}`}
                     onChange=${(e) => {
@@ -292,13 +295,27 @@ export function settings(p) {
     </div>`;
 }
 
+/** Whether a reply about this orchestrator is still about what is on screen. */
+const stillShowing = (orchId) => !!state.orch && state.orch.orchestratorId === orchId;
+
 async function saveSettings(p, patch) {
+    // A number field is keyed by its value, so that a change from another
+    // window replaces what it shows; the one just saved is replaced too, and
+    // focus goes with it unless it is put back.
+    const had = document.activeElement && document.activeElement.closest('.orch-settings')
+        ? document.activeElement.name : null;
     try {
-        state.orch = await put(`/api/sessions/${p.orchestratorId}/orchestrator`, { settings: patch });
+        const next = await put(`/api/sessions/${p.orchestratorId}/orchestrator`, { settings: patch });
+        // Saved, but the window may have moved to another session meanwhile.
+        if (stillShowing(p.orchestratorId)) state.orch = next;
     } catch (err) {
         toast(`Could not save that: ${err.message}`, 'error');
     }
     paintOrchestrator();
+    if (had && (!document.activeElement || document.activeElement === document.body)) {
+        const n = document.querySelector(`.orch-settings [name="${had}"]`);
+        if (n) n.focus();
+    }
 }
 
 async function dismiss(p, i) {
@@ -313,7 +330,8 @@ export async function resume() {
     const p = state.orch;
     if (!p) return;
     try {
-        state.orch = await post(`/api/sessions/${p.orchestratorId}/orchestrator/resume`, {});
+        const next = await post(`/api/sessions/${p.orchestratorId}/orchestrator/resume`, {});
+        if (stillShowing(p.orchestratorId)) state.orch = next;
         toast('Resumed. Queued workers start, and the orchestrator is told what is waiting.', 'ok');
     } catch (err) {
         toast(`Could not resume: ${err.message}`, 'error');

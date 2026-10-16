@@ -330,6 +330,14 @@
 :is(.op, .op-peek) .md pre { overflow-x: hidden; }
 :is(.op, .op-peek) .md .table-wrap { overflow-x: hidden; }
 :is(.op, .op-peek) .md table { width: 100%; table-layout: fixed; }
+/* Headings in somebody's markdown are headings inside a card here, not page
+   titles: a plan's "## Plan" at the browser's 1.5em was the biggest thing in the
+   drawer. And the first and last blocks lose their outer margins, which the card
+   already provides. */
+:is(.op, .op-peek) .md :is(h1, h2, h3, h4, h5, h6) { margin: var(--sp-6) 0 var(--sp-3); color: var(--text); font: 500 var(--fs-md)/var(--lh-snug) var(--sans); }
+:is(.op, .op-peek) .md :is(h1, h2) { font-size: var(--fs-base); }
+:is(.op, .op-peek) .md > :first-child { margin-top: 0; }
+:is(.op, .op-peek) .md > :last-child { margin-bottom: 0; }
 
 .op-h {
     display: flex;
@@ -380,9 +388,17 @@
 
 .op-readings { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4) var(--sp-9); min-width: 0; }
 .op-progress { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3) var(--sp-6); min-width: 0; }
-.op-strip { display: flex; flex-wrap: wrap; gap: var(--sp-1); min-width: 0; max-width: 360px; }
+/* Its own width, never shrunk to share a line with the counts (they wrap
+   under it instead) — but never wider than the line either, and then the
+   segments narrow together rather than wrap: a wrapped strip left one task on a
+   line of its own, which read as a second, different bar. */
+.op-strip { flex: none; display: flex; gap: var(--sp-1); min-width: 0; max-width: min(360px, 100%); }
 .op-strip i {
+    /* A width rather than a basis: the strip's own width is summed from its
+       items' widths, and an empty <i> with only a basis counts as nothing. */
+    flex: 0 1 auto;
     width: 20px;
+    min-width: 3px;
     height: 8px;
     border-radius: var(--r-2xs);
     background: var(--s4);
@@ -481,6 +497,9 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
 .op-need[data-answered="true"] { background: var(--s2); box-shadow: inset var(--edge-w) 0 0 var(--s6); }
 .op-need[data-answered="true"] .op-need-q { color: var(--text-2); }
 .op-need[data-busy="true"] { opacity: 0.7; }
+/* Focus waits on the card while its answer is sent (decisionCard); it is not a
+   control, so it shows no ring. */
+.op-need:focus { outline: none; }
 .op-need-q { grid-column: 1; color: var(--text); font: 400 var(--fs-base)/var(--lh-snug) var(--sans); text-wrap: pretty; }
 .op-need-from { grid-column: 1; color: var(--text-3); font-size: var(--fs-sm); }
 .op-need-act { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); min-width: 0; }
@@ -527,7 +546,9 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
    the worker has come; the stages ahead are empty, and that is where the line
    saying what it is doing goes. `--at` is the stage it is on, 1–6. */
 
-.op-matrix { --who: minmax(0, 240px); display: grid; grid-template-columns: minmax(0, 1fr); }
+/* The name column grows with the page, so a wide window shows whole titles
+   rather than the same 240px with the track's emptiness beside it. */
+.op-matrix { --who: minmax(0, clamp(200px, 26cqi, 360px)); display: grid; grid-template-columns: minmax(0, 1fr); }
 .op-cols, .op-row { display: grid; grid-template-columns: var(--who) minmax(0, 1fr); column-gap: var(--sp-6); align-items: center; }
 .op-cols { padding: 0 var(--sp-6) var(--sp-2); }
 .op-col-names > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -545,7 +566,7 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
     transition: background var(--dur-fast) var(--ease-standard);
 }
 button.op-row:hover { --row: var(--s2); }
-.op-row[aria-pressed="true"] { --row: var(--s3); }
+.op-row[aria-expanded="true"] { --row: var(--s3); }
 .op-row[data-closed="true"] { min-height: 38px; }
 .op-row[data-closed="true"] .op-name { color: var(--text-2); font-size: var(--fs-md); }
 
@@ -628,6 +649,17 @@ button.op-row:hover { --row: var(--s2); }
 .op-fold .twist { display: grid; place-items: center; width: 12px; height: 12px; color: var(--text-4); transition: transform var(--dur-fast) var(--ease-standard); }
 .op-fold[aria-expanded="true"] .twist { transform: rotate(90deg); }
 .op-fold-names { min-width: 0; overflow: hidden; color: var(--text-4); text-overflow: ellipsis; }
+/* Activity is a section, so its fold reads as the section's heading: the word
+   on the headings' line and in their type, the twist hung in the gutter to its
+   left, the hover ground reaching past both. */
+.op-activity > .op-fold {
+    width: auto;
+    margin-left: calc(-1 * (var(--sp-3) + 12px + var(--sp-4)));
+    padding-left: var(--sp-3);
+    color: var(--text-2);
+    font: 500 var(--fs-md)/var(--lh-snug) var(--sans);
+}
+.op-activity > .op-fold:hover { color: var(--text); }
 
 /* ── merge order: a real sequence, so numbered ───────────────────────── */
 
@@ -658,7 +690,15 @@ button.op-row:hover { --row: var(--s2); }
 button.op-order-t:hover { color: var(--blue); }
 .op-order-t.op-quiet { color: var(--text-4); font-size: var(--fs-sm); }
 .op-order li[data-merged="true"] .op-order-t { color: var(--text-3); }
-.op-order-rest { padding: var(--sp-2) var(--sp-6) 0 calc(var(--sp-6) + 22px + var(--sp-6)); color: var(--text-4); font-size: var(--fs-sm); }
+.op-order-rest {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    margin: var(--sp-2) var(--sp-6) 0 calc(var(--sp-6) + 22px + var(--sp-6));
+    color: var(--text-4);
+    font-size: var(--fs-sm);
+}
 
 .op-activity-body .orch-item-head { flex-wrap: wrap; row-gap: var(--sp-1); }
 .op-activity-body .orch-item-head > * { min-width: 0; }
@@ -690,7 +730,21 @@ button.op-order-t:hover { color: var(--blue); }
 .op-peek-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-3); }
 .op-peek-top .op-peek-title { flex-basis: 12ch; }
 .op-peek-top > :not(.op-peek-title) { flex: none; }
-.op-peek-title { flex: 1; min-width: 0; margin: 0; padding-top: var(--sp-2); color: var(--text); font: 400 var(--fs-xl)/var(--lh-tight) var(--sans); text-wrap: balance; }
+/* Three lines at most, the rest in its title: a long task's name at --fs-xl in a
+   narrow column took the drawer's whole first screen and hid the ask under it. */
+.op-peek-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    margin: 0;
+    padding-top: var(--sp-2);
+    color: var(--text);
+    font: 400 var(--fs-xl)/var(--lh-tight) var(--sans);
+    text-wrap: balance;
+}
 .op-peek-title:focus-visible { outline: none; }
 .op-peek-top .lbtn { margin-top: var(--sp-2); background: var(--s3); color: var(--text-2); }
 .op-peek-top .lbtn:hover { background: var(--s4); color: var(--text); }
