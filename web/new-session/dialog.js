@@ -34,7 +34,7 @@ import {
 import {
     browseNote, browseTo, cancelMkdir, setPickerTab, startMkdir, submitMkdir,
 } from './picker.js';
-import { describeCronSoon, paintGateFields, paintNewAttach, setWhen } from './trigger.js';
+import { describeCronSoon, paintGateFields, paintNewAttach, paintNewSend, setWhen } from './trigger.js';
 import { openPublish } from '../github/publish.js';
 import { prepareTemplates } from './templates.js';
 
@@ -247,6 +247,9 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // are the fields this dialog always collects, and refusing to schedule
     // something you had not saved first would be an extra step for no reason.
     dom.newSched.hidden = schedMode;
+    // Send to orchestrator, on Schedule's terms: offered from Start and from a
+    // draft, gone in schedule mode (and in template editing — templates.js).
+    dom.newOrchSend.hidden = schedMode;
     dom.newSchedSave.hidden = !schedMode;
     dom.newSchedSave.textContent = sched ? 'Save changes' : 'Save schedule';
 
@@ -480,6 +483,9 @@ function paintNewOrch() {
     dom.newOrchNote.textContent = clash
         ? `${ORCH_NOTE} In plan mode every worker it starts waits on your approval first.`
         : ORCH_NOTE;
+    // A worker cannot be an orchestrator, so the box being ticked is what
+    // disables Send to orchestrator — said on the button, as attachments are.
+    paintNewSend();
 }
 
 /**

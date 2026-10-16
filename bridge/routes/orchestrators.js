@@ -14,18 +14,97 @@
 // starting sessions in worktrees and answering their permission prompts is the
 // machine acting on itself, not something to reach in for from a phone.
 //
+// Tasks — a draft, or the Start dialog as it stood, handed to an orchestrator —
+// are the user's side and stay open to a paired phone, as starting a draft and
+// `/send` do: filing one starts no session, it gives the orchestrator something
+// to decide about. What a phone may not ask for here is what it may not ask for
+// anywhere: a forbidden permission mode, or a worktree.
+//
+// Also `GET /api/orchestrators`, the list the Send-to-orchestrator picker draws.
+//
 // Asked before session.js in ROUTES, though the tails do not overlap.
 
+const { broadcast } = require('../events');
 const { NEXT, readJson, send } = require('../http');
 const orchestration = require('../orchestration');
 const { REPORT_KINDS } = require('../orchestrators');
 const { PERMISSION_MODES } = require('../runner');
+const { draftFields, draftOut, draftsPayload } = require('./drafts');
 
 let store = null;
 let index = null;
+let drafts = null;
+let modeRefusal = null;
+let normalizeMode = null;
 
 function init(deps) {
-    ({ orchestrators: store, index } = deps);
+    ({ orchestrators: store, index, drafts, modeRefusal, normalizeMode } = deps);
+}
+
+/** A prompt's first line, as a title for something that was never given one. */
+const firstLine = (s) => String(s || '').split('\n').map(l => l.trim()).find(Boolean)?.slice(0, 80) || null;
+
+/**
+ * What a task-filing body asks for, validated, or why not.
+ *
+ * Two sources, which is what lets one route serve the Drafts board, the draft
+ * editor and the Start dialog. `fields` is the dialog's create call and goes
+ * through drafts' own `draftFields`, so it is held to exactly what saving a
+ * draft would be. `draftId` alone uses the stored draft — run through the same
+ * check, because the file is hand-editable and a directory can move after it is
+ * saved. Both: the fields win and the draft is consumed (an edited draft sent
+ * without saving first).
+ *
+ * The two Start-only fields are decided here. A `worktree {name, base?}` is
+ * carried as a hint the spawn honours — refused remotely, as creating a session
+ * in one is. `orchestrator: true` is refused: a worker cannot be one.
+ *
+ * @returns {{task: object, draftId: string|null} | {error: string, status: number, remote?: boolean}}
+ */
+function taskSource(body, who) {
+    const b = body && typeof body === 'object' ? body : {};
+    const draftId = typeof b.draftId === 'string' && b.draftId ? b.draftId : null;
+    const f = b.fields && typeof b.fields === 'object' ? b.fields : null;
+    if (!f && !draftId) return { error: 'send a draftId, or the fields of a create call', status: 400 };
+    if (f && f.orchestrator === true) {
+        return { error: 'a task cannot start an orchestrator — orchestrators only go one level deep', status: 400 };
+    }
+
+    let worktree = null;
+    if (f && f.worktree != null) {
+        if (who.remote) {
+            return { error: 'a worktree cannot be created remotely — start it at the machine itself',
+                status: 403, remote: true };
+        }
+        const wt = f.worktree;
+        if (typeof wt !== 'object' || typeof wt.name !== 'string' || !wt.name.trim()) {
+            return { error: 'worktree must be an object {name, base?}', status: 400 };
+        }
+        worktree = { name: wt.name.trim(), base: typeof wt.base === 'string' && wt.base.trim() ? wt.base.trim() : null };
+    }
+
+    let draft = null;
+    if (draftId) {
+        draft = drafts.get(draftId);
+        if (!draft) return { error: 'draft not found', status: 404 };
+    }
+    const v = draftFields(f || draft, who, { partial: false });
+    if (v.error) return v;
+    const fields = v.fields;
+    // The everyday window leaves `test` out of the dialog's body (the box is
+    // dev-only), so an edited test draft must not come back unflagged.
+    if (f && draft && f.test === undefined) fields.test = !!draft.test;
+    // The dialog's name for it, else the draft's, else its first line — what
+    // "from your draft '…'" says on the page and in the worker's brief.
+    const title = fields.title || (draft && draft.title) || null;
+    return {
+        draftId: draft ? draft.id : null,
+        task: {
+            ...fields, title, worktree,
+            origin: { from: draft ? 'draft' : 'dialog', draftId: draft ? draft.id : null,
+                title: title || firstLine(fields.prompt) },
+        },
+    };
 }
 
 /** Run `fn`, turning a thrown refusal into its status and sentence. */
@@ -41,7 +120,10 @@ async function guarded(res, fn) {
 
 const strOr = (v, d = null) => (typeof v === 'string' && v.trim() ? v.trim() : d);
 
-async function handle(req, res, url, pathname, seg) {
+async function handle(req, res, url, pathname, seg, who) {
+    if (seg[1] === 'orchestrators' && !seg[2] && req.method === 'GET') {
+        return send(res, 200, { orchestrators: orchestration.list() });
+    }
     if (seg[1] !== 'sessions' || !seg[2]) return NEXT;
     const id = seg[2];
 
@@ -109,6 +191,36 @@ async function handle(req, res, url, pathname, seg) {
 
     if (sub === 'resume' && req.method === 'POST') return guarded(res, () => orchestration.resume(id));
 
+    // Hand it a task. Validated before the orchestrator is looked up, so a
+    // refused mode is a 403 whatever the id — PATCH /api/drafts/:id's order and
+    // reason. Filed first, the draft removed second: a refusal keeps the draft.
+    if (sub === 'tasks' && !seg[5] && req.method === 'POST') {
+        const v = taskSource(await readJson(req), who);
+        if (v.error) {
+            return send(res, v.status, v.remote ? { error: v.error, remote: true } : { error: v.error });
+        }
+        return guarded(res, () => {
+            const out = orchestration.fileTask(id, v.task);
+            const draftRemoved = !!v.draftId && drafts.remove(v.draftId);
+            if (draftRemoved) broadcast('drafts-changed', draftsPayload());
+            return { ok: true, ...out, draftRemoved };
+        });
+    }
+
+    // Take it back: it becomes a draft again. A phone may, as it may save a
+    // draft — but not one in a mode it could not have saved.
+    if (sub === 'tasks' && seg[5] && seg[6] === 'withdraw' && !seg[7] && req.method === 'POST') {
+        const item = store.item(id, seg[5]);
+        if (item && item.task) {
+            const refusal = modeRefusal(normalizeMode(item.task.permissionMode), who);
+            if (refusal) return send(res, 403, { error: refusal, remote: true });
+        }
+        return guarded(res, () => {
+            const out = orchestration.withdrawTask(id, seg[5]);
+            return { ok: true, draft: draftOut(out.draft) };
+        });
+    }
+
     if (sub === 'workers' && req.method === 'GET') {
         const p = orchestration.payload(id);
         if (!p.enabled) return send(res, 404, { error: 'that session is not an orchestrator' });
@@ -123,6 +235,9 @@ async function handle(req, res, url, pathname, seg) {
 
     if (sub === 'spawn') {
         return guarded(res, () => orchestration.spawn(id, {
+            // A task item to start: the user's settings come from it, and
+            // `prompt` becomes optional — see spawnOptsFromTask.
+            task: strOr(body.task),
             prompt: strOr(body.prompt),
             title: strOr(body.title),
             cwd: strOr(body.cwd),
@@ -142,7 +257,10 @@ async function handle(req, res, url, pathname, seg) {
         orchestration.emit(id);
         return send(res, 200, { items, left: store.unread(id).length });
     }
-    if (sub === 'send') return guarded(res, () => orchestration.sendTo(id, String(body.worker || ''), body.text));
+    if (sub === 'send') {
+        return guarded(res, () => orchestration.sendTo(id, String(body.worker || ''), body.text,
+            { task: strOr(body.task) }));
+    }
     if (sub === 'answer') {
         const decision = String(body.decision || '');
         if (!['allow', 'allow-always', 'deny'].includes(decision)) {
@@ -179,4 +297,4 @@ async function handle(req, res, url, pathname, seg) {
     return NEXT;
 }
 
-module.exports = { init, handle };
+module.exports = { init, handle, taskSource };

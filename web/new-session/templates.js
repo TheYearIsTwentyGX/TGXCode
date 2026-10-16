@@ -110,6 +110,7 @@ export function prepareTemplates({ plain, template }) {
         dom.newGo.hidden = true;
         dom.newSave.hidden = true;
         dom.newSched.hidden = true;
+        dom.newOrchSend.hidden = true;
         setNewStartOptions({ worktree: template.worktree, orchestrator: template.orchestrator });
         paintScope(template.project);
     }

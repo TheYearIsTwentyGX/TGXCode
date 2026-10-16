@@ -5,7 +5,8 @@
 //
 // `draftOut`, `draftsPayload` and `draftFields` came with the routes.
 // `draftsPayload` is lent to sessions.js and schedules.js, which both consume a
-// draft and have to tell the windows it went. `draftFields` asks modeRefusal()
+// draft and have to tell the windows it went — and to orchestrators.js, which
+// consumes one by handing it to an orchestrator as a task, and gives one back. `draftFields` asks modeRefusal()
 // at *write* time, so a phone cannot stash a draft it would not be allowed to start.
 //
 // One of the route modules server.js's `api()` asks in turn — see the note above
@@ -231,4 +232,4 @@ async function handle(req, res, url, pathname, seg, who) {
     return NEXT;
 }
 
-module.exports = { init, handle, draftsPayload, draftFields };
+module.exports = { init, handle, draftsPayload, draftFields, draftOut };

@@ -37,6 +37,7 @@ const { execFileSync } = require('child_process');
 const {
     Orchestrators, sortInbox, shouldNudge, usageTrip, usageTrips, resumeAtFor, cleanSettings, describeCounts,
     DEFAULT_SETTINGS, decisionId, cleanMergeOrder, MAX_DECISIONS,
+    cleanTask, spawnOptsFromTask, MAX_OPEN_TASKS,
 } = require('../bridge/orchestrators');
 const orchestration = require('../bridge/orchestration');
 
@@ -280,11 +281,12 @@ function harness(name) {
         runners,
         get: (id) => runners.get(id) || null,
         ensure: (id) => { if (!runners.has(id)) runners.set(id, new FakeRunner(id)); return runners.get(id); },
-        create: ({ sessionId, prompt }) => {
+        create: (args) => {
+            const { sessionId } = args;
             const r = new FakeRunner(sessionId);
             r.state = 'busy';
             runners.set(sessionId, r);
-            created.push({ sessionId, prompt });
+            created.push(args);
             return { sessionId };
         },
         recycle: () => true,
@@ -389,6 +391,102 @@ function harness(name) {
     s.flush();
     assert.ok(new Orchestrators({ file: fileOf('settled') }).item('O', row.id).settledAt >= before);
     ok('a settled inbox item records when');
+}
+
+
+// --- tasks: a draft handed to an orchestrator --------------------------------
+//
+// What these guard is the promise the feature makes the user: **what they chose
+// in the dialog is what the worker gets**, whatever the orchestrator passes, and
+// **what they wrote is never lost** — not to the inbox trim, not to a spawn that
+// fails, not to the orchestrator going away.
+
+{
+    const t = cleanTask({
+        prompt: 'Fix the thing', cwd: '/w', title: '', model: 'haiku', effort: 'low',
+        permissionMode: 'plan', test: 1, worktree: { name: ' wt ', base: 'main' }, extra: 'x',
+        origin: { from: 'draft', draftId: 'D1', title: 'Fix', junk: 1 },
+    });
+    assert.deepStrictEqual(t, {
+        prompt: 'Fix the thing', cwd: '/w', title: null, model: 'haiku', effort: 'low',
+        permissionMode: 'plan', test: true, worktree: { name: 'wt', base: 'main' },
+        origin: { from: 'draft', draftId: 'D1', title: 'Fix' },
+    }, 'only the known fields, cleaned');
+    assert.strictEqual(cleanTask({ prompt: '', cwd: '/w' }), null, 'no prompt is no task');
+    assert.strictEqual(cleanTask({ prompt: 'p' }), null, 'no directory is no task');
+    assert.strictEqual(cleanTask({ prompt: 'p', cwd: '/w', origin: { from: 'phone' } }).origin, null,
+        'an origin that is neither a draft nor the dialog is dropped');
+    ok('a task payload keeps a draft\'s fields and nothing else');
+}
+
+{
+    const task = { prompt: 'user words', cwd: '/w', title: 'Mine', model: 'haiku', effort: null,
+        permissionMode: 'plan', test: true, worktree: { name: 'named', base: 'dev' },
+        origin: { from: 'draft', draftId: 'D', title: 'Mine' } };
+    const a = spawnOptsFromTask(task, {});
+    assert.deepStrictEqual(a, { prompt: 'user words', title: 'Mine', cwd: '/w', model: 'haiku', effort: null,
+        permissionMode: 'plan', worktree: 'named', worktreeBase: 'dev', test: true, origin: task.origin });
+    const b = spawnOptsFromTask(task, { prompt: 'with context', title: 'Theirs', cwd: '/elsewhere',
+        model: 'opus', effort: 'high', permissionMode: 'auto', worktree: false });
+    assert.strictEqual(b.prompt, 'with context', 'the orchestrator may add context');
+    assert.strictEqual(b.title, 'Theirs');
+    assert.strictEqual(b.cwd, '/w', 'the user\'s directory wins');
+    assert.strictEqual(b.model, 'haiku', 'the user\'s model wins');
+    assert.strictEqual(b.effort, 'high', 'a gap the user left is the orchestrator\'s to fill');
+    assert.strictEqual(b.permissionMode, 'plan', 'the user\'s mode wins');
+    assert.strictEqual(b.worktree, false, 'the worktree is the orchestrator\'s call');
+    assert.strictEqual(b.worktreeBase, null, 'and the hint\'s base goes with the hint');
+    assert.strictEqual(spawnOptsFromTask({ ...task, worktree: null }, {}).worktree, null,
+        'no hint: the orchestrator\'s setting decides');
+    ok('a spawn from a task keeps the user\'s settings and lets the orchestrator fill gaps');
+}
+
+{
+    assert.strictEqual(describeCounts([{ kind: 'task' }, { kind: 'task' }, { kind: 'turn' }]),
+        '1 turn report, 2 tasks from the user');
+    ok('a nudge names the tasks waiting');
+}
+
+{
+    const s = new Orchestrators({ file: fileOf('tasks') });
+    s.enable('O');
+    const t = s.pushTask('O', { prompt: 'x'.repeat(9000), cwd: '/w', permissionMode: 'auto',
+        origin: { from: 'dialog', title: 'Big' } });
+    assert.strictEqual(t.kind, 'task');
+    assert.strictEqual(t.text.length, 8000, 'the item text is capped');
+    assert.strictEqual(t.task.prompt.length, 9000, 'the prompt itself is not');
+    assert.throws(() => s.pushTask('O', { prompt: '', cwd: '/w' }), /prompt and a directory/);
+
+    // Read but not started is still open, and never trimmed.
+    s.pull('O', 1);
+    assert.strictEqual(s.item('O', t.id).status, 'read');
+    for (let n = 0; n < 320; n++) s.push('O', { kind: 'update', workerId: 'W', text: `u${n}` });
+    s.pull('O', 50);
+    for (let n = 0; n < 5; n++) s.push('O', { kind: 'update', workerId: 'W', text: `v${n}` });
+    assert.ok(s.item('O', t.id), 'an open task survives the trim, read or not');
+    assert.strictEqual(s.openTasks('O').length, 1);
+
+    for (let n = 1; n < MAX_OPEN_TASKS; n++) s.pushTask('O', { prompt: `t${n}`, cwd: '/w' });
+    assert.throws(() => s.pushTask('O', { prompt: 'one too many', cwd: '/w' }), (e) => e.refusal);
+    s.settle('O', t.id, { outcome: 'spawned', by: 'orchestrator' });
+    const room = s.pushTask('O', { prompt: 'room again', cwd: '/w' });
+    assert.ok(room, 'a started task frees its slot');
+
+    s.settle('O', room.id, { outcome: 'spawned', by: 'orchestrator' });
+    s.reopen('O', room.id);
+    assert.strictEqual(s.item('O', room.id).status, 'read', 'a failed start gives the task back');
+    assert.strictEqual(s.item('O', room.id).settledAt, null);
+
+    // Origin survives the file, on a worker and a queued spawn alike.
+    const origin = { from: 'draft', draftId: 'D', title: 'From a draft' };
+    s.addWorker('O', { id: 'W1', title: 'w', origin });
+    s.queueSpawn('O', { prompt: 'later', title: 'q', opts: {}, origin });
+    s.flush();
+    const again = new Orchestrators({ file: fileOf('tasks') });
+    assert.deepStrictEqual(again.worker('O', 'W1').origin, origin);
+    assert.deepStrictEqual(again.get('O').pendingSpawns[0].origin, origin);
+    assert.strictEqual(again.item('O', room.id).task.prompt, 'room again');
+    ok('tasks are filed, capped, never trimmed while open, and their origin survives the file');
 }
 
 (async () => {
@@ -805,6 +903,139 @@ function harness(name) {
         assert.strictEqual(seen[0].workers[0].pr.number, 41);
         events.clients.delete('probe-p');
         ok('a PR moving re-broadcasts its orchestrator, once');
+    }
+
+    {
+        // A task through its whole life, against the fake pool.
+        const h = harness('task-flow');
+        const made = [];
+        const fakeDrafts = { create: (d) => { const row = { id: `D${made.length + 1}`, ...d }; made.push(row); return row; } };
+        let changed = 0;
+        orchestration.init({ ...h.deps, drafts: fakeDrafts, draftsChanged: () => { changed++; } });
+        orchestration.enable('O', null);
+        const orch = h.pool.ensure('O');
+
+        const origin = { from: 'draft', draftId: 'D0', title: 'Tidy the rail' };
+        const filed = orchestration.fileTask('O', { prompt: 'Tidy the rail', cwd: home, model: 'haiku',
+            effort: 'low', permissionMode: 'plan', test: true, origin });
+        assert.strictEqual(filed.paused, false);
+        await sleep(2200);
+        assert.strictEqual(orch.sent.length, 1, 'a task wakes an idle orchestrator');
+        assert.match(orch.sent[0], /1 task from the user/);
+        const p = orchestration.payload('O');
+        assert.strictEqual(p.openTasks.length, 1);
+        assert.strictEqual(p.openTasks[0].prompt, undefined, 'the payload row leaves the long prompt out');
+        assert.strictEqual(p.openTasks[0].model, 'haiku');
+
+        // The orchestrator starts it, passing settings of its own; the user's win.
+        h.store.pull('O', 5);
+        const out = await orchestration.spawn('O', { task: filed.item.id, model: 'opus', permissionMode: 'auto',
+            worktree: false });
+        assert.strictEqual(out.queued, false);
+        const c = h.created.find(x => x.sessionId === out.sessionId);
+        assert.strictEqual(c.model, 'haiku');
+        assert.strictEqual(c.effort, 'low');
+        assert.strictEqual(c.permissionMode, 'plan');
+        assert.strictEqual(c.prompt, 'Tidy the rail');
+        assert.strictEqual(h.flagRows.get(out.sessionId).test, true, 'a test draft makes a test worker');
+        assert.deepStrictEqual(h.store.worker('O', out.sessionId).origin, origin);
+        assert.deepStrictEqual(orchestration.payload('O').workers[0].origin, origin);
+        assert.match(orchestration.roleOf(out.sessionId).brief, /began as the user's draft "Tidy the rail"/);
+        assert.strictEqual(h.store.item('O', filed.item.id).outcome, 'spawned');
+        assert.strictEqual(orchestration.payload('O').openTasks.length, 0);
+        await assert.rejects(orchestration.spawn('O', { task: filed.item.id, worktree: false }),
+            (e) => e.status === 409, 'a task starts once');
+        await assert.rejects(orchestration.spawn('O', { task: 'nope', worktree: false }),
+            (e) => e.status === 404);
+
+        // Take back: unread, quietly; read, with a note for the orchestrator.
+        const quiet = orchestration.fileTask('O', { prompt: 'Second thoughts', cwd: home, title: 'Second' });
+        const back = orchestration.withdrawTask('O', quiet.item.id);
+        assert.strictEqual(back.draft.prompt, 'Second thoughts');
+        assert.strictEqual(back.draft.title, 'Second');
+        assert.strictEqual(h.store.item('O', quiet.item.id).outcome, 'withdrawn');
+        assert.ok(!h.store.unread('O').some(i => i.kind === 'note'), 'nothing to tell about an unread task');
+        const read = orchestration.fileTask('O', { prompt: 'Seen it', cwd: home });
+        h.store.pull('O', 5);
+        orchestration.withdrawTask('O', read.item.id);
+        assert.ok(h.store.unread('O').some(i => i.kind === 'note' && /took back/.test(i.text)),
+            'an orchestrator that read it is told');
+        await assert.rejects(orchestration.spawn('O', { task: read.item.id, worktree: false }),
+            /took that task back/);
+        assert.throws(() => orchestration.withdrawTask('O', filed.item.id), (e) => e.status === 409,
+            'a started task cannot be taken back');
+
+        // Paused: the task is filed and waits; no nudge.
+        orch.sent.length = 0;
+        h.store.setPaused('O', { reason: 'test' });
+        const held = orchestration.fileTask('O', { prompt: 'While paused', cwd: home });
+        assert.strictEqual(held.paused, true);
+        await sleep(2200);
+        assert.strictEqual(orch.sent.length, 0, 'a paused orchestrator is not woken');
+        h.store.setPaused('O', null);
+
+        // Over the cutoff: paused before the task could wake it.
+        h.store.setSettings('O', { usageStop: { enabled: true, percent: 50, window: 'five_hour' } });
+        h.setWindows([{ type: 'five_hour', usedPercent: 80 }]);
+        const tripped = orchestration.fileTask('O', { prompt: 'Over the line', cwd: home });
+        assert.strictEqual(tripped.paused, true, 'the cutoff is checked before filing');
+        h.setWindows([]);
+        h.store.setPaused('O', null);
+
+        // Going away: what it never started goes back to Drafts.
+        const before = made.length;
+        changed = 0;
+        orchestration.disable('O');
+        assert.strictEqual(made.length - before, 2, 'both open tasks became drafts again');
+        assert.ok(made.slice(before).some(d => d.prompt === 'While paused'));
+        assert.ok(changed > 0, 'and the windows were told');
+        ok('a task wakes the orchestrator, starts once with the user\'s settings, and is never lost');
+    }
+
+    {
+        // The route's validation, against drafts' own draftFields.
+        const draftsRoute = require('../bridge/routes/drafts');
+        const orchRoute = require('../bridge/routes/orchestrators');
+        const stored = { id: 'D9', cwd: home, prompt: 'From the board\nmore', title: null, model: null,
+            effort: null, permissionMode: 'bypassPermissions', test: false };
+        const fakeDrafts = { get: (id) => (id === 'D9' ? stored : null) };
+        const modeRefusal = (m, who) => (who.remote && m === 'bypassPermissions' ? 'no' : null);
+        const deps = { drafts: fakeDrafts, modeRefusal, normalizeMode: (m) => m || 'auto' };
+        draftsRoute.init(deps);
+        orchRoute.init({ ...deps, orchestrators: null, index: null });
+        const local = { remote: false };
+        const remote = { remote: true };
+
+        const a = orchRoute.taskSource({ draftId: 'D9' }, local);
+        assert.strictEqual(a.draftId, 'D9');
+        assert.deepStrictEqual(a.task.origin, { from: 'draft', draftId: 'D9', title: 'From the board' },
+            'an untitled draft is named by its first line');
+        assert.strictEqual(a.task.permissionMode, 'bypassPermissions', 'a local caller keeps the mode it chose');
+        assert.strictEqual(orchRoute.taskSource({ draftId: 'D9' }, remote).status, 403,
+            'a phone cannot hand over a mode it could not start');
+        assert.strictEqual(orchRoute.taskSource({ draftId: 'gone' }, local).status, 404);
+        assert.strictEqual(orchRoute.taskSource({}, local).status, 400);
+
+        const f = { cwd: home, prompt: 'From the dialog', title: 'Named', model: 'haiku', permissionMode: 'plan' };
+        const b = orchRoute.taskSource({ fields: f }, local);
+        assert.strictEqual(b.draftId, null);
+        assert.strictEqual(b.task.origin.from, 'dialog');
+        assert.strictEqual(b.task.title, 'Named');
+        const both = orchRoute.taskSource({ draftId: 'D9', fields: f }, local);
+        assert.strictEqual(both.task.prompt, 'From the dialog', 'edited fields win over the stored draft');
+        assert.strictEqual(both.draftId, 'D9', 'and the draft is still consumed');
+        assert.strictEqual(both.task.origin.title, 'Named');
+
+        assert.strictEqual(orchRoute.taskSource({ fields: { ...f, orchestrator: true } }, local).status, 400,
+            'a worker cannot be an orchestrator');
+        const wt = orchRoute.taskSource({ fields: { ...f, worktree: { name: 'x', base: 'main' } } }, local);
+        assert.deepStrictEqual(wt.task.worktree, { name: 'x', base: 'main' }, 'a worktree is carried as a hint');
+        assert.strictEqual(orchRoute.taskSource({ fields: { ...f, worktree: { name: 'x' } } }, remote).status, 403,
+            'but not from a phone');
+        assert.strictEqual(orchRoute.taskSource({ fields: { ...f, worktree: {} } }, local).status, 400);
+        assert.strictEqual(orchRoute.taskSource({ fields: { ...f, cwd: '/definitely/not/here' } }, local).status, 400,
+            'the directory is checked as saving a draft checks it');
+        ok('the task route takes a draft, the dialog\'s fields or both, and refuses what a draft would');
     }
 })().then(() => {
     fs.rmSync(home, { recursive: true, force: true });

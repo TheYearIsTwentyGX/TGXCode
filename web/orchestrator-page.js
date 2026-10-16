@@ -15,6 +15,10 @@
 //   - **Needs you**: what is waiting on the user rather than on the orchestrator
 //     — its open decisions (the brief's `decisions`, answerable here), a pause, its
 //     own pending ask, a worker nobody is answering, a worker that failed.
+//   - **Tasks from you**: drafts (or the Start dialog) handed over and not yet
+//     started, with their age and Take back — right under Needs you, because a
+//     task the orchestrator has quietly not picked up is exactly what a person
+//     coming back would otherwise never notice.
 //   - **Workers**: a stage matrix. One row per worker in the order it started —
 //     never re-sorted by state, so a status tick does not move rows under the
 //     pointer — with a track as far as it has got and, at the stage it is on,
@@ -71,6 +75,7 @@ const ui = {
     answering: new Set(),      // request ids in flight from the drawer
     note: null,                // {requestId, how: 'approve'|'reject'} — a note being written
     reply: null,               // the decision id whose reply field is open
+    taking: new Set(),         // task ids being taken back
     sending: new Set(),        // decision ids whose answer is on its way
     digest: new Map(),         // worker id → {at, state, fields, error}
 };
@@ -239,6 +244,7 @@ function pageTree(p) {
                 <h2 class="op-h">Needs you <span>${needs.filter(n => !(n.decision && n.decision.answeredAt)).length}</span></h2>
                 <div class="op-needs">${needs.map(n => needCard(p, n, now))}</div>
             </section>` : null}
+            ${tasks(p, now)}
             ${brief(p)}
             ${matrix(p, now)}
             ${order(p)}
@@ -440,6 +446,66 @@ function brief(p) {
     </section>`;
 }
 
+// ── tasks from you ─────────────────────────────────────────────────────────
+
+// Past this a task the orchestrator has not started is drawn the way Needs you
+// is — amber — rather than as something that has only just arrived.
+const TASK_STALE_MS = 15 * 60_000;
+
+/** "from your draft", "from the Start dialog": where a task or worker came from. */
+function originWord(o) {
+    if (!o) return '';
+    return o.from === 'draft' ? `from your draft${o.title ? ` \u201c${o.title}\u201d` : ''}`
+        : `from the Start dialog${o.title ? ` (\u201c${o.title}\u201d)` : ''}`;
+}
+
+function tasks(p, now) {
+    const list = p.openTasks || [];
+    if (!list.length) return null;
+    return html`<section class="op-sec" aria-label="Tasks from you">
+        <h2 class="op-h">Tasks from you <span>${`${list.length} not started`}</span></h2>
+        <div class="op-needs">${list.map(t => taskCard(p, t, now))}</div>
+    </section>`;
+}
+
+function taskCard(p, t, now) {
+    const age = now - t.at;
+    const title = t.title || (t.origin && t.origin.title) || clip(t.text, 80);
+    const seen = t.status === 'new' ? 'not read yet' : 'read, not started';
+    const settings = [t.model || 'inherit', t.effort ? `${t.effort} effort` : null, t.permissionMode,
+        t.worktree ? `worktree ${t.worktree.name}` : null].filter(Boolean).join(' · ');
+    const busy = ui.taking.has(t.id);
+    return html`<div key=${t.id} class="op-need op-task" data-tone=${age > TASK_STALE_MS ? null : 'task'}
+        data-busy=${String(busy)}>
+        <div class="op-need-q" title=${t.text}>${title}${t.test ? html` <span class="tag-test">test</span>` : null}</div>
+        <div class="op-need-from">${`${originWord(t.origin) || 'Handed over'} · ${agoWords(age)} · ${seen}`}
+            <span class="op-quiet">${` · ${settings}`}</span></div>
+        <div class="op-need-act">
+            <button class="lbtn" type="button" disabled=${busy}
+                title="Put this back in Drafts — the orchestrator will not start it"
+                onClick=${() => takeBack(p, t)}>${busy ? 'Taking back' : 'Take back'}</button>
+        </div>
+    </div>`;
+}
+
+async function takeBack(p, t) {
+    ui.taking.add(t.id);
+    paintOrchPage();
+    try {
+        await post(`/api/sessions/${encodeURIComponent(p.orchestratorId)}/orchestrator/tasks/${encodeURIComponent(t.id)}/withdraw`);
+        toast('Taken back — it is in Drafts again.', 'ok');
+    } catch (err) {
+        toast(`Could not take it back: ${err.message}`, 'error');
+    } finally {
+        ui.taking.delete(t.id);
+        paintOrchPage();
+    }
+}
+
+/** The small "draft" chip on a worker or queued row that began as one of yours. */
+const fromTag = (o) => (o ? html`<span class="op-from" title=${`Started ${originWord(o)}`}>${
+    o.from === 'draft' ? 'draft' : 'yours'}</span>` : null);
+
 // ── the stage matrix ───────────────────────────────────────────────────────
 
 function matrix(p, now) {
@@ -458,7 +524,7 @@ function matrix(p, now) {
             ${live.map(w => row(p, w, now))}
             ${p.pendingSpawns.map((q, i) => html`<div key=${q.id} class="op-row op-queued">
                 <span class="op-who" title=${q.title || ''}><span class="op-dot" data-s="queued"></span>
-                    <span class="op-name">${q.title || 'untitled'}</span></span>
+                    <span class="op-name">${fromTag(q.origin)}${q.title || 'untitled'}</span></span>
                 <span class="op-track"><span class="op-say" title=${queuedSay(i)}><b>${queuedSay(i)}</b></span></span>
             </div>`)}
             ${done.length ? html`<button key="fold" class="op-fold" type="button" aria-expanded=${String(ui.finished)}
@@ -498,7 +564,7 @@ function row(p, w, now) {
         <span class="op-who" title=${[w.title, branch].filter(Boolean).join('\n')}>
             <span class="op-dot" data-s=${DOT[stage.tone] || 'idle'}></span>
             <span class="op-who-text">
-                <span class="op-name">${w.title || 'untitled worker'}</span>
+                <span class="op-name">${fromTag(w.origin)}${w.title || 'untitled worker'}</span>
                 ${branch ? html`<span class="op-branch">${branch}</span>` : null}
             </span>
         </span>
