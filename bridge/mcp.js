@@ -655,6 +655,27 @@ const GET_USAGE = {
     inputSchema: { type: 'object', properties: {} },
 };
 
+const SET_AUTO_RESUME = {
+    name: 'set_auto_resume',
+    title: 'Carry on after a usage stop, or not',
+    description: [
+        'Turn this orchestrator\'s own auto-resume on or off. On: after the usage cutoff',
+        'stops you and your workers, you are woken a minute after the window that tripped',
+        'it resets. Off: everything waits for the user to press Resume. Takes effect now,',
+        'including while already paused. It changes this orchestrator only, not the user\'s',
+        'default for new ones. The user sees that you changed it, and why, and their next',
+        'toggle on the page overrides yours.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            on: { type: 'boolean' },
+            reason: { type: 'string', description: 'Why, for the user (up to 200 characters).' },
+        },
+        required: ['on'],
+    },
+};
+
 const SET_SUMMARY = {
     name: 'set_summary',
     title: 'Update your brief for the user',
@@ -728,7 +749,7 @@ const REPORT = {
 };
 
 const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WORKER, ANSWER_WORKER,
-    READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_SUMMARY];
+    READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY];
 
 const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
@@ -1058,7 +1079,7 @@ async function callSchedule(id, args) {
 // Orchestration calls
 // ---------------------------------------------------------------------------
 
-const orchRoute = (sub) => `/api/sessions/${encodeURIComponent(SESSION_ID)}/orchestrator/${sub}`;
+const orchRoute = (sub) => `/api/sessions/${encodeURIComponent(SESSION_ID)}/orchestrator${sub ? `/${sub}` : ''}`;
 
 async function orchCall(id, method, sub, body) {
     if (!SESSION_ID) return { failed: toolError(id, 'this session does not know its own id') };
@@ -1219,12 +1240,42 @@ async function callGetUsage(id) {
         lines.push(c.autoResume
             ? 'After a stop, you are woken a minute after the window resets.'
             : 'After a stop, everything waits for the user to resume it.');
+        lines.push(`${autoResumeWho(c.autoResumeBy)} set_auto_resume changes it.`);
     }
     if (body.paused) {
         lines.push(`PAUSED: ${body.paused.reason}${body.paused.resumeAt
             ? ` — carries on at ${new Date(body.paused.resumeAt).toLocaleString()}` : ''}`);
     }
     return say(id, lines.join('\n'));
+}
+
+/** Who set auto-resume, as a sentence for `get_usage`. */
+function autoResumeWho(by) {
+    if (!by) return 'That is the default this orchestrator started with.';
+    const who = by.by === 'agent' ? 'you' : 'the user';
+    return `Set by ${who}${by.at ? ` ${ago(by.at)}` : ''}${by.reason ? ` (${by.reason})` : ''}.`;
+}
+
+async function callSetAutoResume(id, args) {
+    if (typeof args.on !== 'boolean') return toolError(id, '`on` must be true or false');
+    const body = { settings: { usageStop: { autoResume: args.on } }, by: 'agent' };
+    if (typeof args.reason === 'string' && args.reason.trim()) body.reason = args.reason.trim();
+    const { failed, body: o } = await orchCall(id, 'PUT', '', body);
+    if (failed) return failed;
+    const u = (o.settings && o.settings.usageStop) || {};
+    let text = `Auto-resume ${u.autoResume ? 'on' : 'off'}.`;
+    if (o.paused) {
+        text += o.paused.resumeAt
+            ? ` You are paused; you will be woken at ${new Date(o.paused.resumeAt).toLocaleString()}.`
+            : ' You are paused, and stay paused until the user resumes.';
+    } else if (u.enabled === false) {
+        text += ' The usage cutoff itself is off, so nothing stops you to begin with.';
+    } else {
+        text += u.autoResume
+            ? ' If the usage cutoff stops you, you will be woken a minute after the window resets.'
+            : ' If the usage cutoff stops you, everything waits for the user to resume it.';
+    }
+    return say(id, `${text} The user can see you changed it.`);
 }
 
 async function callSetSummary(id, args) {
@@ -1252,7 +1303,7 @@ const ROLE_CALLS = {
         spawn_worker: callSpawnWorker, list_workers: callListWorkers, next_message: callNextMessage,
         send_to_worker: callSendToWorker, answer_worker: callAnswerWorker, read_worker: callReadWorker,
         stop_worker: callStopWorker, close_worker: callCloseWorker, get_usage: callGetUsage,
-        set_summary: callSetSummary,
+        set_auto_resume: callSetAutoResume, set_summary: callSetSummary,
     },
     worker: { report_to_orchestrator: callReport },
 };

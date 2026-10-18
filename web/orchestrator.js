@@ -256,6 +256,19 @@ export function clockAt(ms) {
     return `${day} (in ${mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`})`;
 }
 
+/**
+ * Under the auto-resume box, when the orchestrator set it for itself with
+ * `set_auto_resume`: who, when and why. Nothing once the user has toggled it.
+ */
+function autoResumeNote(u) {
+    const by = u.autoResumeBy;
+    if (!by || by.by !== 'agent') return null;
+    const a = ago(by.at);
+    const when = !a ? '' : a === 'now' ? ' just now' : /\d$/.test(a) ? ` on ${a}` : ` ${a} ago`;
+    return html`<div class="orch-note">Turned ${u.autoResume ? 'on' : 'off'} by the orchestrator${when}${
+        by.reason ? ` \u2014 ${by.reason}` : ''}</div>`;
+}
+
 /** The orchestrator's own settings — the page's settings popover. */
 export function settings(p) {
     const s = p.settings;
@@ -300,6 +313,7 @@ export function settings(p) {
         </div>` : null}
         <label class="orch-check"><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
             onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} /><span>Carry on by itself when the window resets</span></label>
+        ${autoResumeNote(s.usageStop)}
         <div class="orch-note">The defaults for new orchestrators, and text added to every
             orchestrator's instructions, are in Settings › Orchestrators.</div>
     </div>`;

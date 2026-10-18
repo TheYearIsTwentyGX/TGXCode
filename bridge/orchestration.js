@@ -148,6 +148,8 @@ function orchestratorBrief(id) {
         '  TGXCode stops everything: you and your workers mid-turn. Depending on the',
         '  settings it waits for the user, or wakes you once the window resets with a',
         '  note listing the workers that were cut off — tell those to carry on.',
+        '  set_auto_resume switches that for you alone, when the user asks you to carry',
+        '  on (or not) by yourself; they see that you did, and why.',
         '- close_worker when a worker is finished with, so it stops counting.',
         '- Items of kind task are work the user handed you, from a draft or the Start',
         '  dialog: a prompt plus the settings they chose. Fit it into your plan, brief and',
@@ -344,6 +346,24 @@ function file(orchId, item) {
     if (!row) return null;
     emit(orchId);
     scheduleNudge(orchId);
+    return row;
+}
+
+/**
+ * The orchestrator turned its own auto-resume on or off. Filed for the user's
+ * sake — it is on the page's Activity and in the history — and filed read, so
+ * the orchestrator is not nudged about something it just did.
+ */
+function noteAutoResume(orchId) {
+    const o = store.get(orchId);
+    if (!o) return null;
+    const u = o.settings.usageStop;
+    const why = u.autoResumeBy && u.autoResumeBy.reason;
+    const row = store.push(orchId, {
+        kind: 'note',
+        text: `Auto-resume turned ${u.autoResume ? 'on' : 'off'} by the orchestrator${why ? `: ${why}` : '.'}`,
+    });
+    if (row) store.settle(orchId, row.id, { status: 'read', by: 'agent' });
     return row;
 }
 
@@ -1228,6 +1248,6 @@ function onPrsChanged() {
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
     fileTask, withdrawTask, list,
-    report, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, noteAutoResume, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

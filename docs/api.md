@@ -5492,7 +5492,9 @@ event:
                            window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet"|"all",
                            limits: { five_hour, seven_day, seven_day_opus, seven_day_sonnet:
                                      number (1–100) | null },
-                           autoResume: boolean } },
+                           autoResume: boolean,
+                           autoResumeBy: null | { by: "user"|"agent", at: number,
+                                                  reason: string|null } } },
   paused: null | { reason: string, at: number, resumeAt: number|null, by: number|null,
                    interrupted: [string] },
   summary: null | { text: string (markdown, ≤1500 chars), at: number,
@@ -5528,6 +5530,18 @@ started, taken back or gone, oldest first — kept apart from `inbox` because th
 the newest 100, and a task left alone for a day must not fall off a client's page. Its
 rows are the task's settings without the full prompt; `text` is the first 8000
 characters of it. See *Tasks from the user* below.
+**`settings.usageStop.autoResumeBy`** is who last set `autoResume`, stamped by the
+bridge on every `PUT` that sets it (never taken from the client): `by: "agent"` when
+the orchestrator did it for itself with its `set_auto_resume` tool, `"user"` for
+any other caller — so the page's own toggle always replaces the agent's — with `at`
+(epoch ms) and the agent's `reason` (≤200 chars, `null` if none). `null` means it is
+still the value the orchestrator started with. A client should say so when `by` is
+`"agent"`; the orchestrator's change is also filed as a `note` inbox item (already
+`read`, so it does not wake the orchestrator).
+**Settings are per orchestrator.** `orchestrator.usageStopAutoResume` and the other
+`usageStop*` prefs in `settings.json` are only the defaults a **new** orchestrator
+starts with; changing them does nothing to one that already exists. Change an
+existing one with `PUT /api/sessions/:id/orchestrator`.
 
 **A worker of a `test` orchestrator is a `test` session**, and so is a worker started from
 a task whose `test` is true — the flag is set at spawn, not asked for, so a client need not
@@ -5739,8 +5753,8 @@ The payload above. Never 404s: a session that is not one answers `enabled: false
 
 #### `PUT /api/sessions/:id/orchestrator`
 
-`{enabled?: boolean, settings?: {…partial settings…}}` → the payload, plus
-`restarted: "now"|"after-turn"` when it turned the role on.
+`{enabled?: boolean, settings?: {…partial settings…}, by?: "agent", reason?: string}`
+→ the payload, plus `restarted: "now"|"after-turn"` when it turned the role on.
 
 - `enabled: true` on a session that is not one marks it, starting from the user's
   defaults in `orchestrator` prefs (or `settings`, if sent). Its process is replaced
@@ -5756,6 +5770,14 @@ The payload above. Never 404s: a session that is not one answers `enabled: false
   with nothing of that orchestrator running yet (just after a bridge restart).
 - `settings` alone merges into the current settings field by field; a bad value
   leaves that field as it was.
+- `settings.usageStop.autoResume` takes effect now: while paused it starts or stops
+  the wake clock (`paused.resumeAt`), no restart. It also stamps
+  `settings.usageStop.autoResumeBy` — `by: "agent"` only when the body says
+  `by: "agent"` (the orchestrator's `set_auto_resume` tool, which also files a `note`),
+  `"user"` otherwise; `reason` is the body's `reason`. An `autoResumeBy` sent inside
+  `settings` is ignored. A save that does not set `autoResume` leaves the stamp alone.
+  `by`/`reason` are not a permission: this route is open to the user's clients
+  anyway, and the label only says whose idea the change was.
 
 #### `GET /api/sessions/:id/orchestrator/inbox`
 
@@ -5817,6 +5839,12 @@ mode: "digest"|"tail"|"full"|"ask", turns?, offset?}`; `stop` `{worker, hard?}` 
 goal?, decisions?, mergeOrder?}` → `{summary}`. A worker's own is
 `POST /api/sessions/:id/report` `{kind: "question"|"update"|"done", text}` →
 `{ok, id}`.
+
+One orchestrator tool is not a `POST` here: **`set_auto_resume {on: boolean,
+reason?: string}`** is `PUT /api/sessions/:id/orchestrator` with
+`{settings: {usageStop: {autoResume: on}}, by: "agent", reason}`, on the calling
+orchestrator's own id. It changes that orchestrator only, never the default for new
+ones, and its `get_usage` says who last set it.
 
 `summary`'s structured fields are each optional: **left out, a field keeps what the
 brief had; `null` or empty clears it.** Empty `text` clears the whole summary,

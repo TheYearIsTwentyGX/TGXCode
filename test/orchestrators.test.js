@@ -718,6 +718,71 @@ function harness(name) {
     }
 
     {
+        // set_auto_resume's half of the wire: the real PUT handler, stamping who
+        // set it. The agent's change is noted for the user, read, so the
+        // orchestrator is not nudged about its own act; the user's toggle
+        // replaces the stamp; a client cannot forge one.
+        const { Readable } = require('stream');
+        const orchRoute = require('../bridge/routes/orchestrators');
+        const put = async (id, body) => {
+            const req = Readable.from([Buffer.from(JSON.stringify(body))]);
+            req.method = 'PUT';
+            let status = 0;
+            let out = '';
+            const res = { writeHead: (s) => { status = s; }, end: (b) => { out = String(b); } };
+            await orchRoute.handle(req, res, null, `/api/sessions/${id}/orchestrator`,
+                ['api', 'sessions', id, 'orchestrator'], { remote: false });
+            return { status, body: JSON.parse(out) };
+        };
+        const h = harness('auto-resume-by');
+        orchRoute.init({ orchestrators: h.store, index: h.deps.index, drafts: null,
+            modeRefusal: () => null, normalizeMode: (m) => m || 'auto' });
+        orchestration.enable('O', { usageStop: { percent: 50 } });
+        h.pool.ensure('O');
+        assert.strictEqual(h.store.get('O').settings.usageStop.autoResumeBy, null, 'the default carries no stamp');
+        const r = Date.now() + 120_000;
+        h.setWindows([{ type: 'five_hour', usedPercent: 60, resetsAt: r }]);
+        orchestration.checkUsage();
+        assert.strictEqual(h.store.get('O').paused.resumeAt, null);
+
+        const before = Date.now();
+        let res = await put('O', { settings: { usageStop: { autoResume: true } }, by: 'agent',
+            reason: `  user away${' x'.repeat(200)}` });
+        assert.strictEqual(res.status, 200);
+        let u = res.body.settings.usageStop;
+        assert.strictEqual(u.autoResume, true);
+        assert.strictEqual(u.autoResumeBy.by, 'agent');
+        assert.ok(u.autoResumeBy.at >= before);
+        assert.ok(u.autoResumeBy.reason.startsWith('user away') && u.autoResumeBy.reason.length <= 200,
+            'the reason is trimmed and capped');
+        assert.strictEqual(res.body.paused.resumeAt, r, 'turned on while paused: the clock starts, live');
+        const note = h.store.get('O').inbox.find(i => i.kind === 'note' && /Auto-resume turned on/.test(i.text));
+        assert.ok(note && /by the orchestrator: user away/.test(note.text), 'the user is told');
+        assert.strictEqual(note.status, 'read', 'and the orchestrator is not nudged about it');
+
+        h.store.flush();
+        const reloaded = new Orchestrators({ file: fileOf('auto-resume-by') });
+        reloaded.load();
+        assert.deepStrictEqual(reloaded.get('O').settings.usageStop.autoResumeBy, u.autoResumeBy,
+            'the stamp survives a reload');
+
+        res = await put('O', { settings: { usageStop: { autoResume: false,
+            autoResumeBy: { by: 'agent', at: 1, reason: 'forged' } } } });
+        u = res.body.settings.usageStop;
+        assert.strictEqual(u.autoResume, false);
+        assert.strictEqual(u.autoResumeBy.by, 'user', 'the popover is the user, and its toggle wins');
+        assert.strictEqual(u.autoResumeBy.reason, null, 'a stamp the client sent is ignored');
+        assert.strictEqual(res.body.paused.resumeAt, null, 'turned off: the clock stops');
+        assert.strictEqual(h.store.get('O').inbox.filter(i => /Auto-resume/.test(i.text)).length, 1,
+            'the user\'s own toggle files nothing');
+
+        res = await put('O', { settings: { usageStop: { percent: 55, autoResumeBy: null } }, by: 'agent' });
+        assert.strictEqual(res.body.settings.usageStop.autoResumeBy.by, 'user',
+            'a save that leaves auto-resume alone leaves its stamp alone');
+        ok('set_auto_resume\'s PUT stamps who set it, notes the agent\'s change, and the user\'s toggle wins');
+    }
+
+    {
         // The reset came but another window is still over: pause again for that.
         const h = harness('wake-again');
         orchestration.enable('O', { usageStop: { window: 'all', limits: { five_hour: 90, seven_day: 95 },

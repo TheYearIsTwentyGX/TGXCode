@@ -102,6 +102,11 @@ const DEFAULT_SETTINGS = Object.freeze({
         // Lift the pause by itself once the window that tripped it resets, and
         // tell the orchestrator so it can carry on. Off: wait for Resume.
         autoResume: false,
+        // Who last set `autoResume`, and why: {by: 'user'|'agent', at, reason}.
+        // Null while it is still the default it started with. Stamped by the
+        // PUT route, never taken from a client, so the page can say when the
+        // orchestrator changed it for itself.
+        autoResumeBy: null,
     }),
 });
 
@@ -126,8 +131,17 @@ function cleanSettings(raw, base = DEFAULT_SETTINGS) {
             limits: cleanLimits(u.limits, bu.limits || DEFAULT_SETTINGS.usageStop.limits),
             autoResume: typeof u.autoResume === 'boolean' ? u.autoResume
                 : (typeof bu.autoResume === 'boolean' ? bu.autoResume : false),
+            autoResumeBy: 'autoResumeBy' in u ? cleanAutoResumeBy(u.autoResumeBy) : (bu.autoResumeBy || null),
         },
     };
+}
+
+const MAX_REASON = 200;
+
+function cleanAutoResumeBy(raw) {
+    if (!raw || typeof raw !== 'object' || !['user', 'agent'].includes(raw.by)) return null;
+    const reason = typeof raw.reason === 'string' ? raw.reason.trim().slice(0, MAX_REASON).trim() : '';
+    return { by: raw.by, at: Number.isFinite(raw.at) ? raw.at : 0, reason: reason || null };
 }
 
 /** One threshold per window; a key that fails keeps `base`'s, null clears it. */
