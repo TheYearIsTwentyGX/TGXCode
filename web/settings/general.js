@@ -264,7 +264,7 @@ export const SETTINGS = [
             { key: 'usageStopAllWeekly', type: 'int', min: 1, max: 100,
                 label: 'All limits: weekly, in percent' },
             { key: 'usageStopAutoResume', type: 'bool',
-                label: 'Carry on when the window resets',
+                label: 'Carry on when the window resets (for new orchestrators)',
                 note: 'Instead of waiting for Resume: the orchestrator wakes a minute after the '
                     + 'window that stopped it resets, and is told which workers were cut off '
                     + 'mid-turn so it can set them going again.' },

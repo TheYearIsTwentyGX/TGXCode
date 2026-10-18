@@ -45,6 +45,23 @@ function init(deps) {
 const firstLine = (s) => String(s || '').split('\n').map(l => l.trim()).find(Boolean)?.slice(0, 80) || null;
 
 /**
+ * Stamp who set `usageStop.autoResume` onto a settings PUT, in place, and
+ * return the stamp (null when the body does not set it). A client never
+ * supplies the stamp: whatever it sent is dropped. `by: "agent"` is what the
+ * orchestrator's own `set_auto_resume` sends; anything else — the page's
+ * popover — is the user, and the user's toggle always replaces the agent's.
+ */
+function stampAutoResume(body) {
+    const u = body.settings && body.settings.usageStop;
+    if (!u || typeof u !== 'object') return null;
+    delete u.autoResumeBy;
+    if (typeof u.autoResume !== 'boolean') return null;
+    const reason = typeof body.reason === 'string' ? body.reason : null;
+    u.autoResumeBy = { by: body.by === 'agent' ? 'agent' : 'user', at: Date.now(), reason };
+    return u.autoResumeBy;
+}
+
+/**
  * What a task-filing body asks for, validated, or why not.
  *
  * Two sources, which is what lets one route serve the Drafts board, the draft
@@ -157,9 +174,12 @@ async function handle(req, res, url, pathname, seg, who) {
         if (!store.get(id)) {
             if (body.enabled !== true) return send(res, 404, { error: 'that session is not an orchestrator' });
             if (!index.summary(id)) return send(res, 404, { error: 'session not found' });
+            stampAutoResume(body);
             return guarded(res, () => orchestration.enable(id, body.settings || null));
         }
+        const by = stampAutoResume(body);
         if (body.settings) store.setSettings(id, body.settings);
+        if (by && by.by === 'agent') orchestration.noteAutoResume(id);
         orchestration.emit(id);
         // A cutoff lowered under the current reading takes effect now, not at
         // the next minute's check.

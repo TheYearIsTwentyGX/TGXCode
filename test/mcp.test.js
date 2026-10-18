@@ -217,10 +217,39 @@ const TASK = {
                 decisions: [{ text: 'Ship it?', options: ['Yes', 'No'] }] });
             r = await orch.call('set_summary', { text: 'prose only' });
             assert.deepStrictEqual(seen[0].body, { text: 'prose only' });
+
+            // set_auto_resume: the orchestrator's own settings, by PUT, marked as
+            // the agent's doing so the bridge stamps it so.
+            assert.ok(tools.find(t => t.name === 'set_auto_resume'), 'an orchestrator has set_auto_resume');
+            answers.set('PUT /api/sessions/me/orchestrator', { status: 200, body: {
+                settings: { usageStop: { enabled: true, autoResume: true } },
+                paused: { reason: 'five_hour at 91%', resumeAt: Date.now() + 3600_000 } } });
+            r = await orch.call('set_auto_resume', { on: true, reason: '  user away  ' });
+            assert.strictEqual(r.isError, false);
+            assert.strictEqual(seen[0].method, 'PUT');
+            assert.strictEqual(seen[0].route, '/api/sessions/me/orchestrator');
+            assert.deepStrictEqual(seen[0].body, { settings: { usageStop: { autoResume: true } },
+                by: 'agent', reason: 'user away' });
+            assert.match(r.text, /Auto-resume on\. You are paused; you will be woken at/);
+            r = await orch.call('set_auto_resume', { on: 'yes' });
+            assert.strictEqual(r.isError, true);
+            assert.strictEqual(seen.length, 0, 'refused before the bridge is asked');
+
+            // get_usage says who set it, and how to change it.
+            answers.set('GET /api/sessions/me/orchestrator/usage', { status: 200, body: { windows: [],
+                cutoff: { enabled: true, percent: 90, window: 'five_hour', autoResume: true,
+                    autoResumeBy: { by: 'agent', at: Date.now() - 120_000, reason: 'user away' } } } });
+            r = await orch.call('get_usage', {});
+            assert.match(r.text, /Set by you 2m ago \(user away\)\. set_auto_resume changes it\./);
+            answers.set('GET /api/sessions/me/orchestrator/usage', { status: 200, body: { windows: [],
+                cutoff: { enabled: true, percent: 90, window: 'five_hour', autoResume: false, autoResumeBy: null } } });
+            r = await orch.call('get_usage', {});
+            assert.match(r.text, /the default this orchestrator started with/);
         } finally {
             orch.child.kill();
         }
         ok('set_summary carries the brief\'s goal, decisions and merge order, and only when given');
+        ok('set_auto_resume PUTs the orchestrator\'s own setting as the agent, and get_usage says who set it');
     } finally {
         mcp.child.kill();
         server.close();
