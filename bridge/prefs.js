@@ -78,6 +78,10 @@
 // back counts as having been away. See web/digest.js. **User-only**: when you
 // count as away is about you, not about whichever checkout is open.
 //
+// `power` is whether the bridge holds off sleep while an agent is working — see
+// bridge/keepawake.js. **User-only**: whether this machine stays awake is not a
+// repository's to decide.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -457,6 +461,13 @@ const DEFAULTS = {
             { id: 'adversarial', label: 'Adversarial', skill: 'adversarial-reviewer', colour: 'red' },
         ],
     },
+    power: {
+        // Hold off system sleep while any turn is busy or starting — this
+        // bridge's or a terminal's — and for two minutes after the last one.
+        // The display may still turn off. Read on every evaluation, so a save
+        // takes effect without a restart. See bridge/keepawake.js.
+        keepAwake: false,
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -495,9 +506,11 @@ const DEFAULTS = {
 // for.
 //
 // `digest` is when you count as having walked away, which is about you.
+//
+// `power` is whether this machine is allowed to sleep, which is the machine's.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
     'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator',
-    'digest']);
+    'digest', 'power']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -654,6 +667,9 @@ const SHAPE = {
         types: (v) => Array.isArray(v) && v.length <= REVIEW_TYPES_MAX
             && new Set(v.map(t => t && t.id)).size === v.length
             && v.every(validReviewType),
+    },
+    power: {
+        keepAwake: (v) => typeof v === 'boolean',
     },
 };
 
@@ -1149,6 +1165,7 @@ class Prefs {
             startup: { ...DEFAULTS.startup },
             agentBrowser: { ...DEFAULTS.agentBrowser },
             digest: { ...DEFAULTS.digest },
+            power: { ...DEFAULTS.power },
             reviews: { types: DEFAULTS.reviews.types.map(t => ({ ...t })) },
             sources: [],
             problems: [],

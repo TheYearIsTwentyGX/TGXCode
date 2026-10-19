@@ -20,7 +20,8 @@
 // Keep it that way: a module-level `const` built from an app.js `const` throws,
 // because every module under web/settings/ evaluates before app.js's body runs.
 
-import { html, useState } from '../vendor/preact.js';
+import { html, useEffect, useState } from '../vendor/preact.js';
+import { get } from '../api.js';
 import { shortPath } from '../format.js';
 import { canPreviewUrls } from '../preview.js';
 import { state } from '../state.js';
@@ -158,6 +159,19 @@ export const SETTINGS = [
                 note: 'How long the window has to be hidden, or go untouched, before '
                     + 'coming back to it shows the card.' },
         ],
+    },
+    {
+        title: 'Power', section: 'power', category: 'workspace', userOnly: true,
+        note: 'Whether this computer may sleep while agents are working. A sleeping '
+            + 'PC freezes WSL, and every running turn with it.',
+        rows: [
+            { key: 'keepAwake', type: 'bool',
+                label: 'Keep this computer awake while an agent is working',
+                note: 'Only while a turn is running — here or in a terminal — and for two '
+                    + 'minutes after the last one. The display can still turn off. Closing '
+                    + 'a laptop lid may still put it to sleep, depending on its power settings.' },
+        ],
+        status: () => html`<${KeepAwakeStatus} />`,
     },
     {
         title: 'Live board', section: 'live', category: 'workspace',
@@ -689,7 +703,35 @@ export function settingsCard(group) {
         ${rows}
         ${group.keymap ? renderKeymap(locked) : null}
         ${group.toolbar ? renderToolbarSettings(locked) : null}
+        ${group.status ? group.status() : null}
     </section>`;
+}
+
+/**
+ * What keep-awake is doing right now, under its checkbox: holding, and why, or
+ * why it cannot. Read from /api/health — the bridge is what holds the lock, so it
+ * is the only thing that knows — on mount and every ten seconds while Settings is
+ * open. Says nothing while the setting is off and nothing is wrong.
+ */
+function KeepAwakeStatus() {
+    const [ka, setKa] = useState(null);
+    useEffect(() => {
+        let live = true;
+        const load = () => get('/api/health')
+            .then(h => { if (live) setKa(h.keepAwake || null); })
+            .catch(() => {});
+        load();
+        const t = setInterval(load, 10_000);
+        return () => { live = false; clearInterval(t); };
+    }, [state.settings.data && state.settings.data.power && state.settings.data.power.keepAwake]);
+    if (!ka) return null;
+    let text = null;
+    if (ka.unsupported) text = `Not available on this machine: ${ka.unsupported}.`;
+    else if (ka.error && ka.enabled) text = `Could not hold the lock: ${ka.error}.`;
+    else if (ka.holding && ka.lingerUntil) text = 'Keeping the PC awake for a couple of minutes after the last turn.';
+    else if (ka.holding) text = `Keeping the PC awake — ${ka.reason || 'an agent is working'}.`;
+    else if (ka.enabled) text = 'Nothing is working, so the PC may sleep as usual.';
+    return text ? html`<p class="settings-group-note">${text}</p>` : null;
 }
 
 /**

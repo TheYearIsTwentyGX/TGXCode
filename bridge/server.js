@@ -41,6 +41,7 @@ const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
 const { Usage } = require('./usage');
 const { Beacon } = require('./beacon');
+const { KeepAwake } = require('./keepawake');
 const devbrowser = require('./devbrowser');
 const prStore = require('./pr-store');
 const { TerminalPool } = require('./terminal');
@@ -112,6 +113,10 @@ const usage = new Usage();
 // a directory they trust — see bridge/beacon.js for why that consent is theirs
 // to give rather than ours to assume.
 const beacon = new Beacon();
+// Holds off system sleep while an agent is working, when `power.keepAwake` says
+// to. One child process is the lock — see bridge/keepawake.js, and
+// evaluateKeepAwake below for what counts as working.
+const keepAwake = new KeepAwake();
 // Sessions set up but not started. The only store here that is not about a
 // session that exists: a draft *is* a create call, held back until you press
 // Start. See bridge/drafts.js.
@@ -686,7 +691,7 @@ const ROUTE_DEPS = {
     beacon, drafts, later, standing, snippetStore, templates, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
-    quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent,
+    quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent, keepAwake, evaluateKeepAwake,
 };
 for (const routes of ROUTES) if (routes.init) routes.init(ROUTE_DEPS);
 
@@ -848,6 +853,30 @@ pool.stallAfter = (cwd) => {
 pool.agentBrowser = () => {
     try { return prefs.forCwd().agentBrowser.mode; } catch { return 'visible'; }
 };
+
+// "Any agent is working": a turn of ours busy or starting, or a session in a
+// terminal or another window that Claude Code's registry reports busy. The
+// registry already drops an entry whose pid has gone, so a crashed terminal does
+// not hold the machine awake. The pref is read here every time — forCwd() is
+// cached on mtime — so turning it on or off needs no restart.
+function evaluateKeepAwake() {
+    let enabled = false;
+    try { enabled = prefs.forCwd().power.keepAwake === true; } catch { /* default off */ }
+    const ours = pool.workingCount;
+    const elsewhere = registry.running()
+        .filter(e => e.status === 'busy' && !pool.runners.has(e.sessionId)).length;
+    const n = ours + elsewhere;
+    keepAwake.update({
+        enabled,
+        working: n > 0,
+        reason: n ? `${n} agent${n === 1 ? '' : 's'} working` : null,
+    });
+}
+pool.on('status', evaluateKeepAwake);
+registry.on('changed', evaluateKeepAwake);
+// The backstop: a save that arrives on another bridge, a retry after the child
+// died, and anything else that changes the answer without an event.
+setInterval(evaluateKeepAwake, 30_000).unref();
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 
@@ -1135,6 +1164,9 @@ function shutdown(code = 0) {
     try { terminals.shutdown(); } catch { /* nothing to clean */ }
     try { runs.shutdown(); } catch { /* nothing to clean */ }
     try { beacon.shutdown(); } catch { /* nothing to clean */ }
+    // The lock's child would also go by itself when our end of its stdin closes;
+    // this just does not make it wait for that.
+    try { keepAwake.shutdown(); } catch { /* nothing to clean */ }
     try { standing.shutdown(); } catch { /* nothing to clean */ }
     // Drafts are written on a 400ms debounce and this process exits 200ms from
     // here, so a draft saved in the last moment before a restart would simply be
@@ -1260,6 +1292,9 @@ async function takeBackHeld() {
         return;
     }
     const n = await pool.adoptHeld();
+    // The last bridge's lock went with it; if what it left running is still
+    // mid-turn, take the lock back now rather than at the next status event.
+    if (n) evaluateKeepAwake();
     const st = hostClient.status();
     console.log(`[tgxcode] session host pid ${st && st.pid}`
         + (n ? `; picked up ${n} session(s) the last bridge left running` : ''));
@@ -1272,6 +1307,9 @@ takeBackHeld().catch((err) => {
     // Before the index, so the very first summaries it hands out already say
     // what is running rather than guessing at it for one scan.
     registry.start();
+    // So /api/health reports the setting from the first request, and a lock is
+    // taken for whatever the registry already shows busy.
+    evaluateKeepAwake();
     claudeConfig.start();
     console.log(`[tgxcode] registry: ${registry.liveCount} of ${registry.size} `
         + 'session(s) still have a process');

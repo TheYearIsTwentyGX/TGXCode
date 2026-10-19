@@ -29,6 +29,7 @@ const tailscale = require('../tailscale');
 // Handed over by server.js — see the note above ROUTES there.
 let claudeVersion = null;
 let index = null;
+let keepAwake = null;
 let markClaudeVersionSent = null;
 let pool = null;
 let registry = null;
@@ -38,7 +39,7 @@ let terminals = null;
 
 function init(deps) {
     ({
-        claudeVersion, index, markClaudeVersionSent, pool, registry, runs, shutdown, terminals,
+        claudeVersion, index, keepAwake, markClaudeVersionSent, pool, registry, runs, shutdown, terminals,
     } = deps);
 }
 
@@ -93,6 +94,9 @@ async function handle(req, res, url, pathname, seg, who) {
             // The session host this bridge is running turns in, or null when it
             // is spawning them directly. Pid and protocol only; see bridge/host.js.
             sessionHost: hostClient.status(),
+            // Whether this bridge is holding off system sleep for working
+            // agents, and why not when it cannot — see bridge/keepawake.js.
+            keepAwake: keepAwake.status(),
             permissionModes: PERMISSION_MODES,
         });
     }

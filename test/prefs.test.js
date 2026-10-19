@@ -429,8 +429,8 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
-    ['agentBrowser', 'devbrowser', 'digest', 'keyboard', 'orchestrator', 'preview', 'projects', 'quota',
-        'standing', 'startup', 'toolbar', 'wispr']);
+    ['agentBrowser', 'devbrowser', 'digest', 'keyboard', 'orchestrator', 'power', 'preview', 'projects',
+        'quota', 'standing', 'startup', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -587,6 +587,20 @@ assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { digest
 prefs.save({ scope: 'user', patch: { digest: { enabled: null, awayMinutes: null } } });
 assert.deepStrictEqual(prefs.forCwd().digest, DEFAULTS.digest);
 ok('digest saves, refuses a threshold out of range, is user-only, and clears');
+
+// Off by default: a machine that stops sleeping because of an update nobody
+// asked for is a flat battery in a bag.
+assert.deepStrictEqual(DEFAULTS.power, { keepAwake: false });
+prefs.save({ scope: 'user', patch: { power: { keepAwake: true } } });
+assert.strictEqual(prefs.forCwd().power.keepAwake, true);
+for (const bad of [1, 'true', 'yes']) {
+    assert.throws(() => prefs.save({ scope: 'user', patch: { power: { keepAwake: bad } } }),
+        (e) => e.code === 'value', `keepAwake ${JSON.stringify(bad)} was taken`);
+}
+assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { power: { keepAwake: true } } }));
+prefs.save({ scope: 'user', patch: { power: { keepAwake: null } } });
+assert.deepStrictEqual(prefs.forCwd().power, DEFAULTS.power);
+ok('power.keepAwake is off by default, saves a boolean only, is user-only, and clears');
 
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.

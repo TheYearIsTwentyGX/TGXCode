@@ -447,6 +447,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/templates.js` | Session templates: a create call kept for reuse, with `{{placeholders}}`, global or scoped to a project |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
+| `bridge/keepawake.js` | Holds off system sleep while an agent is working (`power.keepAwake`): one `powershell.exe` or `systemd-inhibit` child is the lock, with a stdin watchdog so a killed bridge cannot leak it |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
 | `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
 | `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
