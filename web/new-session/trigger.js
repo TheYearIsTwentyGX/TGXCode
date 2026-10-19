@@ -623,6 +623,10 @@ export async function startNew() {
     // Start alone again: marked before its process starts, so it has its tools
     // from the first turn. See the row in index.html.
     if (newDialogOrchestrator()) body.orchestrator = true;
+    // The Name box names the session — only when filled, so an empty one leaves
+    // the session to name itself. See newDialogName.
+    const title = newDialogName();
+    if (title) body.title = title;
 
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';
