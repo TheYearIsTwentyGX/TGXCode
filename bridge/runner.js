@@ -2812,6 +2812,17 @@ class RunnerPool extends EventEmitter {
     }
 
     /**
+     * Busy or still starting: what bridge/keepawake.js counts as an agent at
+     * work. `starting` counts because a message has been sent and a turn is on
+     * its way — sleeping in that gap would freeze it before it began.
+     */
+    get workingCount() {
+        let n = 0;
+        for (const r of this.runners.values()) if (r.state === 'busy' || r.state === 'starting') n++;
+        return n;
+    }
+
+    /**
      * Turns a restart would end: busy, and not in the session host. What a
      * restart should be asking about now, where `busyCount` is what it used to ask.
      */

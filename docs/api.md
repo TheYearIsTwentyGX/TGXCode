@@ -392,7 +392,9 @@ The only unauthenticated route. Counts, a pid, and:
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
   "sessions": 120, "clients": 1, "pollingViewers": 0, "live": 4, "busy": 3, "atRisk": 0,
-  "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 } }
+  "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 },
+  "keepAwake": { "enabled": true, "holding": true, "since": 1790098460000,
+                 "reason": "2 agents working", "lingerUntil": null } }
 ```
 
 `app` is the string `"tgxcode"` — `"claude-sessions"` from a bridge that predates the
@@ -414,6 +416,24 @@ auto-denied. Absent on a bridge from before the lease existed.
 bridge starts `claude` directly, the way every bridge did before the host existed, so
 every busy turn is at risk. See §*A bridge restart does not end a turn* under *Things
 that will bite*.
+
+`keepAwake` is **an object**: whether this bridge is holding off system sleep for
+working agents (the `power.keepAwake` setting under `GET /api/prefs`). Absent on a bridge
+from before the setting existed.
+
+| Field | Type | |
+|---|---|---|
+| `enabled` | **boolean** | The setting, as of the last time the bridge evaluated it — at most 30 seconds stale, and immediate after a `PUT /api/prefs` to this bridge. |
+| `holding` | **boolean** | Whether the lock is held right now. Can be `true` with nothing busy: the lock lingers for two minutes after the last turn ends. |
+| `since` | **number or null** — epoch ms | When the current lock was taken. `null` when not holding. |
+| `reason` | **string or null** | Human-readable — `"2 agents working"`, or `"finishing up"` during the linger. For display, not for parsing. `null` when not holding. |
+| `lingerUntil` | **number or null** — epoch ms | When the lock will be released if nothing starts working first. `null` unless lingering. |
+| `unsupported` | **string, or absent** | Why this host cannot hold a lock at all — today only `"systemd-inhibit not found"` on a Linux host. Set once the bridge has tried. |
+| `error` | **string, or absent** | Why the last attempt to hold the lock failed (the helper exited or was not found). The bridge retries no sooner than a minute later. |
+
+"Working" means a turn this bridge runs is busy or starting, or a session elsewhere (a
+terminal, VS Code) that Claude Code's own registry reports busy. Each bridge decides on
+its own, so two bridges may both hold a lock for one terminal session; that is harmless.
 
 `root` and `home` are included only for local callers. Read `permissionModes` rather
 than hardcoding the list; a remote client should drop `bypassPermissions` and
@@ -1652,9 +1672,9 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Twelve sections may only be set in the user's own file**: `quota`, `keyboard`,
+**Thirteen sections may only be set in the user's own file**: `quota`, `keyboard`,
 `projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup`, `agentBrowser`,
-`orchestrator` and `digest`. A project file that carries one is ignored and says so in
+`orchestrator`, `digest` and `power`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1672,7 +1692,8 @@ one, which is the same class of thing. `startup` is the `toolbar` argument again
 what your window opens to is not a repository's to arrange. `agentBrowser` is the same: whether a window
 opens on your desktop is yours. `orchestrator` caps how much of the account an
 orchestrator may spend, which is not a checked-in file's to raise. `digest` is when
-you count as having walked away, which is about you.
+you count as having walked away, which is about you. `power` is whether this machine
+may sleep, which is the machine's.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1940,6 +1961,14 @@ it, so a phone is free to use its own rule or ignore the section:
 |---|---|---|
 | `enabled` | **boolean**, default `true` | Whether coming back to the window shows the card at all. |
 | `awayMinutes` | **integer 1–480**, default `20` | How long a window has to go hidden or untouched before the next sign of life counts as a return. |
+
+`power` is whether the bridge keeps the computer awake while agents work. **User file
+only**, and **applied by the bridge** — a client only displays it; what the bridge is
+actually doing is `keepAwake` in `GET /api/health`:
+
+| Key | Type | |
+|---|---|---|
+| `keepAwake` | **boolean**, default `false` | Hold off system sleep (not display sleep) while any turn is busy or starting — this bridge's, or a terminal's that Claude Code reports busy — and for two minutes after the last one ends. Under WSL the bridge runs a `powershell.exe` that calls `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)`; on a Linux host, `systemd-inhibit --what=sleep:idle`. Takes effect without a restart. A closed laptop lid may still sleep the machine, per its power settings. |
 
 `reviews` is which skills count as code reviews — what `GET /api/sessions/:id/reviews`
 picks out of a transcript. **A project may set it** (a repository that ships its own
@@ -3669,7 +3698,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest, reviews, power}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed'\|'script', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own, and on every successful `PUT /api/claude-config/hook-script` — with `scope: 'script'` and `file` the script's absolute path, a fifth value no settings write produces — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |

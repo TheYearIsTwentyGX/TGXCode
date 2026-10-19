@@ -30,6 +30,7 @@ const { norm: spinnerNorm } = require('../spinner');
 // Handed over by server.js — see the note above ROUTES there.
 let claudeConfig = null;
 let claudeDocs = null;
+let evaluateKeepAwake = null;
 let hookScripts = null;
 let hookSources = null;
 let prefs = null;
@@ -37,7 +38,7 @@ let registry = null;
 let spinner = null;
 
 function init(deps) {
-    ({ claudeConfig, claudeDocs, hookScripts, hookSources, prefs, registry, spinner } = deps);
+    ({ claudeConfig, claudeDocs, evaluateKeepAwake, hookScripts, hookSources, prefs, registry, spinner } = deps);
 }
 
 /**
@@ -154,6 +155,9 @@ async function handle(req, res, url, pathname, seg, who) {
         // user-level answer is broadcast: a project's is the open session's
         // business and arrives with the transcript.
         broadcast('prefs', prefs.page(''));
+        // So that turning keep-awake on mid-turn takes the lock now, and turning
+        // it off lets go now, rather than at the next status event.
+        try { evaluateKeepAwake(); } catch { /* the 30s backstop will */ }
         return send(res, 200, { file: saved.file, prefs: saved.prefs, files: saved.files });
     }
 
