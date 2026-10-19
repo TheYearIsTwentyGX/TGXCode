@@ -30,6 +30,7 @@ const { resolveWorkdir } = require('../runner');
 const { draftsPayload } = require('./drafts');
 const { resolveAttachments } = require('./files');
 const { createWorktree } = require('../worktree');
+const { cleanTitle } = require('../flags');
 
 // Handed over by server.js — see the note above ROUTES there.
 let CREATE_LIMIT = null;
@@ -170,6 +171,14 @@ async function handle(req, res, url, pathname, seg, who) {
             }
         }
 
+        // The dialog's Name box, if it was filled. Checked before anything is
+        // charged or made, so a malformed one costs nothing; an empty or all-space
+        // one is no name at all, and the session names itself as it always has.
+        if (body.title != null && typeof body.title !== 'string') {
+            return send(res, 400, { error: 'title must be a string' });
+        }
+        const title = cleanTitle(body.title);
+
         const mode = normalizeMode(body.permissionMode);
         const refusal = modeRefusal(mode, who);
         if (refusal) return send(res, 403, { error: refusal, remote: true });
@@ -241,8 +250,12 @@ async function handle(req, res, url, pathname, seg, who) {
                 attachments: files,
             });
             // Label it before it exists on disk, so it is never briefly visible
-            // in the everyday window while the first rescan catches up.
-            if (body.test) flags.set(out.sessionId, { test: true });
+            // in the everyday window while the first rescan catches up. The name
+            // is the same flag a rename from the rail writes, so a later rename
+            // replaces it and clearing that hands the session back to its own.
+            if (body.test || title) {
+                flags.set(out.sessionId, { title: title || undefined, test: body.test ? true : undefined });
+            }
             index.note(out.sessionId);
 
             // **The draft this was started from, consumed here rather than by

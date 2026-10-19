@@ -3806,8 +3806,8 @@ causes auto-denials.
 
 ### `POST /api/sessions`
 
-`{cwd, prompt, model?, effort?, permissionMode?, test?, attachments?, fromDraft?,
-worktree?: {name: string, base?: string}, orchestrator?: boolean}` →
+`{cwd, prompt, title?: string, model?, effort?, permissionMode?, test?, attachments?,
+fromDraft?, worktree?: {name: string, base?: string}, orchestrator?: boolean}` →
 `{sessionId, status, test, orchestrator: boolean, worktree?: {path: string, branch: string}}`.
 
 `orchestrator: true` starts the session as an orchestrator (§*Orchestrators*), with
@@ -3817,6 +3817,16 @@ its tools from the first turn. Marking an existing session instead goes through
 `cwd` must be inside the allowed roots. `test: true` keeps it out of the everyday
 window — use it for anything exploratory. `plan` is the sensible default mode for a
 first message.
+
+**`title` names the session** — what the web client's Name box sends when it is
+filled. It is a string, cleaned the way `POST /api/sessions/:id/flags` cleans one:
+trimmed, whitespace runs folded to one space, cut to **200 characters**. It is stored
+as that same flag, so the session lists with `titleSource: "user"` from its first
+row, and a later rename (or a clear, which hands it back to the name Claude gives it)
+works exactly as on any other session. Absent, `null`, or blank after trimming: no
+name is set and the session names itself from its conversation, as before. Any other
+type is a `400 {error: "title must be a string"}`, refused before anything starts.
+The response does not echo it.
 
 **`attachments` is an array of objects, not of strings**: `[{path}]`, where `path`
 is the `path` a `POST /api/attachments` returned. `relPath` is accepted in its
@@ -4108,6 +4118,10 @@ not an error worth handling.
 ### `POST /api/drafts/:id/start`
 
 No body → `{sessionId, status, test}`, and **the draft is deleted**.
+
+**A draft with a `title` names the session it starts** — the same flag
+`POST /api/sessions`'s `title` sets, so the session lists with `titleSource: "user"`.
+A draft without one leaves the session to name itself.
 
 The same response as `POST /api/sessions`, because it *is* that call with its arguments
 read off a file — and therefore everything documented there applies:
@@ -4433,6 +4447,14 @@ notice.
 `{cwd, prompt, cron | at, once?, gate?, title?, model?, effort?, permissionMode?, test?,
 enabled?, seed?, fromDraft?, from?}` → `{schedule}`, the row as `GET /api/schedules`
 returns it.
+
+**A run is named after its schedule** without a flag being set: a session a schedule
+started lists as `"<schedule title> - <M/D/YY>"` with `titleSource: "schedule"` (see
+`GET /api/sessions`), where the schedule title is `title` or, when that is null, the
+first line of `prompt`. So every run of a recurring schedule carries the same name
+and a different date. Unlike `POST /api/sessions`'s `title` and a started draft's,
+this is not stored as the session's name, so a rename replaces it and a cleared
+rename brings it back.
 
 **`at` stands in for `cron` for a one-time run.** It is an ISO local date-time
 string such as `"2026-09-25T09:00"`; a string with an offset, or epoch ms, also

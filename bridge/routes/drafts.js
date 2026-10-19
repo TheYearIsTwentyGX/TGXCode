@@ -221,7 +221,11 @@ async function handle(req, res, url, pathname, seg, who) {
                 return send(res, 400, { error: err.message });
             }
 
-            if (draft.test) flags.set(out.sessionId, { test: true });
+            // The draft's name becomes the session's, as Start in the dialog
+            // does with the same box — see POST /api/sessions.
+            if (draft.test || draft.title) {
+                flags.set(out.sessionId, { title: draft.title || undefined, test: draft.test ? true : undefined });
+            }
             index.note(out.sessionId);
             drafts.remove(seg[2]);
             broadcast('drafts-changed', draftsPayload());

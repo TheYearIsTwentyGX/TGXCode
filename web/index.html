@@ -1560,19 +1560,19 @@
         <div id="new-wt-note" class="note" hidden></div>
         <div class="note" id="new-orch-note" hidden></div>
       </div>
-      <!-- What a draft or a schedule is called on its card. Shown in every mode,
-           including plain Start-a-session, because Save-as-draft is in this same
-           footer — hiding it there would mean a draft could only be named after
-           it had been saved once. Start itself ignores it, which is what the
-           placeholder is for: `POST /api/sessions` takes no title, and a session
-           is named from its conversation.
+      <!-- What a draft or a schedule is called on its card, and what the session
+           Start makes is called in the rail. Shown in every mode, including plain
+           Start-a-session, because Save-as-draft is in this same footer — hiding
+           it there would mean a draft could only be named after it had been saved
+           once. Left empty, a started session names itself from its conversation
+           as it always has.
 
            `#new-name`, not `#new-title`: that id is already the dialog's own
            heading. The label says Name and the wire says `title`. -->
       <div class="field">
         <label for="new-name">Name</label>
         <input id="new-name" type="text" spellcheck="false" autocomplete="off"
-               placeholder="Optional — names the draft or schedule card">
+               placeholder="Optional — names the session, draft or schedule">
       </div>
       <div class="field">
         <label for="new-prompt">First message</label>

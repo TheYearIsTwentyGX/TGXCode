@@ -501,9 +501,8 @@ export function newDialogOrchestrator() {
  * The `worktree` field of `POST /api/sessions`, or null for none, or false when
  * the row is ticked with a name that will be refused (and it has said so).
  *
- * **Deliberately not part of `newDialogValues`,** for the reason `newDialogName`
- * gives: that body is also the drafts' and the schedules' body, and neither store
- * has this field — so Start asks for it and the other two do not. The row is
+ * **Deliberately not part of `newDialogValues`:** that body is also the drafts'
+ * and the schedules' body, and neither store has this field — so Start asks for it and the other two do not. The row is
  * hidden in draft and schedule mode anyway; this is what keeps Save-as-draft
  * from the plain Start dialog honest too.
  */
@@ -615,15 +614,15 @@ export function newDialogValues() {
 }
 
 /**
- * The name box, as the `title` field the two stores take.
+ * The name box, as the `title` field the two stores and `POST /api/sessions`
+ * take. On a session it is the name the rail shows — the flag a rename writes,
+ * so renaming it later still wins.
  *
- * **Deliberately not part of `newDialogValues`.** That body is also the body of
- * `POST /api/sessions`, which takes no title — and the docstring above says why a
- * key a route ignores must not ride along on it. So the two callers that store a
- * title ask for it, and Start does not.
- *
- * `null` rather than `''`: a PATCH reads `null` as *clear this* and absence as
- * *leave it alone*, so emptying the box has to send something.
+ * **Not part of `newDialogValues`,** because the three callers want different
+ * things from an empty box. A draft or schedule PATCH reads `null` as *clear
+ * this* and absence as *leave it alone*, so emptying the box has to send `null`;
+ * Start sends nothing at all when it is empty, so the session names itself from
+ * its conversation exactly as it did before the box meant anything there.
  */
 export function newDialogName() {
     return dom.newName.value.trim() || null;
