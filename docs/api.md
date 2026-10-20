@@ -274,7 +274,8 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
 settings, dismissing an item, recording the answer to a decision —
-`POST …/orchestrator/decisions/:decisionId/answered` — Resume, `GET /api/orchestrators`
+`POST …/orchestrator/decisions/:decisionId/answered` — Resume, Move to main checkout
+(`POST …/orchestrator/move-to-checkout`), `GET /api/orchestrators`
 and handing one a task — `POST …/orchestrator/tasks` and `…/tasks/:itemId/withdraw` —
 stay open, with a task's mode and worktree refused as starting a session refuses them);
 `POST /api/fs/open`;
@@ -549,7 +550,9 @@ beats an older `EnterWorktree`, and a *prompt* given back in the main checkout r
 having left (a tool call that merely visits the checkout mid-turn does not). A session
 that has left keeps `worktree` as the record of where it was, and `cwd` then equals
 `projectCwd` — so `cwd === worktree.path` is the test for "in it now", not the presence
-of `worktree`. `worktree.branch` is read from the worktree's `HEAD` on disk when the
+of `worktree`. **An orchestrator moved back with `POST …/orchestrator/move-to-checkout`
+has `cwd` equal to `projectCwd` whatever its trail says**, until a later EnterWorktree
+(§*Orchestrators*); `worktree` still names the worktree it was in. `worktree.branch` is read from the worktree's `HEAD` on disk when the
 worktree still exists.
 
 **`gitBranch` is the latest branch recorded, not the first.** Claude Code refreshes that
@@ -5571,7 +5574,9 @@ event:
                 permissionMode: string, test: boolean,
                 worktree: null | {name: string, base: string|null}, origin: null | origin }],
   unread: number,
-  inbox: [item, …]   // newest first, at most 100 }
+  inbox: [item, …],  // newest first, at most 100
+  location: null | { cwd: string, projectCwd: string|null, inWorktree: boolean,
+                     override: null | { cwd: string, from: string|null, at: number } } }
 ```
 
 or `{orchestratorId, enabled: false}` for a session that is not one. Times are epoch
@@ -5593,6 +5598,15 @@ any other caller — so the page's own toggle always replaces the agent's — wi
 still the value the orchestrator started with. A client should say so when `by` is
 `"agent"`; the orchestrator's change is also filed as a `note` inbox item (already
 `read`, so it does not wake the orchestrator).
+**`location`** is where the orchestrator runs: `cwd` is the live process's directory when
+it has one, and otherwise where its next message would start it. `inWorktree` is true
+when `cwd` is under `<projectCwd>/.claude/worktrees/` — the condition for offering
+*Move to main checkout* (`POST …/orchestrator/move-to-checkout`, below). `override` is
+that move while it is still in force — `from` is where it was moved from, `at` epoch ms
+— and `null` otherwise. `location` is `null` only for a session the index has not seen
+yet. It is computed whenever the payload is, but nothing *fires* the `orchestrator`
+event because the session's directory changed, so a client that has had the page open
+a while should refetch before acting on it.
 **Settings are per orchestrator.** `orchestrator.usageStopAutoResume` and the other
 `usageStop*` prefs in `settings.json` are only the defaults a **new** orchestrator
 starts with; changing them does nothing to one that already exists. Change an
@@ -5870,6 +5884,46 @@ is.
 nudges the orchestrator if anything is waiting. **`409 {error}` while usage is still
 over the cutoff** — the error names the window and the reading. Raise or turn off
 the cutoff with `PUT …/orchestrator` first, or wait for the window to reset.
+
+#### `POST /api/sessions/:id/orchestrator/move-to-checkout`
+
+`{force?: boolean}` → the payload, plus `moved: {from: string, to: string, restarted:
+boolean}`. Moves an orchestrator that is running in a worktree back to its project's
+main checkout (`projectCwd`), for one that cannot get out by itself. That happens
+when the session got into a worktree **without** EnterWorktree — a `cd` in Bash that
+the transcript then recorded as where it works (§*Sessions*, `worktree`). After that
+every line it writes is recorded in the worktree, so the transcript always says the
+worktree. ExitWorktree refuses because there is no EnterWorktree to undo, and a `cd`
+does not outlast the tool call.
+
+- **It is bridge state, not a transcript edit.** The orchestrator record keeps
+  `location.override`, and from then on the session summary's `cwd` is the main
+  checkout. So is every route that resumes the session: send, handoff, a nudge,
+  later-delivery. `claude --resume` finds the conversation from there because the
+  transcript sits in the main checkout's project directory.
+- **The process is replaced.** If the session has a live process, it is ended, and
+  the next message starts a fresh one in the main checkout (`restarted: true`).
+  Messages still waiting in its queue move to the new runner and start it there, as
+  they do across a model change, so nothing is dropped. With no process, nothing
+  starts (`restarted: false`), and the next message starts it in the right place.
+- **The worktree is not touched.** Its files and branch, and the workers using it,
+  are left as they are.
+- `404` when the session is not an orchestrator, or is unknown. `409 {error}` when it
+  already runs in its main checkout, when the main checkout is no longer on disk, and
+  while a turn is running (`busy` or `starting`): wait for the turn to end, or stop it.
+  It is also a `409 {error, background: number}` while the process still has background
+  tasks (a `run_in_background` command, a subagent), because ending the process stops
+  them. Send `force: true` to move it anyway. A refusal changes nothing.
+- **When the override stops applying:** a `worktree-state` entry written after the
+  move ends it, meaning the session really entered or left a worktree with
+  EnterWorktree/ExitWorktree since. That is a decision of its own, and an old move
+  must not undo it. Turning the orchestrator role off (`PUT …/orchestrator
+  {enabled: false}`) or deleting the session drops it with the rest of the record.
+  Nothing else clears it. A `cd` into a worktree after the move, the thing that
+  caused the problem, no longer moves where the session resumes. A second move
+  replaces the first.
+- **Open to a paired remote device**, as Resume is: it starts nothing, and the
+  worktree is left alone.
 
 #### `GET /api/sessions/:id/orchestrator/workers` · `GET …/orchestrator/usage`
 

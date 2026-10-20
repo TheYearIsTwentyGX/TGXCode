@@ -184,6 +184,22 @@
 .orch-limits label { display: flex; align-items: center; gap: var(--sp-3); }
 .orch-limits .orch-note { flex-basis: 100%; }
 .orch-wake { opacity: 0.85; }
+/* "Running in a worktree", with the way out: only for an orchestrator that is. */
+.orch-move { display: grid; gap: var(--sp-3); justify-items: start; }
+.orch-path { font-family: var(--mono); color: var(--text-3); }
+.orch-move button {
+    height: 28px;
+    padding: 0 var(--sp-6);
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.orch-move button:hover { background: var(--s4); }
+.orch-move button:focus-visible { outline: none; box-shadow: var(--ring-inset); }
 
 .orch-worker-line {
     display: flex;
@@ -195,7 +211,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .orch-dock, .orch-paused button, .orch-x { transition: none; }
+    .orch-dock, .orch-paused button, .orch-move button, .orch-x { transition: none; }
 }
 
 /* The stand-in drawn while a worker's or a plain conversation's orchestrator

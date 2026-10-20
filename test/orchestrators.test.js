@@ -1085,6 +1085,144 @@ function harness(name) {
         ok('a task wakes the orchestrator, starts once with the user\'s settings, and is never lost');
     }
 
+    // --- moving one out of a worktree it cannot leave -----------------------
+    //
+    // The ZeldaGX orchestrator: a `cd` into a worker's worktree that the bridge
+    // took as where it lives, after which every line it wrote was recorded there,
+    // so the transcript always voted for the worktree and nothing it could do
+    // would get it out. The fix is the bridge's own answer, kept in the store.
+    {
+        const proj = path.join(home, 'zelda');
+        fs.mkdirSync(path.join(proj, '.git'), { recursive: true });
+        fs.writeFileSync(path.join(proj, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+        const wt = path.join(proj, '.claude', 'worktrees', 'camera-spike');
+        const gitDir = path.join(proj, '.git', 'worktrees', 'camera-spike');
+        fs.mkdirSync(wt, { recursive: true });
+        fs.mkdirSync(gitDir, { recursive: true });
+        fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${gitDir}\n`);
+        fs.writeFileSync(path.join(gitDir, 'HEAD'), 'ref: refs/heads/camera-spike\n');
+
+        const { scanMeta } = require('../bridge/transcript');
+        const { SessionIndex } = require('../bridge/sessions');
+        const at = (s) => new Date(Date.UTC(2026, 9, 20, 12, 0, s)).toISOString();
+        const line = (type, cwd, s, extra = {}) => ({ type, cwd, timestamp: at(s), sessionId: 'Z',
+            message: { role: type, content: type === 'user' ? 'go' : [{ type: 'text', text: 'ok' }] }, ...extra });
+        const stuck = [
+            line('user', proj, 0), line('assistant', proj, 1),
+            line('user', wt, 2), line('assistant', wt, 3), line('user', wt, 4), line('assistant', wt, 5),
+        ];
+        const scan = (lines) => {
+            const f = path.join(home, `z-${Math.random()}.jsonl`);
+            fs.writeFileSync(f, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+            // The id comes from the file's name, as it does on disk.
+            return { ...scanMeta(f), sessionId: 'Z' };
+        };
+        const meta = scan(stuck);
+        assert.strictEqual(meta.cwd, wt, 'the transcript alone says the worktree, and keeps saying it');
+        assert.strictEqual(meta.worktreeStateTs, null);
+
+        const store = new Orchestrators({ file: fileOf('move-store') });
+        const summary = (m) => SessionIndex.prototype._summary.call({
+            flags: null, registry: null, later: null, schedules: null, standing: null, orchestrators: store,
+        }, { meta: m, size: 0, mtimeMs: 0 });
+        assert.strictEqual(summary(meta).cwd, wt);
+        store.enable('Z');
+        store.setCwdOverride('Z', { cwd: proj, from: wt, at: Date.parse(at(10)) });
+        assert.strictEqual(summary(meta).cwd, proj, 'the override wins over the trail');
+        assert.strictEqual(summary(meta).projectCwd, proj);
+
+        store.flush();
+        const again = new Orchestrators({ file: fileOf('move-store') });
+        assert.deepStrictEqual(again.get('Z').cwdOverride, { cwd: proj, from: wt, at: Date.parse(at(10)) },
+            'kept across a restart');
+        assert.strictEqual(new Orchestrators({ file: fileOf('move-store') }).cwdOverride('nobody', meta), null);
+
+        // A real EnterWorktree after the move is the session deciding for itself.
+        const entered = scan([...stuck, line('user', proj, 11), line('assistant', proj, 12),
+            { type: 'worktree-state', worktreeSession: { worktreeName: 'camera-spike',
+                worktreeBranch: 'camera-spike', worktreePath: wt, originalCwd: proj } },
+            line('assistant', wt, 13)]);
+        assert.strictEqual(entered.worktreeStateTs, at(12), 'the entry borrows the timestamp before it');
+        assert.strictEqual(summary(entered).cwd, wt, 'a later EnterWorktree supersedes the move');
+        assert.strictEqual(store.cwdOverride('Z', entered), null);
+        // One from before the move does not.
+        const earlier = scan([line('user', proj, 0), line('assistant', proj, 1),
+            { type: 'worktree-state', worktreeSession: { worktreeName: 'camera-spike',
+                worktreeBranch: 'camera-spike', worktreePath: wt, originalCwd: proj } },
+            line('assistant', wt, 3)]);
+        assert.strictEqual(earlier.cwd, wt);
+        assert.strictEqual(summary(earlier).cwd, proj, 'an EnterWorktree older than the move does not undo it');
+        store.disable('Z');
+        assert.strictEqual(summary(meta).cwd, wt, 'and it goes with the orchestrator role');
+        ok('a move to the main checkout is kept by the bridge, honoured by the summary, and yields to a later EnterWorktree');
+
+        // The action, against the fake pool.
+        const h = harness('move');
+        const relocated = [];
+        h.pool.relocate = (id, cwd) => {
+            const r = h.runners.get(id);
+            if (!r) return false;
+            relocated.push({ id, cwd, queue: r.queue.map(q => q.text) });
+            const fresh = new FakeRunner(id);
+            fresh.cwd = cwd;
+            fresh.queue = r.queue;
+            h.runners.set(id, fresh);
+            return true;
+        };
+        let sumCwd = wt;
+        const index = { ...h.deps.index,
+            summary: (id) => (id === 'GONE' ? null : { sessionId: id, title: id, permissionMode: 'auto',
+                cwd: h.store.cwdOverride(id, {}) ? h.store.cwdOverride(id, {}).cwd : sumCwd, projectCwd: proj }),
+        };
+        orchestration.init({ ...h.deps, index, sessionCwd: (s) => s.cwd });
+        const status = (fn) => { try { fn(); } catch (e) { return [e.status, e.message, e.extra]; } return 'ok'; };
+
+        assert.strictEqual(status(() => orchestration.moveToCheckout('PLAIN'))[0], 404, 'not an orchestrator');
+        orchestration.enable('M', null);
+        assert.deepStrictEqual(orchestration.payload('M').location,
+            { cwd: wt, projectCwd: proj, inWorktree: true, override: null });
+
+        const r = new FakeRunner('M');
+        r.cwd = wt;
+        r.background = new Map();
+        h.runners.set('M', r);
+        r.state = 'busy';
+        assert.strictEqual(status(() => orchestration.moveToCheckout('M'))[0], 409, 'not mid-turn');
+        r.state = 'starting';
+        assert.strictEqual(status(() => orchestration.moveToCheckout('M'))[0], 409);
+        r.state = 'idle';
+        r.background.set('t1', {});
+        r.hasBackground = true;
+        const bg = status(() => orchestration.moveToCheckout('M'));
+        assert.strictEqual(bg[0], 409);
+        assert.deepStrictEqual(bg[2], { background: 1 }, 'says how many background tasks it would stop');
+        assert.strictEqual(h.store.get('M').cwdOverride, null, 'a refusal changes nothing');
+        assert.strictEqual(relocated.length, 0);
+
+        r.queue.push({ id: 'q1', text: 'waiting' });
+        const out = orchestration.moveToCheckout('M', { force: true });
+        assert.deepStrictEqual(out.moved, { from: wt, to: proj, restarted: true });
+        assert.deepStrictEqual(relocated, [{ id: 'M', cwd: proj, queue: ['waiting'] }],
+            'the process is replaced in the main checkout, with what was waiting');
+        assert.strictEqual(h.store.get('M').cwdOverride.cwd, proj);
+        assert.strictEqual(h.store.get('M').cwdOverride.from, wt);
+        assert.strictEqual(out.location.cwd, proj);
+        assert.strictEqual(out.location.inWorktree, false);
+        assert.strictEqual(out.location.override.cwd, proj);
+        assert.ok(fs.existsSync(wt), 'the worktree is left alone');
+
+        assert.match(status(() => orchestration.moveToCheckout('M'))[1], /already/, 'already home');
+        // No process at all: the override alone is the move, and nothing restarts.
+        orchestration.enable('N', null);
+        assert.deepStrictEqual(orchestration.moveToCheckout('N').moved, { from: wt, to: proj, restarted: false });
+        // Already home with no override: refused before anything is written.
+        sumCwd = proj;
+        orchestration.enable('H', null);
+        assert.strictEqual(status(() => orchestration.moveToCheckout('H'))[0], 409);
+        assert.strictEqual(h.store.get('H').cwdOverride, null);
+        ok('move-to-checkout refuses non-orchestrators, a busy turn, background work and one already home');
+    }
+
     {
         // GET /api/orchestrators: the one list the picker draws and the Ctrl+K
         // row asks. /tmp is left out as the session list leaves it out — the two

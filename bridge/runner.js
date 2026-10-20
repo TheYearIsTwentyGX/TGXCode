@@ -2672,9 +2672,9 @@ class RunnerPool extends EventEmitter {
      * change and by `recycle`, so the two cannot drift: the queue-carrying rule
      * `_evict` documents is exactly the kind of fix that lands in one copy only.
      */
-    _replace(r, { model, effort }) {
+    _replace(r, { model, effort, cwd = r.cwd }) {
         const carried = r.takeQueue();
-        const fresh = this._make({ sessionId: r.sessionId, cwd: r.cwd, model, effort,
+        const fresh = this._make({ sessionId: r.sessionId, cwd, model, effort,
             permissionMode: r.permissionMode });
         this.runners.set(r.sessionId, fresh);
         // The old runner's exit reports *its* settings, and a window takes the
@@ -2689,6 +2689,21 @@ class RunnerPool extends EventEmitter {
         }
         this.emit('status', fresh.status());
         return fresh;
+    }
+
+    /**
+     * Put a session's process somewhere else: the live one is retired and an
+     * unstarted runner bound to `cwd` takes its place, so the next message
+     * resumes there. Anything still waiting moves across and starts it, as for a
+     * model change. `ensure` cannot do this — it keeps a live runner whatever
+     * `cwd` it is asked for. The caller decides whether now is a fair moment;
+     * this replaces whatever is there. False when there was no process.
+     */
+    relocate(sessionId, cwd) {
+        const r = this.runners.get(sessionId);
+        if (!r) return false;
+        this._replace(r, { model: r.model, effort: r.effort, cwd });
+        return true;
     }
 
     statuses() {

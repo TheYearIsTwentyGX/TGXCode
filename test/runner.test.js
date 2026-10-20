@@ -650,6 +650,44 @@ function runner() {
     }
 
     {
+        // relocate: how an orchestrator is moved out of a worktree. `ensure`
+        // keeps a live runner whatever cwd it is asked for, so without this the
+        // next message would go straight back to the old directory.
+        reset();
+        const pool = bridge();
+        const id = randomUUID();
+        const there = fs.realpathSync(fs.mkdtempSync(path.join(root, 'wt-')));
+        const home = fs.realpathSync(fs.mkdtempSync(path.join(root, 'home-')));
+        const inits = [];
+        pool.on('init', (i) => inits.push(i.cwd));
+        const r = pool.ensure(id, { cwd: there, isNew: true });
+        made.push(r);
+        r.send('in the worktree');
+        await until(() => turns().length === 1 && r.state === 'idle', 5000, 'the first turn');
+        assert.strictEqual(pool.relocate(id, home), true);
+        const fresh = pool.get(id);
+        made.push(fresh);
+        assert.notStrictEqual(fresh, r, 'the old process is retired');
+        assert.strictEqual(fresh.cwd, home);
+        assert.strictEqual(fresh.state, 'stopped', 'nothing waiting, so nothing started');
+        fresh.send('at home');
+        await until(() => turns().length === 2, 5000, 'the turn after the move');
+        assert.deepStrictEqual(inits, [there, home], 'the next process runs in the new directory');
+        assert.ok(turns()[1].argv.includes('--resume'), 'resuming the same conversation, not a new one');
+
+        // Anything still waiting moves across with it and starts it.
+        await until(() => fresh.state === 'idle', 5000, 'the second turn to end');
+        fresh.queue.push({ id: 'qcarried', uuid: randomUUID(), text: 'carried', at: Date.now(), attachments: [] });
+        assert.strictEqual(pool.relocate(id, there), true);
+        made.push(pool.get(id));
+        await until(() => turns().length === 3, 5000, 'the carried message');
+        assert.strictEqual(turns()[2].text, 'carried');
+        assert.strictEqual(inits[2], there);
+        assert.strictEqual(pool.relocate(randomUUID(), home), false, 'no process, nothing to move');
+        ok('relocate retires the process and the next one resumes in the new directory, queue and all');
+    }
+
+    {
         const pool = bridge();
         let asked = null;
         pool.stallAfter = (dir) => { asked = dir; return 1234; };

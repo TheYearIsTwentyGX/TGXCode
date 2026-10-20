@@ -7,7 +7,7 @@
 //
 // Two audiences. The UI reads the payload, turns the role on and off, changes
 // the settings, dismisses an item, records the answer to one of the brief's
-// decisions and presses Resume. The orchestrator's own MCP
+// decisions, presses Resume and moves one back to its main checkout. The orchestrator's own MCP
 // tools (bridge/mcp.js) call the rest — spawn, next, send, answer, read, stop,
 // close, summary — with the orchestrator's id in the path, and a worker calls
 // `report` with its own. Those are refused to a remote caller in server.js:
@@ -134,7 +134,7 @@ async function guarded(res, fn) {
     } catch (err) {
         const status = err.status || (err.refusal ? 409 : 500);
         if (status === 500) throw err;
-        return send(res, status, { error: err.message });
+        return send(res, status, { error: err.message, ...(err.extra || {}) });
     }
 }
 
@@ -213,6 +213,14 @@ async function handle(req, res, url, pathname, seg, who) {
     }
 
     if (sub === 'resume' && req.method === 'POST') return guarded(res, () => orchestration.resume(id));
+
+    // Out of a worktree it had no way out of, and back to the main checkout —
+    // see orchestration.moveToCheckout. Open to a paired phone, as Resume is: it
+    // starts nothing, and the worktree is left as it was.
+    if (sub === 'move-to-checkout' && !seg[5] && req.method === 'POST') {
+        const body = await readJson(req);
+        return guarded(res, () => orchestration.moveToCheckout(id, { force: body.force === true }));
+    }
 
     // Hand it a task. Validated before the orchestrator is looked up, so a
     // refused mode is a 403 whatever the id — PATCH /api/drafts/:id's order and

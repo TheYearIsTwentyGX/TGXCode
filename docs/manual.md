@@ -289,6 +289,34 @@ reachable by an agent.
   at a time; what it may not do is hand a token to something that wakes every
   session on the machine.
 
+### An orchestrator stuck in a worktree
+
+An orchestrator belongs in its project's main checkout. It can still end up in one
+of its workers' worktrees: an agent that `cd`s into a worktree in Bash, without
+EnterWorktree, gets recorded there, and the bridge resumes a session wherever its
+transcript says it is working. After that it is stuck. Every line the process writes
+is recorded in the worktree, so the transcript always says the worktree.
+ExitWorktree refuses, because there is no EnterWorktree to undo. A `cd` back does
+not outlast the tool call. Changing the mode or model starts the new process in the
+same place.
+
+When an orchestrator is in a worktree, its settings popover (the gear on the
+orchestrator page) says which one and offers **Move to main checkout**. After you
+confirm, the bridge records the main checkout as where the orchestrator runs. It
+ends the live process if there is one, and the next message starts it in the main
+checkout, resuming the same conversation. Messages already waiting move across and
+go first. The worktree, its branch and any worker in it are left alone.
+
+It is refused while a turn is running. Wait for the turn to end, or stop it. If the
+process still has background tasks running, you are asked again, because ending the
+process stops them.
+
+The move is kept by the bridge, not written into the transcript. It holds until the
+orchestrator really enters or leaves a worktree with EnterWorktree or ExitWorktree,
+which is a decision of its own and wins. Turning off the orchestrator role or
+deleting the session also clears it. A `cd` into a worktree afterwards no longer
+moves where it resumes.
+
 ### The send queue holds messages back on purpose
 
 A turn takes minutes, and the next thing you want to say arrives long before it
