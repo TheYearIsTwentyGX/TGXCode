@@ -105,6 +105,7 @@ import {
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, paintOrchestrator, toggleOrchestrator } from './orchestrator.js';
+import { applyPhoneInstall } from './phone-installs.js';
 import { orchPageTick } from './orchestrator-page.js';
 import { STUCK_MS } from './orchestrator-model.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
@@ -2736,6 +2737,10 @@ function connect() {
     // does: a delivery, a miss and a failure all move it. That is how a chip
     // starts saying "sent 02:00" while nobody is looking at it.
     es.addEventListener('later-changed', (e) => applyLater(JSON.parse(e.data)));
+
+    // An APK an agent filed for the phone, moving through download and install.
+    // The whole record every time; see web/phone-installs.js.
+    es.addEventListener('phone_install', (e) => applyPhoneInstall(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
 

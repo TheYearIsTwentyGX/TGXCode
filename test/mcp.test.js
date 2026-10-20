@@ -21,6 +21,9 @@ const { spawn } = require('child_process');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-mcp-'));
 fs.mkdirSync(path.join(home, 'tgxcode'), { recursive: true });
 fs.writeFileSync(path.join(home, 'tgxcode', 'token'), 'test-token\n');
+// install_on_phone waits 90s for a phone; this test has no minute and a half.
+process.env.TGXCODE_PHONE_INSTALL_WAIT_MS = '300';
+process.env.TGXCODE_PHONE_INSTALL_POLL_MS = '20';
 
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
@@ -91,7 +94,7 @@ const TASK = {
         const list = await mcp.rpc('tools/list', {});
         assert.deepStrictEqual(list.result.tools.map(t => t.name), [
             'suggest_session', 'list_sessions', 'message_session',
-            'find_tasks', 'start_task', 'set_task_status', 'schedule_session',
+            'find_tasks', 'start_task', 'set_task_status', 'schedule_session', 'install_on_phone',
         ]);
         for (const t of list.result.tools) {
             const modes = t.inputSchema.properties.permissionMode;
@@ -100,7 +103,7 @@ const TASK = {
                     `${t.name} does not offer bypassPermissions`);
             }
         }
-        ok('tools/list has the seven tools, and none offers bypassPermissions');
+        ok('tools/list has the eight tools, and none offers bypassPermissions');
 
         // find_tasks: the query string, the headers, and oldest first.
         answers.set('GET /api/suggestions', { status: 200, body: {
@@ -198,6 +201,45 @@ const TASK = {
         assert.strictEqual(r.isError, true);
         assert.strictEqual(r.text, 'x is in the past');
         ok('schedule_session sends at and from, and refuses bypass, neither, and both');
+
+        // install_on_phone: files the APK with this session's id, then polls the
+        // record until the phone settles it or the wait runs out.
+        const REC = { id: 'inst-1', fileName: 'app-debug.apk', label: 'app-debug.apk', state: 'pending',
+            message: null, packageName: null, versionName: null };
+        const phone = async (later, args = { apk_path: 'app/build/app-debug.apk' }) => {
+            answers.set('POST /api/phone-installs', { status: 201, body: REC });
+            answers.set('GET /api/phone-installs/inst-1', { status: 200, body: { ...REC, ...later } });
+            return mcp.call('install_on_phone', args);
+        };
+        r = await phone({ state: 'installed', packageName: 'com.foo', versionName: '1.2' },
+            { apk_path: 'app/build/app-debug.apk', label: ' Notes ' });
+        assert.strictEqual(r.isError, false, r.text);
+        assert.deepStrictEqual(seen[0].body, {
+            path: path.resolve('app/build/app-debug.apk'), label: 'Notes', sessionId: 'me',
+        }, 'a relative path is resolved against the working directory');
+        assert.strictEqual(seen[0].headers['x-tgxcode-client'], '1');
+        assert.strictEqual(seen[1].route, '/api/phone-installs/inst-1');
+        assert.match(r.text, /^Installed com\.foo 1\.2 on the phone\./);
+        r = await phone({ state: 'needs_action', message: 'Tap Install' });
+        assert.match(r.text, /^Waiting on the phone: the user has to tap Install/);
+        r = await phone({ state: 'failed', message: 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' });
+        assert.match(r.text, /could not install app-debug\.apk: INSTALL_FAILED_UPDATE_INCOMPATIBLE/);
+        assert.match(r.text, /uninstall the existing app on the phone/);
+        r = await phone({ state: 'failed', message: 'out of space' });
+        assert.doesNotMatch(r.text, /uninstall/, 'only a signature failure says to uninstall');
+        r = await phone({ state: 'pending' });
+        assert.match(r.text, /^No phone picked it up within 90s — it stays queued for 24 hours/);
+        assert.ok(seen.length > 2, 'it polled while it waited');
+        r = await phone({ state: 'downloading' });
+        assert.match(r.text, /still working on app-debug\.apk \(downloading\)/);
+        r = await mcp.call('install_on_phone', {});
+        assert.strictEqual(r.isError, true);
+        assert.strictEqual(seen.length, 0, 'refused before the bridge is asked');
+        answers.set('POST /api/phone-installs', { status: 400, body: { error: '/x.apk is not a zip' } });
+        r = await mcp.call('install_on_phone', { apk_path: '/x.apk' });
+        assert.strictEqual(r.isError, true);
+        assert.strictEqual(r.text, '/x.apk is not a zip', 'the bridge\'s refusal, verbatim');
+        ok('install_on_phone files the APK, waits for the phone, and says what happened');
 
         // set_summary, as an orchestrator: the brief's structured fields are in the
         // schema, and only the ones the model passed reach the bridge — a field

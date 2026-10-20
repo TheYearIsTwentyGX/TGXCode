@@ -18,6 +18,11 @@
 //   set_task_status   — say one is done, or dismiss it, or offer it again.
 //   schedule_session  — start a session later, once or on a cron.
 //
+// And one that reaches past the machine:
+//
+//   install_on_phone  — hand an APK to the TGXCode app on the user's phone,
+//                       which installs it itself. See bridge/phone-installs.js.
+//
 // The permission modes those offer stop short of bypassPermissions. That is a
 // guardrail on the tool, not a boundary — the agent can read the same token
 // this process does — and it exists so the obvious call cannot produce an
@@ -59,6 +64,7 @@
 require('./legacy-env');
 const fs = require('fs');
 const http = require('http');
+const path = require('path');
 const readline = require('readline');
 
 const cfg = require('./config');
@@ -487,6 +493,47 @@ const SCHEDULE = {
     },
 };
 
+const INSTALL_ON_PHONE = {
+    name: 'install_on_phone',
+    title: 'Install an APK on the user\'s phone',
+    description: [
+        'Install an Android APK you built on the user\'s phone, through the TGXCode app',
+        'they have on it. Use this instead of `adb install` whenever the target is the',
+        'user\'s own phone: it needs no USB, no wireless debugging and no pairing — the',
+        'phone downloads the APK from TGXCode and installs it with Android\'s own',
+        'installer. Wireless debugging keeps switching itself off; this does not depend',
+        'on it, so do not ask the user to turn it on.',
+        '',
+        'Build first, then pass the path of the finished .apk (e.g.',
+        'app/build/outputs/apk/debug/app-debug.apk). The file is copied when you call',
+        'this, so rebuilding afterwards does not affect the install in flight.',
+        '',
+        'Waits up to 90 seconds for the phone and says what happened: installed, waiting',
+        'on the user to tap Install on the phone, failed (with the reason), or not picked',
+        'up yet — in which case it stays queued for 24 hours and installs when the app',
+        'next connects. Do not call it again for the same build just because it is',
+        'queued or waiting on the user.',
+        '',
+        'Still use adb for an emulator, or when the user asks for adb explicitly.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            apk_path: {
+                type: 'string',
+                description: 'Path to the .apk on this machine. Relative paths are resolved '
+                    + 'against your working directory.',
+            },
+            label: {
+                type: 'string',
+                description: 'What the user sees on the phone and the desktop, e.g. '
+                    + '"Notes app — debug build with the sync fix". Defaults to the file name.',
+            },
+        },
+        required: ['apk_path'],
+    },
+};
+
 // ---------------------------------------------------------------------------
 // Orchestration — listed only to a session with a role. See
 // bridge/orchestration.js for what each call does on the bridge side.
@@ -752,6 +799,7 @@ const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WO
     READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY];
 
 const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
+    INSTALL_ON_PHONE,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
     ...(ROLE === 'worker' ? [REPORT] : [])];
 
@@ -1075,6 +1123,73 @@ async function callSchedule(id, args) {
     return say(id, lines.join('\n'));
 }
 
+// How long install_on_phone waits for the phone, and how often it looks. The
+// variables are for the test, which has no minute and a half to spare.
+const PHONE_WAIT_MS = Number(process.env.TGXCODE_PHONE_INSTALL_WAIT_MS) || 90_000;
+const PHONE_POLL_MS = Number(process.env.TGXCODE_PHONE_INSTALL_POLL_MS) || 1_500;
+
+/** The states worth stopping the wait for: done, or the next move is a person's. */
+const PHONE_SETTLED = new Set(['installed', 'failed', 'needs_action', 'cancelled']);
+
+/** What the model reads about where an install got to. */
+function phoneOutcome(rec) {
+    const what = rec.packageName
+        ? `${rec.packageName}${rec.versionName ? ` ${rec.versionName}` : ''}`
+        : rec.label || rec.fileName;
+    const said = rec.message ? ` The phone said: ${rec.message}` : '';
+    switch (rec.state) {
+    case 'installed':
+        return `Installed ${what} on the phone.`;
+    case 'needs_action':
+        return `Waiting on the phone: the user has to tap Install on the TGXCode notification `
+            + `or prompt (Android asks the first time an app is installed through TGXCode, and `
+            + `on some updates).${said} Tell the user; it finishes on its own once they tap it, `
+            + 'so do not call this again.';
+    case 'cancelled':
+        return `The install of ${what} was cancelled.${said}`;
+    case 'failed': {
+        const why = rec.message || 'no reason given';
+        // INSTALL_FAILED_UPDATE_INCOMPATIBLE and friends: the copy on the phone was
+        // signed with another key, and Android will not update across that.
+        const signature = /signature|incompatible|conflict/i.test(why)
+            ? ' The phone has a copy signed with a different key, so Android will not update '
+                + 'it in place: the user has to uninstall the existing app on the phone (which '
+                + 'loses its data) and then you can call install_on_phone again.'
+            : '';
+        return `The phone could not install ${what}: ${why}.${signature}`;
+    }
+    case 'pending':
+        return 'No phone picked it up within 90s — it stays queued for 24 hours and installs '
+            + 'when the TGXCode app next connects. Tell the user; do not call this again for '
+            + 'the same build.';
+    default:
+        return `The phone is still working on ${what} (${rec.state.replace('_', ' ')}) after 90s. `
+            + 'It carries on without you; the result shows in TGXCode.';
+    }
+}
+
+async function callInstallOnPhone(id, args) {
+    const given = typeof args.apk_path === 'string' ? args.apk_path.trim() : '';
+    if (!given) return toolError(id, 'apk_path is required — the .apk you built.');
+    const r = await api('POST', '/api/phone-installs', {
+        path: path.resolve(given),
+        label: typeof args.label === 'string' && args.label.trim() ? args.label.trim() : null,
+        sessionId: SESSION_ID,
+    });
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+
+    let rec = r.body;
+    const until = Date.now() + PHONE_WAIT_MS;
+    while (!PHONE_SETTLED.has(rec.state) && Date.now() < until) {
+        await new Promise(res => setTimeout(res, PHONE_POLL_MS));
+        const g = await api('GET', `/api/phone-installs/${encodeURIComponent(rec.id)}`);
+        // A failed poll is not the install failing; the next one may land.
+        if (g.ok && g.body) rec = g.body;
+    }
+    return say(id, `${phoneOutcome(rec)}\n    install id: ${rec.id}`);
+}
+
 // ---------------------------------------------------------------------------
 // Orchestration calls
 // ---------------------------------------------------------------------------
@@ -1339,6 +1454,7 @@ async function handle(msg) {
         if (name === 'start_task') return callStartTask(id, args);
         if (name === 'set_task_status') return callSetTaskStatus(id, args);
         if (name === 'schedule_session') return callSchedule(id, args);
+        if (name === 'install_on_phone') return callInstallOnPhone(id, args);
         const roleCall = ROLE && ROLE_CALLS[ROLE] && ROLE_CALLS[ROLE][name];
         if (roleCall) return roleCall(id, args);
         return toolError(id, `unknown tool: ${name}`);

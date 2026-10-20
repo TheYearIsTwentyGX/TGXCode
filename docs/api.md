@@ -282,7 +282,10 @@ stay open, with a task's mode and worktree refused as starting a session refuses
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included** — which covers the Hooks page's `/api/claude-config/hook-script` and `/api/claude-config/hook-sources`;
 **every method of `/api/claude-docs` likewise**;
-`POST /api/sessions/:id/attachments/open`.
+`POST /api/sessions/:id/attachments/open`;
+`POST /api/phone-installs` and `POST /api/phone-installs/:id/cancel` (the list, the
+APK download and the status report stay open — the phone is who they are for; see
+§*Phone installs*).
 
 The two attachment uploads are **not** refused — a phone has nowhere else to put a
 photo — but a remote caller's cap is **10MB** rather than 25MB; see
@@ -3720,6 +3723,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, any time after the one that said `listening`, seconds or minutes later. `web` (bool) as in the run record |
+| `phone_install` | **the whole record** of one phone install (§*Phone installs*), so there is nothing to refetch — `{id, fileName, size, sha256, label, sessionId, createdAt, state, message, packageName, versionName, updatedAt}`. Sent on create and on every change: a status post, a cancel, and the 24h expiry — so it can fire without anybody having done anything. Ungated, like `drafts-changed`: every open stream gets it, a phone's included, with no `POST /api/subscribe` flag. **The name is snake_case**, unlike every other event here; it is spelled exactly `phone_install`. There is no replay — a phone that connects later reads `GET /api/phone-installs` for anything still `pending` |
 | `commands-config` | `{at, scope, project, file}` — a project's `.tgxcode/` command file was written through `PUT /api/commands-config`. The fact of a change, never its content: these files carry `env` values the route classifies as local-only, and this channel reaches a paired phone. Re-read the file, and re-read `GET /api/commands` for any directory inside `project` — a renamed command's button does not change on its own. It does **not** fire for a hand edit; nothing watches these files, and the `409` on save is what catches that |
 
 `runner-status` is the full shape — the one the two narrower `runner` objects are cut
@@ -5974,6 +5978,138 @@ one exists and no client sees the difference. `served` is
 the origin `tailscale serve` is already proxying to this port, or null. Every `url`
 is a real value a client can use directly — never a placeholder to be edited. When
 nothing can be determined, `hosts` is empty and the caller should ask.
+
+## Phone installs
+
+APKs an agent built on this machine, waiting for the phone to install them. The
+phone client downloads the APK from the bridge and installs it itself with
+Android's PackageInstaller, so nothing on the phone needs USB or wireless
+debugging. An agent files one with the `install_on_phone` MCP tool, which calls
+`POST /api/phone-installs` below; the store's rules are in
+`bridge/phone-installs.js`'s header.
+
+**A record is a queue entry, not a command.** The bridge never reaches out to a
+phone. It files a `pending` record and broadcasts it as `phone_install`. **Any
+connected phone client may pick up a pending install**, whether it is connected
+now or connects later: on connect, read `GET /api/phone-installs` for anything
+`pending`. A phone claims a record by posting `downloading`, and the first phone to
+do so wins (see *the claim* below).
+
+The record, on every route and in the event:
+
+| Field | Type |
+|---|---|
+| `id` | string — a UUID |
+| `fileName` | string — the base name of the path the agent gave, e.g. `"app-debug.apk"` |
+| `size` | number — bytes |
+| `sha256` | string — lowercase hex, of the stored copy, which is exactly what `…/apk` serves |
+| `label` | string — what to show; defaults to `fileName`. Never null |
+| `sessionId` | string or null — the session that filed it |
+| `createdAt`, `updatedAt` | numbers — epoch ms |
+| `state` | string — one of `pending`, `downloading`, `installing`, `needs_action`, `installed`, `failed`, `cancelled` |
+| `message` | string or null — whatever the last status post said, or why it was cancelled. Replaced, not appended, on every status post |
+| `packageName`, `versionName` | strings or null — reported by the phone. Kept when a later post leaves them out |
+
+The states:
+
+| `state` | Meaning | Set by |
+|---|---|---|
+| `pending` | filed; nobody has claimed it | the bridge only — a client may not post it |
+| `downloading` | a phone is fetching the APK | the phone |
+| `installing` | the phone handed it to PackageInstaller | the phone |
+| `needs_action` | Android is waiting on the person holding the phone (the install prompt, or the "install unknown apps" permission) | the phone |
+| `installed` | done. **Final** | the phone |
+| `failed` | the phone gave up; `message` says why. **Not final**: another `downloading` may retry it while the APK is still stored | the phone |
+| `cancelled` | taken back at the desk, or expired. **Final** | `…/cancel`, the 24h expiry, or the phone |
+
+**The APK is copied when the record is filed**, to
+`~/.local/share/tgxcode/phone-installs/<id>.apk`, so a rebuild cannot change it
+under a download and `sha256` always describes what is served.
+
+**Retention.** The stored APK is deleted as soon as a record reaches `installed` or
+`cancelled`, and in any case 24 hours after `createdAt`. At that point a record
+still `pending`, `downloading` or `installing` becomes `cancelled` with `message`
+`"Expired: no phone installed it within 24 hours"`; one in `needs_action` keeps its
+state (the phone already has the APK and can still report `installed`), and one in
+`failed` stays `failed`. The records themselves are kept — the newest 50, per
+bridge port — and survive a bridge restart. The sweep runs at startup and hourly.
+
+### `GET /api/phone-installs`
+
+`200 {installs: [record…]}` — the newest 20, **newest first**, finished ones
+included. Open to remote callers.
+
+### `GET /api/phone-installs/:id`
+
+`200` the record, or `404 {error}`. Open to remote callers.
+
+### `GET /api/phone-installs/:id/apk`
+
+The APK. Open to remote callers, token-authenticated like every other route.
+
+- `200` with `Content-Type: application/vnd.android.package-archive`,
+  `Content-Length`, `Content-Disposition: attachment; filename="<fileName>"`,
+  `ETag: "<sha256>"` (quotes included, as HTTP requires), `X-SHA256: <sha256>`
+  (bare hex) and `Accept-Ranges: bytes`. Verify the sha256 before installing.
+- **`Range: bytes=a-b`** (one range; `a-` and `-n` work too) gets `206` with
+  `Content-Range`. A range past the end gets `416`. A multi-range request gets the
+  whole file. `If-Range: "<sha256>"` is honoured; a different value gets the whole
+  file with `200`.
+- `If-None-Match: "<sha256>"` gets `304`.
+- `404 {error}` for an unknown id. **`410 {error, state}`** when the record exists
+  but its APK has been deleted (installed, cancelled, or past 24h) — stop retrying.
+
+### `POST /api/phone-installs/:id/status`
+
+Body `{state: string, message?: string, packageName?: string, versionName?: string}`.
+Open to remote callers; needs `X-TGXCode-Client: 1` like every write. `200` the
+updated record, which is also broadcast as `phone_install`.
+
+- `state` must be one of `downloading`, `installing`, `needs_action`, `installed`,
+  `failed`, `cancelled` — else `400 {error}`. `pending` is refused.
+- `message` is trimmed and capped at 1000 characters; `packageName` at 256,
+  `versionName` at 128.
+- **The claim.** If the request carries `X-TGXCode-Viewer: <id>` (the same id as in
+  §*Polling counts as watching only if you say so*), the first `downloading` records
+  that id as the claimant, and a `downloading` from a **different** viewer id gets
+  `409 {error: "another phone is already installing this"}` — leave the record
+  alone. The claimant may re-post `downloading` freely. A post with no viewer
+  header can neither claim nor be refused. Posting `failed` releases the claim. The
+  claim is not on the wire; the `409` is how a phone learns it is not the one.
+- `409 {error}` for: anything but `installed` after `installed`; anything but
+  `installed` or `cancelled` after `cancelled` (a cancel that crossed an install
+  already done on the phone is corrected by posting `installed`); and `downloading`
+  when the APK is no longer stored.
+- `404 {error}` for an unknown id.
+
+### `POST /api/phone-installs`
+
+Body `{path: string, label?: string, sessionId?: string}`. **Refused to remote
+callers** (`403 {"error": "an APK can only be filed for the phone from the machine
+it was built on", "remote": true}`): it names a file on this machine and makes it
+downloadable wherever the token reaches. `path` is an absolute path to a regular
+file ending in `.apk` that starts with a zip header (`PK\x03\x04`); it is **not**
+limited to `TGXCODE_ROOTS`. `label` is capped at 200 characters.
+
+`201` the new record, broadcast as `phone_install`. `400 {error}` for a missing or
+relative path, a name not ending in `.apk`, a directory, or a file that is not a
+zip; `404 {error}` when nothing is at `path`; `413 {error}` over 1GB.
+
+### `POST /api/phone-installs/:id/cancel`
+
+No body. Sets `cancelled` and deletes the APK; `200` the record (also broadcast).
+Cancelling a cancelled record is a no-op `200`; an `installed` one is
+`409 {error}`. **Refused to remote callers** (`403 … "remote": true`); a phone that
+wants to give one up posts `cancelled` or `failed` to `…/status` instead.
+
+### The `install_on_phone` MCP tool
+
+Every session the bridge starts has it: `{apk_path: string, label?: string}`. A
+relative `apk_path` is resolved against the session's working directory. It files
+the APK with the session's id, then polls `GET /api/phone-installs/:id` for up to
+90 seconds and returns once the record is `installed`, `failed`, `needs_action` or
+`cancelled` — or, after 90 seconds, says it is still queued (it stays so for 24h).
+A phone client sees nothing different about these records.
 
 ## Publishing to GitHub
 
