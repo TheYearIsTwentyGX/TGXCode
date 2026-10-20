@@ -2026,6 +2026,9 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, branchPoint, readSubagentIndex, readSubagentTranscript,
     toolResultImage,
+    // For bridge/sessions.js, which reports the main checkout's branch for an
+    // orchestrator moved out of a worktree rather than the worktree's.
+    branchOf,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
     stripCommandTags, parseCommand,
     commandText,
