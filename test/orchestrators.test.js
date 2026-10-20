@@ -1130,6 +1130,11 @@ function harness(name) {
         store.setCwdOverride('Z', { cwd: proj, from: wt, at: Date.parse(at(10)) });
         assert.strictEqual(summary(meta).cwd, proj, 'the override wins over the trail');
         assert.strictEqual(summary(meta).projectCwd, proj);
+        // And it is no longer in the worktree: every surface that names one reads
+        // `worktree`, and the branch is the main checkout's, not the worktree's.
+        assert.strictEqual(meta.worktree && meta.worktree.name, 'camera-spike', 'the transcript still says the worktree');
+        assert.strictEqual(summary(meta).worktree, null, 'a moved orchestrator is in no worktree');
+        assert.strictEqual(summary(meta).gitBranch, 'main');
 
         store.flush();
         const again = new Orchestrators({ file: fileOf('move-store') });
@@ -1144,6 +1149,7 @@ function harness(name) {
             line('assistant', wt, 13)]);
         assert.strictEqual(entered.worktreeStateTs, at(12), 'the entry borrows the timestamp before it');
         assert.strictEqual(summary(entered).cwd, wt, 'a later EnterWorktree supersedes the move');
+        assert.strictEqual(summary(entered).worktree.name, 'camera-spike', 'and the worktree is back');
         assert.strictEqual(store.cwdOverride('Z', entered), null);
         // One from before the move does not.
         const earlier = scan([line('user', proj, 0), line('assistant', proj, 1),

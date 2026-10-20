@@ -13,7 +13,7 @@ const { EventEmitter } = require('events');
 
 const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
-    readSubagentTranscript, lastActivity, toolResultImage } = require('./transcript');
+    readSubagentTranscript, lastActivity, toolResultImage, branchOf } = require('./transcript');
 const { TurnIndex } = require('./turn-index');
 const { SkillRunIndex } = require('./skill-runs');
 const { SearchIndex } = require('./search-index');
@@ -359,8 +359,9 @@ class SessionIndex extends EventEmitter {
                         sessionId: m.sessionId, cwd: m.cwd, firstPrompt: m.firstPrompt,
                     })
                     : null;
+                const wt = worktreeOf(this.orchestrators, m);
                 const hay = [m.title, m.firstPrompt, m.lastPrompt, m.cwd,
-                    m.worktree && m.worktree.name, m.sessionId, sched && sched.title,
+                    wt && wt.name, m.sessionId, sched && sched.title,
                     this.flags && this.flags.get(m.sessionId).title]
                     .filter(Boolean).join(' ').toLowerCase();
                 if (!hay.includes(q)) continue;
@@ -457,7 +458,7 @@ class SessionIndex extends EventEmitter {
                         title: flags.title || m.title,
                         projectName: projectName(m.projectCwd || m.cwd),
                         projectCwd: m.projectCwd,
-                        worktree: m.worktree,
+                        worktree: worktreeOf(this.orchestrators, m),
                         test: flags.test,
                     },
                     // When it was raised, resolved for the sort. A transcript
@@ -528,8 +529,11 @@ class SessionIndex extends EventEmitter {
             cwd: moved ? moved.cwd : m.cwd,
             projectCwd: m.projectCwd,
             projectName: projectName(m.projectCwd || m.cwd),
-            gitBranch: m.gitBranch,
-            worktree: m.worktree,
+            // Moved, it is in the main checkout: the worktree it left is not where
+            // it is, and its branch is not the one it is on. The worktree it came
+            // from is still in the orchestrator payload's `location.override.from`.
+            gitBranch: moved ? branchOf(moved.cwd) : m.gitBranch,
+            worktree: moved ? null : m.worktree,
             prs: m.prs,
             model: m.model,
             // What the composer should open on for a session with no process of
@@ -974,6 +978,15 @@ class SessionIndex extends EventEmitter {
         this.byFile.delete(rec.file);
         return { file, dir: removedDir };
     }
+}
+
+/**
+ * The worktree a session is in, as the summary reports it: none for an
+ * orchestrator moved to its main checkout, whatever the transcript says.
+ */
+function worktreeOf(orchestrators, m) {
+    const moved = orchestrators ? orchestrators.cwdOverride(m.sessionId, m) : null;
+    return moved ? null : m.worktree;
 }
 
 /**

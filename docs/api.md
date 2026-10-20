@@ -552,7 +552,10 @@ that has left keeps `worktree` as the record of where it was, and `cwd` then equ
 `projectCwd` — so `cwd === worktree.path` is the test for "in it now", not the presence
 of `worktree`. **An orchestrator moved back with `POST …/orchestrator/move-to-checkout`
 has `cwd` equal to `projectCwd` whatever its trail says**, until a later EnterWorktree
-(§*Orchestrators*); `worktree` still names the worktree it was in. `worktree.branch` is read from the worktree's `HEAD` on disk when the
+(§*Orchestrators*), and `worktree` is `null` and `gitBranch` the main checkout's
+branch (read from its `HEAD`; null if unreadable) — the same on `/api/sessions`, the
+dashboard, the task board and the `session` of a `/api/suggestions` row. The worktree it
+was moved out of is `location.override.from` in the orchestrator payload. `worktree.branch` is read from the worktree's `HEAD` on disk when the
 worktree still exists.
 
 **`gitBranch` is the latest branch recorded, not the first.** Claude Code refreshes that
