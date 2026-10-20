@@ -245,6 +245,13 @@ reachable by an agent.
   or open again; and `schedule_session` starts a session later, once or on a cron,
   where it appears in the Schedules panel marked as made by that session. A
   completed task reads *Done* with its note, the pull request made a link.
+- **`install_on_phone` puts an APK on your phone without adb.** An agent that has
+  built an Android app hands the `.apk` to the bridge, and the TGXCode app on the
+  phone downloads and installs it itself — no USB, no wireless debugging to keep
+  switching back on. The desktop shows a toast that follows it from *queued* to
+  *installed* (with Cancel while nothing has reached the phone yet). A phone that is
+  not connected picks it up when it next is, for 24 hours; Android asks you to tap
+  Install the first time an app arrives this way. See `docs/api.md` §*Phone installs*.
 - **The woken session resumes in plan mode.** It reads the message, checks the
   claim against the files it names, and comes back with a plan — so it lands in
   *needs you* on the board, with something to approve, rather than having edited a

@@ -42,6 +42,7 @@ const { NotificationLog, ReadState } = require('./notifications');
 const { Usage } = require('./usage');
 const { Beacon } = require('./beacon');
 const { KeepAwake } = require('./keepawake');
+const { PhoneInstalls } = require('./phone-installs');
 const devbrowser = require('./devbrowser');
 const prStore = require('./pr-store');
 const { TerminalPool } = require('./terminal');
@@ -159,6 +160,9 @@ const slashCommands = new SlashCommandCache();
 // State only, never bytes: a run's output goes down its own stream. This is what
 // lets every open window paint a button green off one small payload.
 const runs = new RunPool({ onChange: (e) => broadcast('run-changed', e) });
+// APKs filed for the phone to install, and what it said about each. The event
+// carries the whole record, so no client refetches — see bridge/phone-installs.js.
+const phoneInstalls = new PhoneInstalls({ onChange: (r) => broadcast('phone_install', r) });
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -516,6 +520,17 @@ function remoteRefusal(pathname, method) {
     if (/^\/api\/sessions\/[^/]+\/attachments\/open$/.test(pathname)) {
         return 'attachments can only be opened on the machine they are saved to';
     }
+    // Filing an APK names a path on this machine and makes its bytes
+    // downloadable from anywhere the token reaches — the agent that built it is
+    // here, and so is the decision. Cancelling is the desk taking one back. The
+    // list, the download and the status report stay open: the phone is the
+    // client this exists for.
+    if (pathname === '/api/phone-installs' && method === 'POST') {
+        return 'an APK can only be filed for the phone from the machine it was built on';
+    }
+    if (/^\/api\/phone-installs\/[^/]+\/cancel$/.test(pathname)) {
+        return 'a phone install can only be cancelled from the machine that filed it';
+    }
     return null;
 }
 
@@ -678,6 +693,7 @@ const ROUTES = [
     require('./routes/terminals'),
     require('./routes/machine'),
     require('./routes/files'),
+    require('./routes/phone-installs'),
 ];
 
 // Builds the full-text index in the background, a few milliseconds at a time.
@@ -692,6 +708,7 @@ const ROUTE_DEPS = {
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent, keepAwake, evaluateKeepAwake,
+    phoneInstalls,
 };
 for (const routes of ROUTES) if (routes.init) routes.init(ROUTE_DEPS);
 
@@ -1311,6 +1328,8 @@ takeBackHeld().catch((err) => {
     // taken for whatever the registry already shows busy.
     evaluateKeepAwake();
     claudeConfig.start();
+    // An APK goes 24h after it was filed; once now and hourly after.
+    phoneInstalls.start();
     console.log(`[tgxcode] registry: ${registry.liveCount} of ${registry.size} `
         + 'session(s) still have a process');
 
