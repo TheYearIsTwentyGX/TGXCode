@@ -21,7 +21,7 @@ const { SearchIndex } = require('./search-index');
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 15;
+const CACHE_VERSION = 16;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -492,6 +492,10 @@ class SessionIndex extends EventEmitter {
         // A name given in the rail beats all three, schedule included — the same
         // rule scheduledTitle applies to `custom-title`, one level further out.
         const fromSchedule = flags.title ? null : scheduledTitle(m, schedule);
+        // An orchestrator the user moved out of a worktree it had no way out of
+        // resumes where it was moved to, whatever the transcript's trail says.
+        // See Orchestrators#cwdOverride.
+        const moved = this.orchestrators ? this.orchestrators.cwdOverride(m.sessionId, m) : null;
         const title = flags.title || fromSchedule || named.title;
         const titleSource = flags.title ? 'user' : fromSchedule ? 'schedule' : named.source;
         return {
@@ -521,7 +525,7 @@ class SessionIndex extends EventEmitter {
             // `{text, source, at}` — a line about where the last turn left things,
             // or null. See bridge/standing.js for where it comes from.
             standing: this.standing ? this.standing.forSession(m.sessionId) : null,
-            cwd: m.cwd,
+            cwd: moved ? moved.cwd : m.cwd,
             projectCwd: m.projectCwd,
             projectName: projectName(m.projectCwd || m.cwd),
             gitBranch: m.gitBranch,

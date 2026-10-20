@@ -136,6 +136,13 @@ function scanMeta(filePath) {
         lastUserTs: null,
         worktree: null,
         inWorktree: false,
+        // When the last worktree-state entry was written, as an ISO timestamp, or
+        // null if there is none. The entry has no timestamp of its own in every
+        // build seen so far, so it borrows the latest one before it — the
+        // EnterWorktree or ExitWorktree call that wrote it. What a bridge-side
+        // override of the directory is measured against: a real move made after
+        // the override supersedes it. See Orchestrators#cwdOverride.
+        worktreeStateTs: null,
         prs: [],
         // The suggested follow-ups raised in here, in the order they were
         // raised. Collected on the way past for the same reason peerMessages is:
@@ -393,6 +400,8 @@ function scanMeta(filePath) {
                     // it was is still worth keeping — it names the project — so
                     // only the "in it now" part is cleared.
                     trail.explicitAt = lineNo;
+                    meta.worktreeStateTs = (typeof o.timestamp === 'string' && o.timestamp)
+                        || meta.lastTs || null;
                     meta.inWorktree = Boolean(o.worktreeSession);
                     if (o.worktreeSession) {
                         meta.worktree = {

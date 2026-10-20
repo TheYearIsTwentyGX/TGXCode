@@ -473,6 +473,39 @@ function cleanPaused(p, at) {
     };
 }
 
+/**
+ * Where the user moved an orchestrator to: `{cwd, from, at}`, or null.
+ *
+ * A session that ended up running in a worktree without EnterWorktree has no
+ * way out by itself. The transcript is what decides where it resumes, and every
+ * line its process writes is recorded in the worktree, so the evidence for the
+ * worktree is always the newest; ExitWorktree refuses, having nothing to exit;
+ * and a `cd` is undone by the CLI after the call. So the bridge keeps its own
+ * answer, here, rather than editing a transcript that is Claude Code's.
+ */
+function cleanCwdOverride(c) {
+    if (!c || typeof c !== 'object' || typeof c.cwd !== 'string' || !c.cwd) return null;
+    return {
+        cwd: c.cwd,
+        from: typeof c.from === 'string' && c.from ? c.from : null,
+        at: Number.isFinite(c.at) ? c.at : 0,
+    };
+}
+
+/**
+ * The override as it stands against the transcript, or null once it no longer
+ * applies. It stops applying when a worktree-state entry is written after it —
+ * the session really entered (or left) a worktree with EnterWorktree since, and
+ * that is a decision of its own that the old move must not undo. Pure, for the
+ * test; `meta` is the scanned transcript (or a summary-shaped stand-in).
+ */
+function liveCwdOverride(c, meta) {
+    if (!c) return null;
+    const ts = meta && meta.worktreeStateTs ? Date.parse(meta.worktreeStateTs) : NaN;
+    if (Number.isFinite(ts) && ts > c.at) return null;
+    return c;
+}
+
 function cleanOrch(id, o) {
     if (!o || typeof o !== 'object') return null;
     return {
@@ -490,6 +523,7 @@ function cleanOrch(id, o) {
         inbox: (Array.isArray(o.inbox) ? o.inbox : []).map(cleanItem).filter(Boolean),
         seq: Number.isFinite(o.seq) ? o.seq : 0,
         lastNudgedSeq: Number.isFinite(o.lastNudgedSeq) ? o.lastNudgedSeq : 0,
+        cwdOverride: cleanCwdOverride(o.cwdOverride),
     };
 }
 
@@ -711,6 +745,24 @@ class Orchestrators {
         d.answeredAt = d.answer ? Date.now() : null;
         this._touch(o);
         return d;
+    }
+
+    /** Pin where an orchestrator resumes — see cleanCwdOverride. Null clears it. */
+    setCwdOverride(sessionId, override) {
+        const o = this.byId.get(sessionId);
+        if (!o) return null;
+        o.cwdOverride = override ? cleanCwdOverride({ at: Date.now(), ...override }) : null;
+        return this._touch(o);
+    }
+
+    /**
+     * The directory override that applies to this session now, or null. Only an
+     * orchestrator has one; `meta` is what decides whether a later EnterWorktree
+     * has superseded it (liveCwdOverride).
+     */
+    cwdOverride(sessionId, meta) {
+        const o = this.byId.get(sessionId);
+        return o ? liveCwdOverride(o.cwdOverride, meta) : null;
     }
 
     setPaused(sessionId, paused) {
@@ -951,6 +1003,7 @@ function refusal(message) {
 module.exports = {
     Orchestrators, cleanSettings, sortInbox, shouldNudge, usageTrip, describeCounts,
     usageTrips, resumeAtFor, decisionId, cleanMergeOrder, cleanTask, spawnOptsFromTask, isOpenTask,
+    liveCwdOverride,
     DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY, MAX_DECISIONS,
     MAX_OPEN_TASKS,
 };

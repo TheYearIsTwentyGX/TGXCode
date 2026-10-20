@@ -45,6 +45,8 @@
 // bridge's file too. Nothing here starts or stops a session unless the event
 // came from this pool or the runner is in it.
 
+const fs = require('fs');
+const path = require('path');
 const { randomUUID } = require('crypto');
 
 const cfg = require('./config');
@@ -279,7 +281,36 @@ function payload(id) {
         openTasks: store.openTasks(id).map(taskRow),
         unread: o.inbox.filter(i => i.status === 'new').length,
         inbox,
+        location: location(id),
     };
+}
+
+/**
+ * Where the orchestrator is: `{cwd, projectCwd, inWorktree, override}`, or null
+ * for a session the index has not seen yet. `cwd` is the live process's
+ * directory when there is one and otherwise where the next message would start
+ * it — the two differ only for a process started before a move, which the move
+ * itself replaces. `override` is the move still in force, `{cwd, from, at}`.
+ */
+function location(id) {
+    const s = index.summary(id);
+    if (!s) return null;
+    const r = pool.get(id);
+    const cwd = r ? r.cwd : sessionCwd(s);
+    const home = s.projectCwd || null;
+    const rec = index.get(id);
+    return {
+        cwd,
+        projectCwd: home,
+        inWorktree: inWorktreeOf(cwd, home),
+        override: store.cwdOverride(id, rec && rec.meta),
+    };
+}
+
+function inWorktreeOf(cwd, home) {
+    if (!cwd || !home || cwd === home) return false;
+    const base = path.join(home, '.claude', 'worktrees') + path.sep;
+    return cwd.startsWith(base);
 }
 
 // A burst of filings — six workers finishing at once — is one broadcast per
@@ -1017,6 +1048,52 @@ function resume(orchId) {
 }
 
 // ---------------------------------------------------------------------------
+// Moving it home
+// ---------------------------------------------------------------------------
+
+/**
+ * Move an orchestrator out of a worktree and back to its project's main
+ * checkout. For a session that got into one without EnterWorktree — a `cd`
+ * the bridge then took as where it lives — and so cannot leave: the transcript
+ * keeps voting for the worktree, ExitWorktree has nothing to exit, and a `cd`
+ * does not outlive the call. The answer is kept in the store (setCwdOverride)
+ * rather than written into the transcript, which is Claude Code's file.
+ *
+ * Refused for anything but an orchestrator, for one already home, and while a
+ * turn is running. Background work refuses too unless `force`, because ending
+ * the process ends it. The worktree itself is left exactly as it is.
+ */
+function moveToCheckout(orchId, { force = false } = {}) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    const s = index.summary(orchId);
+    if (!s) throw refuse(404, 'session not found');
+    const home = s.projectCwd;
+    if (!home || !fs.existsSync(home)) {
+        throw refuse(409, 'its main checkout is not on disk any more, so there is nowhere to move it');
+    }
+    const r = pool.get(orchId);
+    const here = location(orchId);
+    if (!here.inWorktree && sessionCwd(s) === home && (!r || r.cwd === home)) {
+        throw refuse(409, 'it already runs in its main checkout');
+    }
+    if (r && (r.state === 'busy' || r.state === 'starting')) {
+        throw refuse(409, 'it is in the middle of a turn — wait for it to finish, or stop it, then move it');
+    }
+    if (r && r.hasBackground && !force) {
+        const n = r.background.size;
+        const err = refuse(409, `${n} background task${n === 1 ? ' is' : 's are'} still running in it, `
+            + 'and moving it ends its process, which stops them. Send force to move it anyway.');
+        err.extra = { background: n };
+        throw err;
+    }
+    const from = here.cwd;
+    store.setCwdOverride(orchId, { cwd: home, from });
+    const restarted = pool.relocate(orchId, home);
+    emit(orchId);
+    return { ...payload(orchId), moved: { from, to: home, restarted } };
+}
+
+// ---------------------------------------------------------------------------
 // Turning it on and off
 // ---------------------------------------------------------------------------
 
@@ -1248,6 +1325,6 @@ function onPrsChanged() {
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
     fileTask, withdrawTask, list,
-    report, noteAutoResume, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, noteAutoResume, resume, moveToCheckout, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

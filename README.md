@@ -360,7 +360,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
-| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
+| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume, Move to main checkout and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |
@@ -440,8 +440,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
 | `bridge/standing.js` | The one-line "where this session stands" on a rail card: written after a turn ends, by a short haiku call or from the last reply, cached per reply in `standing.json` |
-| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them and the brief each keeps for the user (goal, open decisions, merge order) — the store, and the pure rules for inbox order, nudging, the usage cutoff and how a task's settings combine with a spawn's |
-| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, tasks from the user (filed, started, taken back, returned to Drafts when the orchestrator goes), and re-broadcasting one when a worker's PR moves |
+| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them, the brief each keeps for the user (goal, open decisions, merge order) and a directory override for one moved back to its main checkout — the store, and the pure rules for inbox order, nudging, the usage cutoff and how a task's settings combine with a spawn's |
+| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, tasks from the user (filed, started, taken back, returned to Drafts when the orchestrator goes), moving one out of a worktree it cannot leave, and re-broadcasting one when a worker's PR moves |
 | `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest (as text, and as fields for the orchestrator page's drawer), the last few turns, or the whole thing a page at a time |
 | `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |

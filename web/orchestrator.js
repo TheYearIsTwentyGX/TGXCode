@@ -314,9 +314,50 @@ export function settings(p) {
         <label class="orch-check"><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
             onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} /><span>Carry on by itself when the window resets</span></label>
         ${autoResumeNote(s.usageStop)}
+        ${whereItRuns(p)}
         <div class="orch-note">The defaults for new orchestrators, and text added to every
             orchestrator's instructions, are in Settings › Orchestrators.</div>
     </div>`;
+}
+
+/**
+ * Only for an orchestrator running in a worktree: which one, and the way back
+ * to the main checkout. It is there for one that got into a worker's worktree
+ * without EnterWorktree and so cannot leave by itself — see
+ * orchestration.moveToCheckout on the bridge.
+ */
+function whereItRuns(p) {
+    const at = p.location;
+    if (!at || !at.inWorktree) return null;
+    const name = at.cwd.split('/').filter(Boolean).pop();
+    return html`<div class="orch-move">
+        <div class="orch-note">Running in the worktree <span class="orch-path" title=${at.cwd}>${name}</span>,
+            not the project's main checkout.</div>
+        <button type="button" onClick=${() => moveToCheckout(p)}>Move to main checkout</button>
+    </div>`;
+}
+
+async function moveToCheckout(p, force = false) {
+    const at = p.location;
+    if (!force && !window.confirm('Move this orchestrator back to its main checkout?\n\n'
+        + `Its next message starts it in ${at.projectCwd} instead of ${at.cwd}. If it has a process `
+        + 'running, that process is ended first. The worktree itself is left as it is.')) return;
+    try {
+        const next = await post(`/api/sessions/${p.orchestratorId}/orchestrator/move-to-checkout`,
+            force ? { force: true } : {});
+        if (stillShowing(p.orchestratorId)) state.orch = next;
+        toast(next.moved && next.moved.restarted
+            ? 'Moved to the main checkout. Its process was ended; the next message starts it there.'
+            : 'Moved to the main checkout. The next message starts it there.', 'ok');
+    } catch (err) {
+        const n = err.data && err.data.background;
+        if (err.status === 409 && n && window.confirm(`${n} background task${n === 1 ? ' is' : 's are'} `
+            + 'still running in it, and moving it stops them. Move it anyway?')) {
+            return moveToCheckout(p, true);
+        }
+        toast(`Could not move it: ${err.message}`, 'error');
+    }
+    paintOrchestrator();
 }
 
 /** Whether a reply about this orchestrator is still about what is on screen. */
