@@ -3232,6 +3232,9 @@ export function applyRunner(s) {
     // While a subagent is on screen the composer belongs to nothing you can
     // send to, so its controls stay out of the way.
     dom.btnStop.hidden = !busy || Boolean(state.agent);
+    // Only a live process has anything to restart. Busy counts: the button stays
+    // put through a turn, and pressing it then says to wait rather than vanishing.
+    dom.btnRestartProc.hidden = !(s && (s.state === 'idle' || busy));
     enableSend(Boolean(state.current) && !state.agent);
     // Say what the button will actually do. While a turn is running the message
     // joins the queue rather than going anywhere, and that is worth admitting
@@ -3619,6 +3622,41 @@ dom.btnPin.addEventListener('click', () => {
 });
 
 dom.btnOrch.addEventListener('click', () => toggleOrchestrator());
+
+dom.btnRestartProc.addEventListener('click', () => restartProcess());
+
+/**
+ * Restart process: the bridge puts a fresh `claude --resume` in place of the
+ * live one, in the same directory and settings, so the session sees the tools
+ * TGXCode has now. Asks first only when that would stop something — background
+ * work — which the bridge says by refusing with a count.
+ */
+async function restartProcess(force = false) {
+    const s = state.current;
+    if (!s) return;
+    dom.btnRestartProc.disabled = true;
+    try {
+        const out = await post(`/api/sessions/${s.sessionId}/restart`, force ? { force: true } : {});
+        toast(out.restarted
+            ? 'Restarted its process. It has TGXCode’s current tools now.'
+            : 'It had no process running, so its next message starts a fresh one anyway.', 'ok');
+    } catch (err) {
+        const d = err.data || {};
+        if (err.status === 409 && d.busy) {
+            toast('Wait for the turn to finish, or stop it first.', 'error');
+        } else if (err.status === 409 && d.background && !force) {
+            const n = d.background;
+            if (window.confirm(`${n} background task${n === 1 ? ' is' : 's are'} still running in this `
+                + 'session, and restarting its process stops them. Restart it anyway?')) {
+                return restartProcess(true);
+            }
+        } else {
+            toast(`Could not restart it: ${err.message}`, 'error');
+        }
+    } finally {
+        dom.btnRestartProc.disabled = false;
+    }
+}
 
 dom.btnArchive.addEventListener('click', () => {
     if (state.current) setFlags(state.current, { archived: !state.current.archived });

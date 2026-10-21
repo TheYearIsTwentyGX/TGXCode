@@ -357,7 +357,8 @@ Everything that stays visible is genuinely still cancellable:
 - **A process that dies** hands back everything it was holding, the turn it died
   on and the queue behind it, in the order you wrote them.
 - **A model, effort or permission change** replaces the process; the queue moves
-  across, because those messages belong to you, not to the process.
+  across, because those messages belong to you, not to the process. So does
+  **Restart process** (see *Picking up new code*).
 
 **Effort** sits next to *Model* in the composer and in *Start a session*, and is
 kept on drafts, scheduled messages and schedules the same way. It is `claude
@@ -1694,6 +1695,23 @@ It restarts *this* bridge, whichever that is, so a dev instance in a worktree
 picks up its own branch and not main. One wart: the replacement comes back in its
 own session, so a bridge started by `npm run dev` is no longer stoppable with
 Ctrl-C in that terminal — kill it by port instead.
+
+**A bridge restart does not give a running session new tools.** Each session's
+`claude` starts its own copy of `bridge/mcp.js` when it launches and keeps that
+tool list for as long as it lives, and the session host keeps it alive across
+bridge restarts on purpose. So a tool TGXCode gained since (`install_on_phone`,
+say) is invisible to a session that was already running. Press **Restart
+process** — the circular arrow beside the pin in the conversation header, also in
+the command palette — and the bridge ends that session's process and starts a
+fresh `claude --resume` of the same conversation straight away, in the same
+directory and with the same model, effort and permission mode. Messages waiting in
+its queue move across and go first. The button is there only while the session
+has a process; one with none starts fresh on its next message anyway.
+
+It will not cut anything short. While a turn is running, or a question or approval
+card is waiting on you, it says to wait for the turn to finish or stop it first. If
+the process still has background tasks running, it asks before going ahead,
+because ending the process stops them.
 
 For a terminal, add this to `~/.bashrc`:
 

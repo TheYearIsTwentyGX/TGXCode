@@ -445,6 +445,18 @@
                   <path d="M12 13v8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
                 </svg>
               </button>
+              <!-- Restart process: a fresh `claude --resume` in place of the live
+                   one, so the session sees tools TGXCode gained since it started.
+                   Shown only while it has a process — see applyRunner. -->
+              <button id="btn-restart-proc" class="icon-btn" type="button" hidden
+                      title="Restart this session’s process, so it picks up TGXCode’s current tools">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round"/>
+                  <path d="M18 3.5v3.7h-3.7" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
             </span>
             <span class="conv-act-group" role="group" aria-label="Panes">
               <!-- Before the Changed button, so the toolbar reads in the same

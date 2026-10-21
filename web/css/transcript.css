@@ -126,6 +126,9 @@
 .icon-btn.on { color: var(--blue); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
 .icon-btn.danger:hover { background: var(--red-cont); color: var(--red); }
+/* `display: grid` above beats the browser's own `[hidden]`, and two of these are
+   hidden by state: Orchestrator on a worker, Restart process with no process. */
+.icon-btn[hidden] { display: none; }
 
 /* What the project declares in .tgxcode/ — a button each, words rather than an
    icon, because "Dev server" is not a thing anybody draws. */

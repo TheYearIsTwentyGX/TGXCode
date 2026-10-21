@@ -2711,6 +2711,31 @@ class RunnerPool extends EventEmitter {
         return true;
     }
 
+    /**
+     * Replace a session's live process with a fresh one now, and start it — the
+     * Restart process action. A process reads `bridge/mcp.js`'s tool list once,
+     * when it launches, and the session host keeps it alive across bridge
+     * restarts, so a tool TGXCode gained since is invisible to it until it is
+     * replaced. Started at once rather than left for the next message, so the
+     * new tools are there before anybody asks for them.
+     *
+     * `_replace` does the work, so the queue moves across exactly as it does
+     * for a model change. A model change still held for background work is
+     * applied rather than lost: it was waiting for a moment like this one.
+     *
+     * The caller decides whether now is a fair moment, as for `relocate`; this
+     * replaces whatever is there. Null when there was no live process.
+     */
+    restart(sessionId, cwd) {
+        const r = this.runners.get(sessionId);
+        if (!r || !r.proc) return null;
+        const { model, effort } = r.pendingSettings || r;
+        r.pendingSettings = null;
+        const fresh = this._replace(r, { model, effort, cwd: cwd || r.cwd });
+        fresh.start();
+        return fresh;
+    }
+
     statuses() {
         const out = {};
         for (const [id, r] of this.runners) out[id] = r.status();

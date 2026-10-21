@@ -597,6 +597,38 @@ async function handle(req, res, url, pathname, seg, who) {
             return send(res, 200, { ...out, dropped: out.dropped.map(q => q.text) });
         }
 
+        // --- restart the process -------------------------------------------
+        // A fresh `claude --resume` in place of the live one, so a session
+        // picks up tools TGXCode gained since it started — see pool.restart.
+        // The refusals are moveToCheckout's: a turn or a pending card is never
+        // cut short, and background work only with `force`. Open to a remote
+        // caller, as Resume is: it starts nothing that was not already running.
+        if (tail === 'restart' && req.method === 'POST') {
+            const body = await readJson(req);
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const r = pool.get(sessionId);
+            if (!r || !r.proc) {
+                return send(res, 200, { ok: true, restarted: false, status: r ? r.status() : null });
+            }
+            if (r.state === 'busy' || r.state === 'starting' || r.pendingPermission) {
+                return send(res, 409, {
+                    error: 'it is in the middle of a turn — wait for the turn to finish, or stop it first',
+                    busy: true,
+                });
+            }
+            if (r.hasBackground && !body.force) {
+                const n = r.background.size;
+                return send(res, 409, {
+                    error: `${n} background task${n === 1 ? ' is' : 's are'} still running in it, `
+                        + 'and restarting ends its process, which stops them. Send force to restart it anyway.',
+                    background: n,
+                });
+            }
+            const fresh = pool.restart(sessionId, sessionCwd(summary));
+            return send(res, 200, { ok: true, restarted: true, status: fresh.status() });
+        }
+
         // --- the send queue ------------------------------------------------
         // Messages waiting behind the turn in flight. They live in the runner, so
         // there is nothing to read when no process is live — that is an empty
