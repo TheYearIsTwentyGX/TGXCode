@@ -478,6 +478,7 @@ Two rules worth knowing before you send a patch:
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
 | `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`, `pose`. Every call names a preset from `PRESETS` (`menu`, `dialog`, `toast`, `dock`…); durations and curves are read from `--dur-*`/`--ease-*` in base.css, and reduced motion keeps a short fade without the movement. See docs/plans/22-ui-overhaul.md |
+| `web/tool-name.js` | A tool's name as a person reads it — `mcp__tgxcode__set_summary` → "TGXCode: Set Summary". Display only; `bridge/tool-name.js` is the same function for strings the bridge composes |
 | `web/format.js` | Timestamps, durations, paths and model ids as short text. Pure, so the Node tests import it directly |
 | `web/icons.js` | `ICON`, the SVG glyphs every surface draws, `PR_ICON`, and `icon()` to make one |
 | `web/digest.js` | The while-you-were-away card — deciding when you were away, and drawing what `/api/digest` says happened |

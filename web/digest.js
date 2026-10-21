@@ -36,6 +36,7 @@ import { get } from './api.js';
 import { BOOT_PREFS } from './boot.js';
 import { dom } from './dom.js';
 import { clip } from './format.js';
+import { toolDisplayName } from './tool-name.js';
 import { openFromNote } from './app.js';
 import { openSession } from './transcript/conversation.js';
 import { showSched } from './schedules.js';
@@ -200,7 +201,7 @@ const GROUPS = [
         row: (w) => ({
             id: w.requestId || w.sessionId,
             title: w.title || 'A session',
-            sub: w.kind === 'tool' ? `${ASK_WORDS.tool} ${w.tool || 'a tool'}` : ASK_WORDS[w.kind] || 'is waiting',
+            sub: w.kind === 'tool' ? `${ASK_WORDS.tool} ${toolDisplayName(w.tool) || 'a tool'}` : ASK_WORDS[w.kind] || 'is waiting',
             at: w.askedAt,
             go: () => openSession(w.sessionId),
         }),

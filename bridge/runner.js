@@ -99,6 +99,7 @@ const { deleteBoth } = require('./legacy-env');
 
 const { CLAUDE_BIN } = cfg;
 const { describeTool } = require('./transcript');
+const { toolDisplayName } = require('./tool-name');
 const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
 const hostClient = require('./host-client');
 
@@ -2254,7 +2255,11 @@ function askFrom(msg) {
         id: msg.request_id,
         kind: ASK_KINDS[req.tool_name] || 'tool',
         tool: req.tool_name,
-        displayName: req.display_name || req.tool_name,
+        // Ours for an MCP tool, whatever the CLI sent: its own label for one is
+        // the server and tool spelled raw, and this string is drawn as-is by every
+        // card, notification and the phone.
+        displayName: toolDisplayName(req.tool_name) !== req.tool_name
+            ? toolDisplayName(req.tool_name) : req.display_name || req.tool_name,
         input: req.input || {},
         toolUseId: req.tool_use_id || null,
         description: req.description || null,

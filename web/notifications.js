@@ -15,6 +15,7 @@ import { state } from './state.js';
 import { clip, dur } from './format.js';
 import { openSession } from './transcript/conversation.js';
 import { toolSummary } from './transcript/tools.js';
+import { toolDisplayName } from './tool-name.js';
 import { stopFromCard } from './boards/parts.js';
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -166,7 +167,7 @@ export function announceAsk(p) {
     if (watching) return;
 
     const kind = p.kind || 'tool';
-    const head = ASK_TITLE[kind] || `${p.displayName} needs permission`;
+    const head = ASK_TITLE[kind] || `${toolDisplayName(p.displayName || p.tool)} needs permission`;
     // Deliberately not gated on allowedNow: the toast carries a tag, so a
     // second ask replaces the first rather than stacking, and suppressing it
     // would leave the old one on screen offering to answer a dead request.

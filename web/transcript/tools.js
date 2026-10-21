@@ -12,6 +12,7 @@ import { get } from '../api.js';
 import { el, toast } from '../dom.js';
 import { clip, dur, shortModel } from '../format.js';
 import { escapeHtml, highlight } from '../highlight.js';
+import { toolDisplayName } from '../tool-name.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
 import { peerByName } from '../composer/mentions.js';
@@ -116,7 +117,7 @@ export function renderTool(ev) {
 
     const det = el('details', { class: 'tool', 'data-status': status },
         el('summary', {},
-            el('span', { class: 'tname' }, ev.name),
+            el('span', { class: 'tname', title: ev.name }, toolDisplayName(ev.name)),
             el('span', { class: 'targ' }, summary),
             el('span', { class: 'tmeta' },
                 [status === 'pending' ? 'running' : '', dur(ev.durationMs)]

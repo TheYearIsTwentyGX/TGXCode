@@ -54,6 +54,7 @@ import { enter, isUp, present, settle } from './motion.js';
 import { answerAskFor } from './transcript/approvals.js';
 import { holdPaneInsets, releasePaneInsets } from './transcript/layout.js';
 import { toolSummary } from './transcript/tools.js';
+import { toolDisplayName } from './tool-name.js';
 import { sendMessage } from './composer/send.js';
 import { onQuotaChange, quotaWindows } from './quota.js';
 import { clockAt, goTo, inboxList, paintOrchestrator, resume, settings } from './orchestrator.js';
@@ -343,7 +344,7 @@ function needCard(p, n, now) {
         case 'ask': return html`<div key=${n.key} class="op-need">
             <div class="op-need-q">${n.ask.kind === 'plan' ? 'The orchestrator has a plan for you to approve.'
                 : n.ask.kind === 'question' ? 'The orchestrator is asking you something.'
-                : `The orchestrator wants permission: ${n.ask.displayName || n.ask.tool || 'a tool'}.`}</div>
+                : `The orchestrator wants permission: ${toolDisplayName(n.ask.displayName || n.ask.tool) || 'a tool'}.`}</div>
             <div class="op-need-from">Answer it in the conversation, beside this.</div>
         </div>`;
         case 'decision': return decisionCard(p, n.decision, now);
@@ -716,7 +717,7 @@ function peekTree(p, w) {
                     <dt>Turns</dt><dd>${f.turns}</dd>
                     ${f.todo ? html`<dt>Todos</dt><dd>${`${f.todo.done} of ${f.todo.total} done`}${f.todo.now
                         ? html`<span class="op-quiet">${` — now ${f.todo.now}`}</span>` : null}</dd>` : null}
-                    ${f.tools.length ? html`<dt>Tools</dt><dd>${f.tools.slice(0, 5).map(t => `${t.name} ×${t.n}`).join(', ')}</dd>` : null}
+                    ${f.tools.length ? html`<dt>Tools</dt><dd>${f.tools.slice(0, 5).map(t => `${toolDisplayName(t.name)} ×${t.n}`).join(', ')}</dd>` : null}
                     <dt>Files</dt><dd>${f.files.length ? html`<ul class="op-files">${f.files.slice(0, 10).map(x => html`<li key=${x}>${shortPath(x, w)}</li>`)}</ul>${
                         f.files.length > 10 ? html`<span class="op-quiet">${`and ${f.files.length - 10} more`}</span>` : null}` : 'none edited yet'}</dd>
                 </dl>` : null}
@@ -809,7 +810,7 @@ function askBlock(p, w, b) {
         const what = item.ask ? toolSummary({ name: item.ask.tool, input: item.ask.input }) || item.text : item.text;
         return html`<div class="op-ask" data-busy=${String(busy)}>
             ${lead}
-            <pre class="op-ask-what"><b>${(item.ask && (item.ask.displayName || item.ask.tool)) || 'Tool'}</b> ${clip(what, 400)}</pre>
+            <pre class="op-ask-what"><b title=${(item.ask && item.ask.tool) || null}>${(item.ask && toolDisplayName(item.ask.displayName || item.ask.tool)) || 'Tool'}</b> ${clip(what, 400)}</pre>
             <div class="op-ask-btns">
                 <button class="lbtn ok" type="button" disabled=${busy} onClick=${() => send({ decision: 'allow' })}>Allow</button>
                 <button class="lbtn" type="button" disabled=${busy} title="Allow it for the rest of that session"
