@@ -896,4 +896,38 @@ a:hover { text-decoration: underline; }
 .cv-stale-ver { flex: none; font: 400 var(--fs-xs)/var(--lh-prose) var(--mono); color: var(--text-4); }
 .cv-old { color: var(--yellow); }
 
+/* Phone installs — the quota pill's shape again. Quiet while nothing is moving
+   (an install from earlier today, listed for the record), in the normal text
+   colour while one is in flight, and yellow for the three things a person has
+   to look at. See web/phone-installs.js. */
+.pi-wrap { flex: none; }
+.pi-pill { gap: var(--sp-3); }
+.pi-pill[data-kind="idle"] { color: var(--text-4); }
+.pi-pill[data-kind="busy"] { color: var(--text-2); }
+.pi-pill[data-kind="warn"],
+.pi-pill[data-kind="warn"]:hover,
+.pi-pill[data-kind="warn"][aria-expanded="true"] { color: var(--yellow); }
+.pi-pill svg { flex: none; }
+.pi-pill span { font-variant-numeric: tabular-nums; }
+
+/* Twenty rows of this fit nowhere a popover can sit, so the list scrolls. */
+.pi-menu { width: 340px; }
+#pi-body { max-height: min(60vh, 520px); overflow-y: auto; margin-right: calc(-1 * var(--sp-4)); padding-right: var(--sp-4); }
+
+.pi-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.pi-pkg { font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); color: var(--text-4); overflow-wrap: anywhere; }
+.pi-row .q-row-sub { margin-top: var(--sp-1); }
+.pi-row[data-stalled="1"] .pi-state,
+.pi-row[data-state="needs_action"] .pi-state { color: var(--yellow); }
+.pi-row[data-state="failed"] .pi-state { color: var(--red); }
+.pi-row[data-state="installed"] .pi-state { color: var(--green); }
+.pi-row[data-stalled="1"] .q-bar i { background: var(--yellow); }
+.pi-msg { margin-top: var(--sp-2); font: 400 var(--fs-sm)/var(--lh-base) var(--sans); color: var(--text-3); overflow-wrap: anywhere; }
+.pi-acts { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-3); }
+.pi-acts .pi-act { margin-left: 0; }
+.pi-acts .pi-act.primary { color: var(--blue); }
+
+/* Its toast opens the popover; the buttons in it keep their own jobs. */
+.toast.pi-toast { cursor: pointer; }
+
 

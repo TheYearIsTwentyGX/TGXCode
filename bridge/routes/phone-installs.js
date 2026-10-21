@@ -8,8 +8,10 @@
 // server.js rather than a check here: filing names a path on this machine and
 // makes its bytes downloadable from anywhere the token reaches, which is a
 // decision for something running on this machine. Everything a phone needs —
-// the list, the APK, the status report — stays open, since the phone is the
-// client this exists for.
+// the list, the APK, the status report, and retry — stays open, since the phone
+// is the client this exists for. Retry is open because it only puts the record
+// back in the queue: the bytes it makes downloadable again are ones the desk
+// already chose to.
 //
 // One of the route modules server.js's `api()` asks in turn — see the note above
 // ROUTES there for the contract.
@@ -49,6 +51,10 @@ function parseRange(header, size) {
 }
 
 function serveApk(req, res, rec, file) {
+    // A cancel keeps the file for the desk's Retry; to a phone it is gone.
+    if (rec.state === 'cancelled') {
+        return send(res, 410, { error: 'this install was cancelled', state: rec.state });
+    }
     let size;
     try { size = fs.statSync(file).size; } catch {
         return send(res, 410, { error: 'the APK is no longer stored here', state: rec.state });
@@ -120,6 +126,11 @@ async function handle(req, res, url, pathname, seg) {
 
     if (seg[3] === 'cancel' && !seg[4] && req.method === 'POST') {
         const out = phoneInstalls.cancel(id);
+        return out.error ? send(res, out.status, { error: out.error }) : send(res, 200, out.record);
+    }
+
+    if (seg[3] === 'retry' && !seg[4] && req.method === 'POST') {
+        const out = phoneInstalls.retry(id);
         return out.error ? send(res, out.status, { error: out.error }) : send(res, 200, out.record);
     }
 

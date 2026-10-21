@@ -23,7 +23,8 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-phone-'));
 process.env.XDG_DATA_HOME = home;
 
 const {
-    PhoneInstalls, DIR, KEEP_APK_MS, MAX_RECORDS, LIST_LIMIT,
+    PhoneInstalls, DIR, KEEP_APK_MS, MAX_RECORDS, LIST_LIMIT, STALL_MS, RELEASE_MS, MAX_ATTEMPTS,
+    HEARTBEAT_MS,
 } = require('../bridge/phone-installs');
 const routes = require('../bridge/routes/phone-installs');
 const { NEXT } = require('../bridge/http');
@@ -33,8 +34,8 @@ assert.ok(DIR.startsWith(home), `refusing to run: DIR is ${DIR}, outside the thr
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
 
-const FIELDS = ['createdAt', 'fileName', 'id', 'label', 'message', 'packageName', 'sessionId',
-    'sha256', 'size', 'state', 'updatedAt', 'versionName'].sort();
+const FIELDS = ['attempts', 'createdAt', 'fileName', 'id', 'label', 'message', 'packageName',
+    'progress', 'sessionId', 'sha256', 'size', 'stalled', 'state', 'updatedAt', 'versionName'].sort();
 
 // An APK is a zip; the store checks the local-file-header magic and nothing more.
 const src = path.join(home, 'build', 'app-debug.apk');
@@ -101,6 +102,9 @@ function call(port, method, p, { body, headers = {} } = {}) {
         assert.strictEqual(r.size, BYTES.length);
         assert.strictEqual(r.sha256, SHA);
         assert.strictEqual(r.createdAt, clock);
+        assert.strictEqual(r.progress, null);
+        assert.strictEqual(r.stalled, false);
+        assert.strictEqual(r.attempts, 0);
         assert.deepStrictEqual(events, [r], 'create is broadcast with the whole record');
         assert.ok(s.hasApk(r.id));
         // The copy is what is served: a rebuild that rewrites the source must not
@@ -154,7 +158,7 @@ function call(port, method, p, { body, headers = {} } = {}) {
 
         const c = await s.create({ path: src });
         assert.strictEqual(s.cancel(c.id).record.state, 'cancelled');
-        assert.ok(!s.hasApk(c.id), 'cancel drops the APK');
+        assert.ok(s.hasApk(c.id), 'cancel keeps the APK, for Retry, until the sweep');
         assert.strictEqual(s.setStatus(c.id, { state: 'downloading' }).status, 409);
         assert.strictEqual(s.setStatus(c.id, { state: 'installing' }).status, 409);
         // The phone had already installed it when the desk cancelled: the record
@@ -166,6 +170,161 @@ function call(port, method, p, { body, headers = {} } = {}) {
         s.setStatus((await s.create({ path: src })).id, { state: 'downloading' });
         assert.strictEqual(events.length, before + 2, 'every update is broadcast');
         ok('every update is broadcast');
+    }
+
+    // --- progress heartbeats ---------------------------------------------------
+
+    {
+        const s = fresh();
+        const r = await s.create({ path: src });
+        clock += 1000;
+        let out = s.setStatus(r.id, { state: 'downloading', progress: { bytes: 0 } }, 'phone-a');
+        assert.deepStrictEqual(out.record.progress, { bytes: 0, total: BYTES.length },
+            'total defaults to the record\'s size');
+        assert.strictEqual(out.record.attempts, 1, 'the claim is an attempt');
+        assert.strictEqual(events.length, 2);
+
+        // Inside the second: the clock moves, the store does not tell anybody.
+        clock += 300;
+        out = s.setStatus(r.id, { state: 'downloading', progress: { bytes: 1000, total: 5004 } }, 'phone-a');
+        assert.deepStrictEqual(out.record.progress, { bytes: 1000, total: 5004 }, 'the caller sees it at once');
+        assert.strictEqual(out.record.updatedAt, clock, 'a heartbeat always refreshes updatedAt');
+        assert.strictEqual(out.record.attempts, 1, 'a heartbeat is not another claim');
+        assert.strictEqual(events.length, 2, 'throttled: not broadcast');
+        const onDisk = () => JSON.parse(fs.readFileSync(s.file, 'utf8')).installs[0];
+        assert.deepStrictEqual(onDisk().progress, { bytes: 0, total: BYTES.length }, 'nor written');
+
+        clock += HEARTBEAT_MS - 300;
+        out = s.setStatus(r.id, { state: 'downloading', progress: { bytes: 2000, total: 5004 } }, 'phone-a');
+        assert.strictEqual(events.length, 3, 'a second on: broadcast');
+        assert.deepStrictEqual(events[2].progress, { bytes: 2000, total: 5004 });
+        assert.deepStrictEqual(onDisk().progress, { bytes: 2000, total: 5004 });
+
+        // A bare heartbeat keeps the bar where it was, and cannot be from another phone.
+        clock += HEARTBEAT_MS;
+        out = s.setStatus(r.id, { state: 'downloading' }, null);
+        assert.deepStrictEqual(out.record.progress, { bytes: 2000, total: 5004 });
+        assert.strictEqual(s.setStatus(r.id, { state: 'downloading', progress: { bytes: 1 } }, 'phone-b').status,
+            409, 'a viewer-less heartbeat did not drop the claim');
+        assert.strictEqual(s.setStatus(r.id, { state: 'downloading', progress: { bytes: 'lots' } }, 'phone-a').status,
+            400);
+        assert.deepStrictEqual(s.setStatus(r.id, { state: 'downloading', progress: { bytes: 9e9, total: 10 } },
+            'phone-a').record.progress, { bytes: 10, total: 10 }, 'bytes is clamped to total');
+
+        // A real change is never throttled, and leaves the bar behind.
+        out = s.setStatus(r.id, { state: 'installing', progress: { bytes: 5, total: 10 } });
+        assert.strictEqual(out.record.progress, null, 'progress belongs to downloading');
+        assert.strictEqual(events[events.length - 1].state, 'installing');
+        ok('a progress heartbeat refreshes updatedAt, and is written and broadcast once a second');
+    }
+
+    // --- stalls ------------------------------------------------------------------
+
+    {
+        const s = fresh();
+        const r = await s.create({ path: src });
+        clock += STALL_MS + 1;
+        assert.strictEqual(s.get(r.id).stalled, false, 'a pending record never stalls: nobody has it');
+        s.setStatus(r.id, { state: 'downloading' }, 'phone-a');
+        clock += STALL_MS;
+        assert.strictEqual(s.get(r.id).stalled, false, 'not at 90s exactly');
+        clock += 1;
+        assert.strictEqual(s.get(r.id).stalled, true, 'past 90s with no report');
+        assert.strictEqual(s.list()[0].stalled, true, 'the list computes it too');
+
+        const before = events.length;
+        s.checkStalls();
+        assert.strictEqual(events.length, before + 1, 'turning stalled is broadcast');
+        assert.strictEqual(events[before].stalled, true);
+        assert.strictEqual(events[before].updatedAt, s.get(r.id).updatedAt, 'without touching updatedAt');
+        s.checkStalls();
+        assert.strictEqual(events.length, before + 1, 'once');
+
+        s.setStatus(r.id, { state: 'downloading' }, 'phone-a');
+        assert.strictEqual(s.get(r.id).stalled, false, 'a heartbeat clears it');
+        s.setStatus(r.id, { state: 'needs_action' });
+        clock += RELEASE_MS * 2;
+        assert.strictEqual(s.get(r.id).stalled, false, 'needs_action waits on a person, not the phone');
+        s.checkStalls();
+        assert.strictEqual(s.get(r.id).state, 'needs_action', 'and is never released');
+        ok('stalled is true only for a claimed record past 90s, and is broadcast once');
+    }
+
+    {
+        const s = fresh();
+        const r = await s.create({ path: src });
+        for (let n = 1; n <= MAX_ATTEMPTS; n++) {
+            clock += 1000;
+            const claimed = s.setStatus(r.id, { state: 'downloading', progress: { bytes: 100 } }, `phone-${n}`);
+            assert.strictEqual(claimed.record.attempts, n);
+            clock += RELEASE_MS - 1;
+            s.checkStalls();
+            assert.strictEqual(s.get(r.id).state, 'downloading', 'not before 3 minutes');
+            clock += 1;
+            s.checkStalls();
+            const now = s.get(r.id);
+            if (n < MAX_ATTEMPTS) {
+                assert.strictEqual(now.state, 'pending', `attempt ${n} is released`);
+                assert.strictEqual(now.message, 'Phone stopped responding; queued again');
+                assert.strictEqual(now.progress, null);
+                assert.strictEqual(now.stalled, false);
+                assert.strictEqual(events[events.length - 1].state, 'pending', 'and broadcast');
+            } else {
+                assert.strictEqual(now.state, 'failed', `attempt ${n} gives up`);
+                assert.match(now.message, /stopped responding 3 times/);
+                assert.strictEqual(now.attempts, MAX_ATTEMPTS);
+            }
+        }
+        // Released means unclaimed: a different phone may take attempt 2, which is
+        // what the loop above did with phone-2 and phone-3.
+        const raw = JSON.parse(fs.readFileSync(s.file, 'utf8')).installs[0];
+        assert.strictEqual(raw.claimedBy, null, 'failed releases the claim');
+        assert.ok(!('stalled' in raw), 'stalled is computed, never stored');
+        assert.ok(s.hasApk(r.id), 'and keeps the APK for a retry');
+
+        // installing goes quiet the same way.
+        const i = await s.create({ path: src });
+        s.setStatus(i.id, { state: 'downloading' }, 'phone-a');
+        s.setStatus(i.id, { state: 'installing' });
+        clock += RELEASE_MS;
+        s.checkStalls();
+        assert.strictEqual(s.get(i.id).state, 'pending');
+        ok('a claim quiet for 3 minutes is released, and the third one fails it');
+    }
+
+    // --- retry -------------------------------------------------------------------
+
+    {
+        const s = fresh();
+        assert.strictEqual(s.retry('nope').status, 404);
+        for (const state of ['downloading', 'installing', 'failed', 'needs_action', 'cancelled']) {
+            const r = await s.create({ path: src });
+            s.setStatus(r.id, { state: 'downloading', progress: { bytes: 10 } }, 'phone-a');
+            if (state === 'cancelled') s.cancel(r.id);
+            else if (state !== 'downloading') s.setStatus(r.id, { state, message: 'x' });
+            const before = events.length;
+            const out = s.retry(r.id);
+            assert.ok(out.record, `${state}: ${out.error}`);
+            assert.strictEqual(out.record.state, 'pending', `${state} goes back to pending`);
+            assert.strictEqual(out.record.progress, null);
+            assert.strictEqual(out.record.message, null);
+            assert.strictEqual(out.record.attempts, 0, 'with a fresh budget of attempts');
+            assert.strictEqual(events.length, before + 1, 'broadcast');
+            assert.ok(s.setStatus(r.id, { state: 'downloading' }, 'phone-b').record, `${state}: the claim is gone`);
+        }
+        const p = await s.create({ path: src });
+        const before = events.length;
+        assert.strictEqual(s.retry(p.id).record.state, 'pending', 'pending is a no-op');
+        assert.strictEqual(events.length, before);
+
+        s.setStatus(p.id, { state: 'installed' });
+        assert.strictEqual(s.retry(p.id).status, 409, 'installed is final');
+        const gone = await s.create({ path: src });
+        s.setStatus(gone.id, { state: 'failed' });
+        fs.unlinkSync(s.apkPath(gone.id));
+        assert.strictEqual(s.retry(gone.id).status, 410, 'no APK, nothing to retry');
+        assert.strictEqual(s.get(gone.id).state, 'failed', 'and the record is left alone');
+        ok('retry puts any unfinished record back to pending, but not installed (409) or a lost APK (410)');
     }
 
     // --- persistence, the cap, the port ------------------------------------
@@ -300,14 +459,44 @@ function call(port, method, p, { body, headers = {} } = {}) {
         assert.strictEqual(r.status, 400);
         ok('status takes the viewer header for the claim');
 
+        r = await call(port, 'POST', `/api/phone-installs/${rec.id}/status`, {
+            body: { state: 'downloading', progress: { bytes: 10, total: 100 } },
+            headers: { 'x-tgxcode-viewer': 'phone-a' },
+        });
+        assert.strictEqual(r.status, 200);
+        assert.deepStrictEqual(r.body.progress, { bytes: 10, total: 100 });
+        r = await call(port, 'POST', `/api/phone-installs/${rec.id}/status`,
+            { body: { state: 'downloading', progress: [] }, headers: { 'x-tgxcode-viewer': 'phone-a' } });
+        assert.strictEqual(r.status, 400, 'a malformed progress is refused');
+        ok('status takes a progress heartbeat');
+
         r = await call(port, 'POST', `/api/phone-installs/${rec.id}/cancel`);
         assert.strictEqual(r.body.state, 'cancelled');
         r = await call(port, 'GET', `/api/phone-installs/${rec.id}/apk`);
-        assert.strictEqual(r.status, 410, 'a dropped APK is Gone, not Not Found');
+        assert.strictEqual(r.status, 410, 'a cancelled APK is Gone, though it is kept for Retry');
+        r = await call(port, 'POST', `/api/phone-installs/${rec.id}/retry`);
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body.state, 'pending');
+        assert.strictEqual(r.body.attempts, 0);
+        r = await call(port, 'GET', `/api/phone-installs/${rec.id}/apk`);
+        assert.strictEqual(r.status, 200, 'retried, it downloads again');
+        assert.strictEqual((await call(port, 'POST', '/api/phone-installs/nope/retry')).status, 404);
+        s.setStatus(rec.id, { state: 'installed' });
+        r = await call(port, 'POST', `/api/phone-installs/${rec.id}/retry`);
+        assert.strictEqual(r.status, 409);
+        r = await call(port, 'GET', `/api/phone-installs/${rec.id}/apk`);
+        assert.strictEqual(r.status, 410, 'installed drops the APK');
+        const lost = await s.create({ path: src });
+        s.cancel(lost.id);
+        fs.unlinkSync(s.apkPath(lost.id));
+        r = await call(port, 'POST', `/api/phone-installs/${lost.id}/retry`);
+        assert.strictEqual(r.status, 410);
+        assert.match(r.body.error, /no longer stored/);
+        ok('retry: 200 back to pending, 404 unknown, 409 installed, 410 when the APK is gone');
         assert.strictEqual((await call(port, 'GET', '/api/phone-installs/nope/apk')).status, 404);
         assert.strictEqual((await call(port, 'POST', '/api/phone-installs/nope/cancel')).status, 404);
         assert.strictEqual((await call(port, 'GET', '/api/other')).status, 599, 'not ours is NEXT');
-        ok('cancel, then 410 for its APK; unknown ids 404; other paths fall through');
+        ok('unknown ids 404; other paths fall through');
     } finally {
         server.close();
         fs.rmSync(home, { recursive: true, force: true });

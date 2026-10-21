@@ -250,6 +250,20 @@
       </div>
     </div>
 
+    <!-- APKs on their way to the phone. Absent unless one was sent in the last
+         day, which is as long as the bridge keeps the APK; yellow when the phone
+         has gone quiet on one, one failed, or Android is waiting on a tap.
+         web/phone-installs.js draws the pill and the list. -->
+    <div class="quota-wrap pi-wrap" id="pi-wrap" hidden>
+      <button id="pi-pill" class="quota-pill pi-pill" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="pi-menu"
+              title="Phone installs"></button>
+      <div id="pi-menu" class="quota-menu pi-menu" role="dialog" aria-label="Phone installs" hidden>
+        <div class="quota-head"><span>Phone installs</span></div>
+        <div id="pi-body"></div>
+      </div>
+    </div>
+
     <div class="quota-wrap" id="quota-wrap" hidden>
       <button id="quota-pill" class="quota-pill" type="button"
               aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-menu"

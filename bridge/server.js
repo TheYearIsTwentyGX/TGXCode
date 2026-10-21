@@ -523,7 +523,7 @@ function remoteRefusal(pathname, method) {
     // Filing an APK names a path on this machine and makes its bytes
     // downloadable from anywhere the token reaches — the agent that built it is
     // here, and so is the decision. Cancelling is the desk taking one back. The
-    // list, the download and the status report stay open: the phone is the
+    // list, the download, the status report and retry stay open: the phone is the
     // client this exists for.
     if (pathname === '/api/phone-installs' && method === 'POST') {
         return 'an APK can only be filed for the phone from the machine it was built on';

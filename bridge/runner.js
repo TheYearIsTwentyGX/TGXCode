@@ -170,6 +170,9 @@ const AGENT_TOOLS = [
     'mcp__tgxcode__start_task',
     'mcp__tgxcode__set_task_status',
     'mcp__tgxcode__schedule_session',
+    // A read. install_on_phone is not here: it makes bytes downloadable off this
+    // machine, which is a call worth a card.
+    'mcp__tgxcode__phone_install_status',
 ];
 
 // The extra tools a session gets for its part in an orchestration — see

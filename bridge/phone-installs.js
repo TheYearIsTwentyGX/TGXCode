@@ -18,7 +18,7 @@
 // is a normal outcome rather than an error, and the record outlives the agent
 // that asked for it.
 //
-// Four decisions in here that are easy to get backwards:
+// Six decisions in here that are easy to get backwards:
 //
 //   * **The APK is copied, not referenced.** The path the agent names is a
 //     Gradle output that the next build overwrites, possibly while a phone is
@@ -31,11 +31,29 @@
 //     client already sends; a client that sends none can neither claim nor be
 //     refused, because there is nothing to tell it apart by. A `failed` record
 //     releases its claim, so another phone may retry.
-//   * **`installed` and `cancelled` are final — except that `installed` is
-//     always accepted.** A desktop cancel can cross a phone that had already
-//     put the package on; refusing the phone's report would leave the record
-//     saying something false about the phone. `failed` is not final: a retry
-//     moves it on again, as long as the APK is still here to download.
+//   * **`installed` and `cancelled` are final to the phone — except that
+//     `installed` is always accepted.** A desktop cancel can cross a phone that
+//     had already put the package on; refusing the phone's report would leave
+//     the record saying something false about the phone. `failed` is not final:
+//     a retry moves it on again, as long as the APK is still here to download.
+//     And the desk's Retry moves any of them but `installed` back to `pending`,
+//     which is why a cancel keeps the APK (the download route still answers 410
+//     for a cancelled record) until the 24h sweep takes it.
+//   * **A claim that goes quiet is taken back.** A phone that claimed a record
+//     and then lost its network, its process or its battery never says so, and
+//     nothing else would ever move the record: it sat `downloading` until the
+//     24h expiry. So a `downloading` or `installing` record reads `stalled`
+//     after 90s without a report, and after 3 minutes the bridge releases it to
+//     `pending`, where the next phone to connect picks it up. `attempts` counts
+//     the claims, and the third claim to go quiet fails the record instead of
+//     releasing it again — a phone that dies on this APK every time should say
+//     so to a person rather than loop all day.
+//   * **A progress report is a heartbeat, and heartbeats are throttled.** Every
+//     report refreshes `updatedAt`, which is what keeps the claim alive, but a
+//     phone reporting every chunk would otherwise rewrite the file and wake every
+//     window many times a second. A `downloading` that repeats `downloading` is
+//     written and broadcast at most once a second per record; the rest only
+//     move the clock in memory.
 //   * **The records file is per port.** STATE_DIR is shared by every bridge on
 //     this machine, and a dev bridge has no business showing the phone's
 //     installs or rewriting them. The APK files share one directory because
@@ -66,6 +84,24 @@ const MAX_APK_BYTES = 1024 * 1024 * 1024;
 
 const SWEEP_MS = 60 * 60 * 1000;
 
+/** A claimed record with no report for this long reads `stalled`. */
+const STALL_MS = 90 * 1000;
+
+/** And for this long is released back to `pending`. */
+const RELEASE_MS = 3 * 60 * 1000;
+
+/** The claim that goes quiet on this attempt fails the record instead. */
+const MAX_ATTEMPTS = 3;
+
+/** How often a progress heartbeat is written and broadcast, per record. */
+const HEARTBEAT_MS = 1000;
+
+/** How often the stall check runs; well inside STALL_MS so a pill turns on time. */
+const STALL_CHECK_MS = 15 * 1000;
+
+const RELEASED_MESSAGE = 'Phone stopped responding; queued again';
+const GAVE_UP_MESSAGE = `Phone stopped responding ${MAX_ATTEMPTS} times; giving up. Retry it from TGXCode`;
+
 /**
  * pending      — filed, nobody has claimed it
  * downloading  — a phone is fetching the APK
@@ -80,8 +116,11 @@ const STATES = ['pending', 'downloading', 'installing', 'needs_action', 'install
 /** What a client may report. `pending` is the bridge's to set. */
 const CLIENT_STATES = new Set(STATES.filter(s => s !== 'pending'));
 
-/** Nothing will happen to these again, so the APK can go. */
-const FINAL = new Set(['installed', 'cancelled']);
+/** A phone is holding these, so silence from it means something. */
+const CLAIMED = new Set(['downloading', 'installing']);
+
+/** What the desk's Retry moves back to `pending`. */
+const RETRYABLE = new Set(['downloading', 'installing', 'failed', 'needs_action', 'cancelled']);
 
 /** States a phone is still working through, for the expiry sweep. */
 const OPEN = new Set(['pending', 'downloading', 'installing', 'needs_action']);
@@ -93,19 +132,44 @@ function text(v, max) {
     return s ? s.slice(0, max) : null;
 }
 
+/** `{bytes, total}` from a status body, or undefined when it is not one. */
+function progressOf(v, size) {
+    if (!v || typeof v !== 'object') return undefined;
+    const bytes = Number(v.bytes);
+    if (!Number.isFinite(bytes) || bytes < 0) return undefined;
+    const given = v.total == null ? size : Number(v.total);
+    const total = Number.isFinite(given) && given > 0 ? Math.round(given) : null;
+    return { bytes: Math.round(total ? Math.min(bytes, total) : bytes), total };
+}
+
+/** A whole number from disk, or the fallback. */
+function count(v, fallback) {
+    return Number.isInteger(v) && v >= 0 ? v : fallback;
+}
+
 /** An error a route can answer with as it stands. */
 function refuse(status, error) {
     return Object.assign(new Error(error), { status });
 }
 
 /**
- * The record as it goes on the wire and to disk.
+ * The record as it goes on the wire.
  *
  * Spelled out rather than spread, so a status body cannot put a key into the
  * store, and so the claim stays off the wire — which phone holds a record is
  * the bridge's business, and the 409 is how a phone learns it is not this one.
+ * `stalled` is worked out against `now` every time it is served and never
+ * stored: it is a fact about the clock, not about the record.
  */
-function publicRecord(r) {
+function publicRecord(r, now = Date.now()) {
+    return {
+        ...storedFields(r),
+        stalled: CLAIMED.has(r.state) && now - r.updatedAt > STALL_MS,
+    };
+}
+
+/** What goes to disk, beside the claim. */
+function storedFields(r) {
     return {
         id: r.id,
         fileName: r.fileName,
@@ -119,6 +183,8 @@ function publicRecord(r) {
         packageName: r.packageName,
         versionName: r.versionName,
         updatedAt: r.updatedAt,
+        progress: r.progress || null,
+        attempts: r.attempts || 0,
     };
 }
 
@@ -153,6 +219,11 @@ class PhoneInstalls {
         this.now = now;
         this.onChange = onChange;
         this.timer = null;
+        this.stallTimer = null;
+        /** id → when its last heartbeat was written and broadcast */
+        this.beats = new Map();
+        /** ids whose `stalled: true` has been broadcast since their last change */
+        this.announced = new Set();
         /** @type {Array<object>} oldest first, as filed */
         this.rows = this._read();
     }
@@ -165,7 +236,13 @@ class PhoneInstalls {
             if (data.version !== VERSION || !Array.isArray(data.installs)) return [];
             return data.installs
                 .filter(r => r && typeof r.id === 'string' && STATES.includes(r.state))
-                .map(r => ({ ...publicRecord(r), claimedBy: text(r.claimedBy, 128) }));
+                .map(r => ({
+                    ...storedFields(r),
+                    progress: r.state === 'downloading' ? progressOf(r.progress, r.size) || null : null,
+                    // Records from before attempts were counted: one claim if it is claimed now.
+                    attempts: count(r.attempts, CLAIMED.has(r.state) ? 1 : 0),
+                    claimedBy: text(r.claimedBy, 128),
+                }));
         } catch { return []; }
     }
 
@@ -175,14 +252,20 @@ class PhoneInstalls {
         if (this.rows.length > MAX_RECORDS) {
             for (const r of this.rows.splice(0, this.rows.length - MAX_RECORDS)) this._dropApk(r);
         }
-        const installs = this.rows.map(r => ({ ...publicRecord(r), claimedBy: r.claimedBy }));
+        const installs = this.rows.map(r => ({ ...storedFields(r), claimedBy: r.claimedBy }));
         writeAtomic(this.file, `${JSON.stringify({ version: VERSION, installs }, null, 2)}\n`);
+    }
+
+    _pub(r) {
+        return publicRecord(r, this.now());
     }
 
     _changed(r) {
         r.updatedAt = this.now();
+        this.beats.set(r.id, r.updatedAt);
+        this.announced.delete(r.id);
         this._write();
-        this.onChange(publicRecord(r));
+        this.onChange(this._pub(r));
     }
 
     apkPath(id) {
@@ -200,12 +283,12 @@ class PhoneInstalls {
 
     get(id) {
         const r = this.rows.find(x => x.id === id);
-        return r ? publicRecord(r) : null;
+        return r ? this._pub(r) : null;
     }
 
     /** Newest first. */
     list(limit = LIST_LIMIT) {
-        return this.rows.slice(-limit).reverse().map(publicRecord);
+        return this.rows.slice(-limit).reverse().map(r => this._pub(r));
     }
 
     /**
@@ -256,19 +339,26 @@ class PhoneInstalls {
             packageName: null,
             versionName: null,
             updatedAt: t,
+            progress: null,
+            attempts: 0,
             claimedBy: null,
         };
         this.rows.push(r);
         this._changed(r);
-        return publicRecord(r);
+        return this._pub(r);
     }
 
     /**
      * What a phone reports. Returns `{record}`, or `{status, error}` for a
      * refusal a route answers as it stands.
      *
+     * A `downloading` onto a record already `downloading` is a heartbeat: it
+     * always refreshes `updatedAt`, but is written and broadcast at most once
+     * per HEARTBEAT_MS.
+     *
      * @param {string} id
-     * @param {{state: string, message?: string, packageName?: string, versionName?: string}} body
+     * @param {{state: string, message?: string, packageName?: string,
+     *   versionName?: string, progress?: {bytes: number, total?: number}}} body
      * @param {string|null} viewer the caller's `X-TGXCode-Viewer`, if it sent one
      */
     setStatus(id, body, viewer = null) {
@@ -286,40 +376,121 @@ class PhoneInstalls {
         if (r.state === 'cancelled' && state !== 'installed' && state !== 'cancelled') {
             return { status: 409, error: 'this install was cancelled' };
         }
+        let progress = null;
         if (state === 'downloading') {
             if (!this.hasApk(id)) return { status: 409, error: 'the APK is no longer stored here' };
             if (r.claimedBy && who && r.claimedBy !== who) {
                 return { status: 409, error: 'another phone is already installing this' };
             }
-            r.claimedBy = who;
+            if (body.progress != null) {
+                progress = progressOf(body.progress, r.size);
+                if (!progress) return { status: 400, error: 'progress must be {bytes: number, total?: number}' };
+            }
+            // A viewer-less heartbeat must not drop the claim it cannot make.
+            if (who) r.claimedBy = who;
         }
         // A failure lets the next phone that tries have it.
         if (state === 'failed') r.claimedBy = null;
 
+        const beat = state === 'downloading' && r.state === 'downloading';
+        if (state === 'downloading' && !beat) r.attempts = (r.attempts || 0) + 1;
+        const message = text(body.message, 1000);
+        if (beat) {
+            // A bare heartbeat keeps what the last report said, and the bar where
+            // it was: neither has been contradicted.
+            if (progress) r.progress = progress;
+            if (message) r.message = message;
+            r.updatedAt = this.now();
+            if (r.updatedAt - (this.beats.get(id) || 0) < HEARTBEAT_MS) return { record: this._pub(r) };
+            this._changed(r);
+            return { record: this._pub(r) };
+        }
+
         r.state = state;
-        r.message = text(body.message, 1000);
+        r.message = message;
+        r.progress = progress;
         // Kept when a later report leaves them out: the phone learns the package
         // name once it has the APK, and has no reason to repeat it.
         const pkg = text(body.packageName, 256);
         const ver = text(body.versionName, 128);
         if (pkg) r.packageName = pkg;
         if (ver) r.versionName = ver;
-        if (FINAL.has(state)) this._dropApk(r);
+        // Nothing will happen to an installed record again, so the APK can go.
+        // A cancelled one keeps it until the sweep, for the desk's Retry.
+        if (state === 'installed') this._dropApk(r);
         this._changed(r);
-        return { record: publicRecord(r) };
+        return { record: this._pub(r) };
     }
 
-    /** Taken back at the desk. A finished install cannot be. */
+    /**
+     * Taken back at the desk. A finished install cannot be. The APK stays until
+     * the sweep, so Retry can undo this; the download route refuses it meanwhile.
+     */
     cancel(id, message = null) {
         const r = this.rows.find(x => x.id === id);
         if (!r) return { status: 404, error: 'no such install' };
         if (r.state === 'installed') return { status: 409, error: 'this install already finished' };
-        if (r.state === 'cancelled') return { record: publicRecord(r) };
+        if (r.state === 'cancelled') return { record: this._pub(r) };
         r.state = 'cancelled';
         r.message = message;
-        this._dropApk(r);
+        r.progress = null;
+        r.claimedBy = null;
         this._changed(r);
-        return { record: publicRecord(r) };
+        return { record: this._pub(r) };
+    }
+
+    /**
+     * Put it back in the queue, from the desk or the phone: `pending`, no claim,
+     * no progress, and a fresh budget of attempts. A pending record is a no-op.
+     */
+    retry(id) {
+        const r = this.rows.find(x => x.id === id);
+        if (!r) return { status: 404, error: 'no such install' };
+        if (r.state === 'installed') return { status: 409, error: 'this install already finished' };
+        if (!this.hasApk(id)) {
+            return { status: 410, error: 'the APK is no longer stored here; build it and install it again' };
+        }
+        if (r.state === 'pending') return { record: this._pub(r) };
+        if (!RETRYABLE.has(r.state)) return { status: 409, error: `cannot retry a ${r.state} install` };
+        this._release(r, null);
+        r.attempts = 0;
+        this._changed(r);
+        return { record: this._pub(r) };
+    }
+
+    _release(r, message) {
+        r.state = 'pending';
+        r.claimedBy = null;
+        r.progress = null;
+        r.message = message;
+    }
+
+    /**
+     * The claims that went quiet. Past STALL_MS a record is broadcast once with
+     * `stalled: true`, so a client that draws it need not run its own clock;
+     * past RELEASE_MS it goes back to `pending`, or to `failed` on its last
+     * attempt.
+     */
+    checkStalls() {
+        const t = this.now();
+        for (const r of this.rows) {
+            if (!CLAIMED.has(r.state)) continue;
+            const quiet = t - r.updatedAt;
+            if (quiet >= RELEASE_MS) {
+                if ((r.attempts || 0) >= MAX_ATTEMPTS) {
+                    r.state = 'failed';
+                    r.claimedBy = null;
+                    r.progress = null;
+                    r.message = GAVE_UP_MESSAGE;
+                } else {
+                    this._release(r, RELEASED_MESSAGE);
+                }
+                this._changed(r);
+            } else if (quiet > STALL_MS && !this.announced.has(r.id)) {
+                this.announced.add(r.id);
+                this.onChange(this._pub(r));
+            }
+        }
     }
 
     /**
@@ -332,13 +503,12 @@ class PhoneInstalls {
         const t = this.now();
         for (const r of this.rows) {
             if (t - r.createdAt < KEEP_APK_MS) continue;
+            // `needs_action` keeps its state: the phone has the APK already and
+            // can still report `installed` once somebody taps the button.
             if (OPEN.has(r.state) && r.state !== 'needs_action') {
                 this.cancel(r.id, 'Expired: no phone installed it within 24 hours');
-            } else {
-                // `needs_action` keeps its state: the phone has the APK already and
-                // can still report `installed` once somebody taps the button.
-                this._dropApk(r);
             }
+            this._dropApk(r);
         }
         let names = [];
         try { names = fs.readdirSync(this.dir); } catch { return; }
@@ -362,9 +532,16 @@ class PhoneInstalls {
             }
         }, SWEEP_MS);
         this.timer.unref();
+        this.stallTimer = setInterval(() => {
+            try { this.checkStalls(); } catch (err) {
+                console.error(`[tgxcode] phone install stall check failed: ${err.message}`);
+            }
+        }, STALL_CHECK_MS);
+        this.stallTimer.unref();
     }
 }
 
 module.exports = {
     PhoneInstalls, publicRecord, STATES, KEEP_APK_MS, MAX_RECORDS, LIST_LIMIT, DIR,
+    STALL_MS, RELEASE_MS, MAX_ATTEMPTS, HEARTBEAT_MS,
 };

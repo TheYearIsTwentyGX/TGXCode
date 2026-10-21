@@ -192,8 +192,8 @@ const HOME = os.homedir();
         (await call('GET', '/api/claude-docs/anything', { headers: PHONE })).status, 403);
     // Filing an APK for the phone names a path on this machine and makes it
     // downloadable from anywhere the token reaches, so a phone may not file one —
-    // nor cancel one. What the phone needs stays open: the list, the download and
-    // the status report, which 404 here only because the id does not exist.
+    // nor cancel one. What the phone needs stays open: the list, the download, the
+    // status report and retry, which 404 here only because the id does not exist.
     check('filing an APK for the phone', (await call('POST', '/api/phone-installs', {
         headers: PHONE, body: { path: '/tmp/x.apk' },
     })).status, 403);
@@ -205,6 +205,9 @@ const HOME = os.homedir();
         headers: PHONE, body: { state: 'downloading' },
     })).status, 404);
     check('and fetch one', (await call('GET', '/api/phone-installs/nope/apk', { headers: PHONE })).status, 404);
+    check('and retry one', (await call('POST', '/api/phone-installs/nope/retry', {
+        headers: PHONE, body: {},
+    })).status, 404);
     // The header every non-GET under /api/ has needed since the CSRF guard
     // landed, and the first thing a new client 403s on. Pinned here on the
     // newest write route because that document says so and this suite is where

@@ -18,10 +18,11 @@
 //   set_task_status   — say one is done, or dismiss it, or offer it again.
 //   schedule_session  — start a session later, once or on a cron.
 //
-// And one that reaches past the machine:
+// And two that reach past the machine:
 //
-//   install_on_phone  — hand an APK to the TGXCode app on the user's phone,
-//                       which installs it itself. See bridge/phone-installs.js.
+//   install_on_phone      — hand an APK to the TGXCode app on the user's phone,
+//                           which installs it itself. See bridge/phone-installs.js.
+//   phone_install_status  — look in on one later, rather than guess or file it again.
 //
 // The permission modes those offer stop short of bypassPermissions. That is a
 // guardrail on the tool, not a boundary — the agent can read the same token
@@ -514,6 +515,9 @@ const INSTALL_ON_PHONE = {
         'next connects. Do not call it again for the same build just because it is',
         'queued or waiting on the user.',
         '',
+        'If it is still going when the wait ends, check on it later with',
+        'phone_install_status rather than calling this again.',
+        '',
         'Still use adb for an emulator, or when the user asks for adb explicitly.',
     ].join('\n'),
     inputSchema: {
@@ -531,6 +535,26 @@ const INSTALL_ON_PHONE = {
             },
         },
         required: ['apk_path'],
+    },
+};
+
+const PHONE_INSTALL_STATUS = {
+    name: 'phone_install_status',
+    title: 'Check on a phone install',
+    description: [
+        'Where an APK you handed to the phone with install_on_phone got to: queued,',
+        'downloading (with progress), installing, waiting on the user, installed, failed',
+        'or cancelled — and whether the phone has gone quiet on it. Defaults to the latest',
+        'install this session filed. Use it instead of calling install_on_phone again.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            id: {
+                type: 'string',
+                description: 'The install id install_on_phone printed. Defaults to this session\'s latest.',
+            },
+        },
     },
 };
 
@@ -799,7 +823,7 @@ const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WO
     READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY];
 
 const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
-    INSTALL_ON_PHONE,
+    INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
     ...(ROLE === 'worker' ? [REPORT] : [])];
 
@@ -1131,8 +1155,27 @@ const PHONE_POLL_MS = Number(process.env.TGXCODE_PHONE_INSTALL_POLL_MS) || 1_500
 /** The states worth stopping the wait for: done, or the next move is a person's. */
 const PHONE_SETTLED = new Set(['installed', 'failed', 'needs_action', 'cancelled']);
 
-/** What the model reads about where an install got to. */
-function phoneOutcome(rec) {
+/** "3m", "40s": how long ago an epoch-ms stamp was. */
+function agoText(ms) {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    return `${Math.round(s / 3600)}h`;
+}
+
+/** " (1.2 of 4.0 MB)" while a download has reported progress, else "". */
+function progressText(p) {
+    if (!p || !(p.total > 0)) return '';
+    const mb = (n) => (n / 1024 / 1024).toFixed(1);
+    return ` (${Math.round((p.bytes / p.total) * 100)}%, ${mb(p.bytes)} of ${mb(p.total)} MB)`;
+}
+
+/**
+ * What the model reads about where an install got to. `waited` is true at the
+ * end of install_on_phone's wait, where "still going" means "after 90s"; from
+ * phone_install_status it means "as of now".
+ */
+function phoneOutcome(rec, { waited = true } = {}) {
     const what = rec.packageName
         ? `${rec.packageName}${rec.versionName ? ` ${rec.versionName}` : ''}`
         : rec.label || rec.fileName;
@@ -1158,13 +1201,28 @@ function phoneOutcome(rec) {
             : '';
         return `The phone could not install ${what}: ${why}.${signature}`;
     }
-    case 'pending':
-        return 'No phone picked it up within 90s — it stays queued for 24 hours and installs '
-            + 'when the TGXCode app next connects. Tell the user; do not call this again for '
-            + 'the same build.';
-    default:
-        return `The phone is still working on ${what} (${rec.state.replace('_', ' ')}) after 90s. `
-            + 'It carries on without you; the result shows in TGXCode.';
+    case 'pending': {
+        // "Phone stopped responding; queued again", after a release.
+        const again = rec.message ? ` (${rec.message})` : '';
+        const lead = waited
+            ? 'No phone picked it up within 90s'
+            : `Queued for the phone for ${agoText(rec.createdAt)}, not picked up yet${again}`;
+        return `${lead} — it stays queued for 24 hours and installs when the TGXCode app next `
+            + 'connects. Tell the user; do not call install_on_phone again for the same build.';
+    }
+    default: {
+        const doing = `${rec.state.replace('_', ' ')}${rec.state === 'downloading' ? progressText(rec.progress) : ''}`;
+        if (rec.stalled) {
+            return `Stalled: the phone claimed ${what} (${doing}) but has not reported for `
+                + `${agoText(rec.updatedAt)}. TGXCode puts it back in the queue after 3 minutes of `
+                + 'silence and gives up after 3 tries; the user can also press Retry in TGXCode\'s '
+                + 'phone installs panel. Tell the user the phone seems to have stopped — the '
+                + 'TGXCode app may have been closed or lost its connection.';
+        }
+        return `The phone is still working on ${what} (${doing})${waited ? ' after 90s' : ''}. `
+            + `It carries on without you; check again with phone_install_status, and the result `
+            + 'shows in TGXCode.';
+    }
     }
 }
 
@@ -1188,6 +1246,33 @@ async function callInstallOnPhone(id, args) {
         if (g.ok && g.body) rec = g.body;
     }
     return say(id, `${phoneOutcome(rec)}\n    install id: ${rec.id}`);
+}
+
+async function callPhoneInstallStatus(id, args) {
+    const want = typeof args.id === 'string' ? args.id.trim() : '';
+    let rec;
+    if (want) {
+        const r = await api('GET', `/api/phone-installs/${encodeURIComponent(want)}`);
+        if (r.error) return toolError(id, r.error);
+        if (r.status === 404) return toolError(id, `No phone install with id ${want}.`);
+        if (!r.ok) return toolError(id, msgOf(r));
+        rec = r.body;
+    } else {
+        const r = await api('GET', '/api/phone-installs');
+        if (r.error) return toolError(id, r.error);
+        if (!r.ok) return toolError(id, msgOf(r));
+        // Newest first, so the first of ours is the latest.
+        rec = ((r.body && r.body.installs) || []).find(x => SESSION_ID && x.sessionId === SESSION_ID);
+        if (!rec) {
+            return toolError(id, 'This session has not filed a phone install recently. Pass the id '
+                + 'install_on_phone printed, or call install_on_phone to file one.');
+        }
+    }
+    const lines = [phoneOutcome(rec, { waited: false }), `    install id: ${rec.id}`,
+        `    label: ${rec.label}`, `    filed: ${agoText(rec.createdAt)} ago`,
+        `    last update: ${agoText(rec.updatedAt)} ago`];
+    if (rec.attempts) lines.push(`    attempts: ${rec.attempts}`);
+    return say(id, lines.join('\n'));
 }
 
 // ---------------------------------------------------------------------------
@@ -1455,6 +1540,7 @@ async function handle(msg) {
         if (name === 'set_task_status') return callSetTaskStatus(id, args);
         if (name === 'schedule_session') return callSchedule(id, args);
         if (name === 'install_on_phone') return callInstallOnPhone(id, args);
+        if (name === 'phone_install_status') return callPhoneInstallStatus(id, args);
         const roleCall = ROLE && ROLE_CALLS[ROLE] && ROLE_CALLS[ROLE][name];
         if (roleCall) return roleCall(id, args);
         return toolError(id, `unknown tool: ${name}`);

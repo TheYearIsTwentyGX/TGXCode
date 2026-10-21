@@ -377,7 +377,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/commands.js` | A project's commands, their runs, and the editor's view of the files that declare them |
 | `bridge/routes/terminals.js` | A terminal pane's stream, input, size and close — all refused remotely |
 | `bridge/routes/machine.js` | Dev servers, DevBrowser and Wispr Flow — the machine outside the app |
-| `bridge/routes/phone-installs.js` | `/api/phone-installs*`: filing an APK (local only), the list, the download with `Range`, the phone's status reports, cancel |
+| `bridge/routes/phone-installs.js` | `/api/phone-installs*`: filing an APK (local only), the list, the download with `Range`, the phone's status reports and progress heartbeats, cancel, retry |
 | `bridge/routes/files.js` | `/api/fs`, `mkdir`, `open`, `/api/attachments`, and the attachment helpers the session routes share |
 | `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
 | `bridge/viewers.js` | A polling client's viewer lease (`X-TGXCode-Viewer`), so dropping the stream for polling does not auto-deny its asks |
@@ -454,7 +454,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
 | `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session, install an APK on the phone |
-| `bridge/phone-installs.js` | APKs filed for the phone: the copy and its sha256, the state the phone reports, the first-`downloading` claim, and the 24h retention |
+| `bridge/phone-installs.js` | APKs filed for the phone: the copy and its sha256, the state the phone reports, the first-`downloading` claim, progress heartbeats, `stalled` and the 3-minute release of a claim gone quiet, retry, and the 24h retention |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
@@ -496,7 +496,7 @@ Two rules worth knowing before you send a patch:
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
 | `web/search.js` | Search transcripts — the full-text panel (Ctrl+Shift+F, or Enter in the bar's filter), results grouped by session, and the jump that opens a session at a hit's turn |
 | `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit, Send to orchestrator and Delete on a card |
-| `web/phone-installs.js` | One toast per APK on its way to the phone, rewritten in place from the `phone_install` events, with Cancel until the phone's installer has it |
+| `web/phone-installs.js` | The phone-installs pill in the bar and its popover (state, progress, Retry/Cancel/Copy), and one toast per APK rewritten in place from the `phone_install` events |
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
 | `web/snippets/index.js` | The list — loading it, the `snippets-changed` push that repaints every surface — the rules they share (project scoping, filling placeholders), and `wireSnippets` |

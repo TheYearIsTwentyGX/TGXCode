@@ -31,6 +31,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
     'cv-wrap', 'cv-pill', 'cv-menu', 'cv-changelog', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
+    'pi-wrap', 'pi-pill', 'pi-menu', 'pi-body',
     'btn-pin', 'btn-orch', 'btn-restart-proc', 'orch-dock', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop', 'pr-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
