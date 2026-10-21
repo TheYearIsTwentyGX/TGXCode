@@ -39,6 +39,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'changes-refresh', 'changes-collapse', 'changes-body',
     'btn-reviews', 'reviews', 'reviews-strip', 'reviews-strip-count', 'reviews-open', 'reviews-count',
     'reviews-run', 'reviews-collapse', 'reviews-body',
+    'btn-images', 'images', 'images-strip', 'images-strip-count', 'images-open', 'images-count',
+    'images-collapse', 'images-body',
     'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
     'conv-main', 'conv-body',
@@ -101,6 +103,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'creview-scrim', 'creview-modal', 'creview-kind', 'creview-title', 'creview-when',
     'creview-body', 'creview-jump', 'creview-fixall',
     'img-scrim', 'img-title', 'img-copy', 'img-save', 'img-view',
+    'img-nav', 'img-prev', 'img-occ', 'img-next', 'img-jump',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go', 'preview']) {

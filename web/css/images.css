@@ -1,0 +1,111 @@
+/* Every image in this chat — web/transcript/images.js.
+
+   The Images pane (a `.tasks` box beside the transcript, as the Changed drawer
+   and the Reviews pane are) and the stepper it adds to the image preview's bar
+   in dialogs.css. Tokens only, so both themes come with them. */
+
+/* ── the pane ─────────────────────────────────────────────────────────────── */
+
+.images-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 var(--sp-3) var(--sp-4);
+}
+
+.img-empty {
+    margin: var(--sp-5) var(--sp-3);
+    color: var(--text-3);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
+}
+.img-empty p { margin: 0 0 var(--sp-3); }
+.img-empty-sub { color: var(--text-4); }
+
+/* As many columns as fit: three at the pane's 300px, two at the narrow-window
+   240px, and more if the column is ever given more room. */
+.img-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+    gap: var(--sp-2);
+}
+.img-cell { min-width: 0; }
+
+.img-tile {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--recess);
+    cursor: zoom-in;
+    transition: border-color var(--dur-fast) var(--ease-standard);
+}
+.img-tile:hover { border-color: var(--outline); }
+.img-tile:focus-visible { outline-offset: 1px; }
+
+/* Cropped to the square, so a tall screenshot and a wide one sit in one grid;
+   the preview is where the whole picture is. `width`/`height` on the element
+   are the picture's own, for its aspect ratio while it loads, and are
+   overridden here. */
+.img-thumb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.img-thumb-none {
+    display: grid;
+    place-items: center;
+    color: var(--text-4);
+    font: 400 var(--fs-2xs)/var(--lh-none) var(--mono);
+}
+
+.img-badge {
+    position: absolute;
+    right: var(--sp-1);
+    bottom: var(--sp-1);
+    padding: 2px 5px;
+    border-radius: var(--pill);
+    background: var(--inverse-bg);
+    color: var(--inverse-fg);
+    font: var(--fw-medium) var(--fs-2xs)/var(--lh-none) var(--sans);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+
+/* ── the preview's stepper ────────────────────────────────────────────────── */
+
+.img-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-right: var(--sp-3);
+}
+.img-nav[hidden] { display: none; }
+.img-nav .icon-btn[hidden] { display: none; }
+.img-occ {
+    min-width: 4.5em;
+    text-align: center;
+    color: var(--text-3);
+    font: 400 13px/1 var(--sans);
+    font-variant-numeric: tabular-nums;
+}
+.img-occ[hidden] { display: none; }
+.img-jump {
+    margin-left: var(--sp-2);
+    padding: 6px 10px;
+    border: 1px solid var(--outline);
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--text-2);
+    font: var(--fw-medium) 13px/1 var(--sans);
+    cursor: pointer;
+}
+.img-jump:hover:not(:disabled) { background: var(--s3); color: var(--text); }
+.img-jump:disabled { opacity: 0.5; cursor: default; }

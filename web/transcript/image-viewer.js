@@ -1,6 +1,8 @@
 // The full-size preview behind a tool result's image: click the thumbnail in a
 // Read's dropdown and the picture fills the window, with Copy, Save and Close
-// in the corner.
+// in the corner. The Images pane opens it too, and passes the places the picture
+// appeared: then the bar also steps through them (‹ 2 of 3 ›) and offers Jump to
+// message for the one showing.
 //
 // One `#img-scrim` in index.html, reused for every image, wired on first open
 // rather than at load — this file is imported from tools.js, whose header says
@@ -18,17 +20,52 @@ let wired = false;
 let current = null;
 
 /**
- * @param {{src: string, name: string}} img  `name` is the file name offered by
- *   Save and shown in the bar.
+ * @param {{src: string, name: string,
+ *   occurrences?: {name: string, title: string, canJump: boolean}[],
+ *   onJump?: (i: number) => Promise<boolean>}} img  `name` is the file name
+ *   offered by Save and shown in the bar. With `occurrences` and `onJump`, the
+ *   bar steps through them and Jump to message closes the preview on its way to
+ *   the one showing.
  */
 export function openImage(img) {
     wire();
-    current = img;
-    dom.imgTitle.textContent = img.name;
+    current = { ...img, at: 0 };
     dom.imgView.src = img.src;
     dom.imgView.alt = img.name;
     resetButtons();
+    paintOccurrence();
     openModal(dom.imgScrim);
+}
+
+/** The bar's title, and the stepper when there is something to step through. */
+function paintOccurrence() {
+    const occs = current.onJump && current.occurrences || [];
+    const occ = occs[current.at];
+    dom.imgTitle.textContent = occ ? occ.title || occ.name : current.name;
+    dom.imgNav.hidden = !occs.length;
+    if (!occs.length) return;
+    dom.imgPrev.hidden = dom.imgNext.hidden = dom.imgOcc.hidden = occs.length < 2;
+    dom.imgOcc.textContent = `${current.at + 1} of ${occs.length}`;
+    dom.imgPrev.disabled = current.at === 0;
+    dom.imgNext.disabled = current.at === occs.length - 1;
+    dom.imgJump.disabled = !occ.canJump;
+    dom.imgJump.title = occ.canJump ? 'Close this and show where it appeared in the conversation'
+        : 'Not somewhere the conversation can scroll to';
+}
+
+function step(by) {
+    const occs = current && current.occurrences || [];
+    const at = current.at + by;
+    if (at < 0 || at >= occs.length) return;
+    current.at = at;
+    paintOccurrence();
+}
+
+async function jump() {
+    const img = current;
+    if (!img || !img.onJump) return;
+    closeImage();
+    await img.onJump(img.at);
 }
 
 function closeImage() {
@@ -52,6 +89,9 @@ function wire() {
     closeOnClickOutside(dom.imgScrim, closeImage);
     dom.imgCopy.addEventListener('click', copyImage);
     dom.imgSave.addEventListener('click', saveImage);
+    dom.imgPrev.addEventListener('click', () => step(-1));
+    dom.imgNext.addEventListener('click', () => step(1));
+    dom.imgJump.addEventListener('click', jump);
 }
 
 function resetButtons() {
@@ -119,7 +159,8 @@ async function saveImage() {
     // A download link on a blob URL: the browser's own Save, and in the
     // Electron shell its save dialog, with the name filled in.
     const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: img.name });
+    const occ = img.occurrences && img.occurrences[img.at];
+    const a = el('a', { href: url, download: (occ && occ.name) || img.name });
     document.body.append(a);
     a.click();
     a.remove();

@@ -95,6 +95,8 @@ export function registerBuiltins() {
     viaButton('session.changes', dom.btnChanges, 'Changes', { keywords: 'diff git files' });
     viaButton('session.reviews', dom.btnReviews,
         () => (state.reviews.on ? 'Hide reviews' : 'Show reviews'), { keywords: 'code review findings adversarial' });
+    viaButton('session.images', dom.btnImages,
+        () => (state.images.on ? 'Hide images' : 'Show images'), { keywords: 'pictures screenshots attachments gallery' });
     viaButton('session.checklist', dom.btnChecklist, 'Checklist', { keywords: 'todo tasks' });
     viaButton('session.orchestrator', dom.btnOrch, 'Orchestrator', { keywords: 'workers dock' });
     viaButton('session.restart', dom.btnRestartProc, 'Restart process', { keywords: 'reload tools mcp resume' });

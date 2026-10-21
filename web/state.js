@@ -333,6 +333,13 @@ export const state = {
         // The dialog: which run, and its full answer once it lands.
         openId: null, detail: null, detailError: null,
     },
+    // The Images pane (web/transcript/images.js): GET /api/sessions/:id/images
+    // as it last answered — the list itself, newest first.
+    images: {
+        on: localStorage.getItem('imagesOn') === '1',
+        shut: localStorage.getItem('imagesShut') === '1',
+        sessionId: null, data: null, at: 0, loading: false, error: null,
+    },
     checklist: {
         on: localStorage.getItem('checklistOn') !== '0',
         shut: localStorage.getItem('checklistShut') === '1',

@@ -1526,10 +1526,44 @@ It arrives on the same follow the transcript does, pushed when the list actually
 moves, because a task list moves *during* a turn and watching step 3 of 7 become
 step 4 is the whole point. Nothing polls it.
 
+### Every image in the chat
+
+The header's picture icon (or *Show images* in the palette) opens the **Images**
+pane beside the transcript, where the Changed drawer and Reviews sit. It has
+**every image the conversation holds, once each**, newest first, as a grid of
+thumbnails:
+
+- pictures you attached to a message, pasted, dropped or picked;
+- images a tool handed back: a Read of a PNG, a browser or DevBrowser screenshot,
+  anything an MCP tool returned as a picture;
+- the same from the session's subagents, whose screenshots otherwise sit in a pane
+  you would have to open one agent at a time.
+
+**Duplicates are one tile with a ×N on it.** Two images are the same when their
+bytes are the same, so a screenshot you attached and Claude then Read is one
+picture, and so is a file read three times over a long session. The tooltip says
+what it came from, its size and how many times it appeared.
+
+**Click a tile and it opens large**, in the same preview a tool result's image
+opens in, with Copy and Save. Opened from here, the bar also has **‹ 1 of 3 ›** for
+stepping through each place the picture appeared, and **Jump to message**, which
+closes the preview and scrolls the conversation to that place. It loads the earlier
+part of a long transcript first if it has to. An image from a subagent jumps to the
+call that started that agent.
+
+The pane fills in as images arrive: it asks again a moment after the transcript
+grows, and again when a turn ends, which is when a subagent's screenshots are
+finished. Nothing is fetched while it is shut. It is cached on the bridge, so a
+session full of screenshots costs a full read once and a `stat` after that. Images
+named in Claude's own markdown are not included: the page will not load a remote
+picture, and a local path is a file, not something the chat showed. Nor are
+scratchpad files Claude never read. See `GET /api/sessions/:id/images` in
+docs/api.md.
+
 ### The columns slide, and hold their place
 
-All three columns beside the transcript — this one, **Suggested** and **Changed**
-— are the same width, and none of them jumps. A column arriving or leaving slides,
+All the columns beside the transcript — the task list, **Suggested**, **Changed**,
+**Reviews** and **Images** — are the same width, and none of them jumps. A column arriving or leaving slides,
 and the transcript and the composer slide with it rather than being shoved across
 in a single frame.
 

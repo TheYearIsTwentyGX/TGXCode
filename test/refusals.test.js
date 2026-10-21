@@ -715,6 +715,19 @@ const HOME = os.homedir();
     // Deliberately open: it names no session and no path, and "release the work
     // from a phone when quota frees up" is the case the drafts routes exist for.
     check('read the quota', (await call('GET', '/api/quota', { headers: PHONE })).status, 200);
+    // The Images pane's list and its bytes are open remotely, like the tool-image
+    // route they sit beside and the transcript they are part of: 404 is the route
+    // answering about a session that does not exist, not a refusal.
+    check('list a chat\'s images (404 = no such session, not refused)',
+        (await call('GET', '/api/sessions/abc/images', { headers: PHONE })).status, 404);
+    check('read one image (404 = no such session, not refused)',
+        (await call('GET', `/api/sessions/abc/images/${'0'.repeat(64)}`, { headers: PHONE })).status, 404);
+    // …and still behind the token, from a phone as from anywhere.
+    const { authorization, ...noToken } = PHONE;
+    check('images without the token',
+        (await call('GET', '/api/sessions/abc/images', { headers: noToken })).status, 401);
+    check('an image without the token',
+        (await call('GET', `/api/sessions/abc/images/${'0'.repeat(64)}`, { headers: noToken })).status, 401);
     check('answer an ask (404 = no such session, not refused)',
         (await call('POST', '/api/sessions/abc/permission', {
             headers: PHONE, body: { requestId: 'x', decision: 'allow' },

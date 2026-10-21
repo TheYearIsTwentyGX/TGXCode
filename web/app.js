@@ -90,6 +90,9 @@ import {
     closeCodeReview, collapseReviews, fixAllInChat, jumpFromCodeReview, openRunMenu,
     refreshReviews, renderReviews, resetReviews, showReviews,
 } from './transcript/reviews.js';
+import {
+    collapseImages, refreshImages, renderImages, resetImages, showImages,
+} from './transcript/images.js';
 import { warmPeers } from './transcript/rows.js';
 import {
     agentRows, closeAgent, leaveAgent, loadAgents, openAgent,
@@ -826,6 +829,8 @@ function clearCurrent() {
     renderChanges();        // hides the drawer: there is no session to be about
     resetReviews();
     renderReviews();
+    resetImages();
+    renderImages();
     resetChecklist();
     renderChecklist();      // and the same for the task list on the other side
     resetWindow();
@@ -2666,6 +2671,8 @@ function connect() {
         // A session this bridge is not running (a terminal, another window) has
         // no turn end to hear, so its reviews are noticed as its file grows.
         refreshReviews({ tail: true });
+        // And any image it carried — a screenshot, a picture you just sent.
+        refreshImages({ tail: true });
         // A plan belonging to a session running elsewhere is read out of these
         // events, so it arrives — and goes away once answered over there — with
         // the transcript rather than with a status tick.
@@ -3190,6 +3197,8 @@ export function applyRunner(s) {
     if (wasBusy && !busy && state.changes.on && !state.changes.shut) loadChanges();
     // And the end of a turn is when a review it ran has its result written.
     if (wasBusy && !busy) refreshReviews();
+    // And a subagent's screenshots, which are in its own file rather than the tail.
+    if (wasBusy && !busy) refreshImages();
 
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
@@ -3677,6 +3686,12 @@ dom.btnReviews.addEventListener('click', () => {
 dom.reviewsCollapse.addEventListener('click', () => collapseReviews(true));
 dom.reviewsStrip.addEventListener('click', () => collapseReviews(false));
 dom.reviewsRun.addEventListener('click', (e) => openRunMenu(e));
+
+dom.btnImages.addEventListener('click', () => {
+    if (state.current) showImages(!state.images.on);
+});
+dom.imagesCollapse.addEventListener('click', () => collapseImages(true));
+dom.imagesStrip.addEventListener('click', () => collapseImages(false));
 
 dom.btnChecklist.addEventListener('click', () => {
     if (state.current) showChecklist(!state.checklist.on);

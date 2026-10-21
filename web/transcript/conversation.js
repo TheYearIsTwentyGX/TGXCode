@@ -53,6 +53,7 @@ import { autoGrow, clearPendingSend } from '../composer/send.js';
 import { closeMenus, live } from '../composer/slash.js';
 import { loadChangesIfStale, renderChanges, resetChanges } from './changes.js';
 import { loadReviewsIfStale, renderReviews, resetReviews } from './reviews.js';
+import { loadImagesIfStale, renderImages, resetImages } from './images.js';
 import { renderChecklist, resetChecklist } from './checklist.js';
 import { findKey, markFindDirty, resetFind } from './find.js';
 import { paneUp } from './layout.js';
@@ -163,6 +164,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         // never opens it should not pay for it on every session it visits.
         loadChangesIfStale();
         loadReviewsIfStale();
+        loadImagesIfStale();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -238,6 +240,8 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     renderChanges();            // which leaves the drawer saying it is looking
     resetReviews();             // the reviews too, and the dialog over them
     renderReviews();
+    resetImages();              // and the images, which were the old chat's
+    renderImages();
     resetChecklist();           // as was the task list — the push will refill it
     renderChecklist();
     // The whole list is already here, so this only has to be re-filtered — but it
@@ -581,6 +585,9 @@ export function renderHeaderActions() {
     dom.btnReviews.setAttribute('aria-pressed', String(state.reviews.on));
     dom.btnReviews.title = state.reviews.on
         ? 'Hide this session’s code reviews' : 'The code reviews this session ran';
+    dom.btnImages.classList.toggle('on', state.images.on);
+    dom.btnImages.setAttribute('aria-pressed', String(state.images.on));
+    dom.btnImages.title = state.images.on ? 'Hide the images in this chat' : 'Every image in this chat';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = keys.hint(
         !isUp(dom.termPane) ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
