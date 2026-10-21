@@ -277,7 +277,8 @@ settings, dismissing an item, recording the answer to a decision —
 `POST …/orchestrator/decisions/:decisionId/answered` — Resume, Move to main checkout
 (`POST …/orchestrator/move-to-checkout`), `GET /api/orchestrators`
 and handing one a task — `POST …/orchestrator/tasks` and `…/tasks/:itemId/withdraw` —
-stay open, with a task's mode and worktree refused as starting a session refuses them);
+stay open, with a task's mode and worktree refused as starting a session refuses them;
+so does `POST /api/sessions/:id/restart`, for any session);
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
@@ -5993,6 +5994,7 @@ mode but `ask` only reads.
 | Route | Body | Notes |
 |---|---|---|
 | `POST /api/sessions/:id/stop` | `{hard?}` | `{ok, how, dropped[]}` — see below |
+| `POST /api/sessions/:id/restart` | `{force?}` | `{ok, restarted, status}` — replace the live process with a fresh `--resume`; see below |
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear. Dropping one answers `{ok, removed, status}`, or `409` if the message has already been sent — including a `handed` one the running turn read first. Clearing answers `{ok, dropped[]}` with only what was actually dropped, so a handed message that lost that race stays out of the list |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?, title?}` | `title` is a string to name the session or `null`/`""` to clear the name; it is trimmed, whitespace runs become one space, and it is cut to 200 characters. The name is the bridge's own and is never written to the transcript, so Claude Code's `/resume` does not see it. Answers `{ok, sessionId, pinned, archived, test, title, titleSource, runsStopped}` — **`title` is the name the session now shows**, not the flag: after a clear it is the transcript's or schedule's title again. The name is set when `titleSource` is `"user"` |
@@ -6022,6 +6024,40 @@ on disk. They have been taken off the queue, so a client that does not put them
 somewhere (the composer, a draft) loses them; that includes the `how: null` case,
 which is the one where a session looked stuck and Stop was the obvious thing to
 press.
+
+`POST /api/sessions/:id/restart` — body `{force?: boolean}` — replaces the session's
+live `claude` with a fresh one that resumes the same conversation. It exists because a
+process reads its MCP tool list (`bridge/mcp.js`) once, at launch, and the session host
+keeps processes alive across bridge restarts, so a tool the bridge gained since is
+invisible to a session that was already running until its process is replaced.
+
+- **`200 {ok: true, restarted: true, status}`** — the process was replaced. The new one
+  runs in the directory the session resumes from (the summary's `cwd`, so an
+  orchestrator moved with `move-to-checkout` restarts in its main checkout) with the
+  same `model`, `effort` and `permissionMode`; a model/effort change that was held for
+  background work (`pendingSettings`) is applied instead. Messages still in the queue
+  move across and are sent first. **The new process is spawned before the response
+  is sent**, not on the next message, so `status.state` is already `idle` (or `busy`
+  when a carried message went straight out). `status` is the full `runner-status`
+  payload of the new runner.
+- **`200 {ok: true, restarted: false, status}`** — there was no live process, so
+  nothing was done; the next message starts a fresh one anyway. `status` is the
+  runner's status when the bridge still holds a runner with no process
+  (`state: "stopped"` or `"error"`), and **`null`** when it holds none at all.
+- **`409 {error, busy: true}`** — a turn is `busy` or `starting`, or the session is
+  blocked on an ask or approval card (`pendingPermission`). Never restarted, whatever
+  `force` says: the turn would be cut short and the card lost. Wait for the turn to
+  finish, or stop it, then ask again.
+- **`409 {error, background: number}`** — the process is idle but still running
+  background tasks (`status.background > 0`): a `run_in_background` command or a
+  subagent. Ending the process stops them. Send `force: true` to restart anyway.
+- **`404 {error}`** — no such session.
+- It broadcasts the `runner-status` events any replace does (a model change, a move):
+  the new runner's at once, the old process's as it exits, and the new runner's again
+  after that, so the last one a client hears is the new runner's. There is no event
+  of its own.
+- **Open to remote callers**, like Resume and *Move to main checkout*: it ends only
+  an idle process and starts the same conversation again.
 
 `/api/fs` returns `{path, parent, roots, isGit, truncated, entries[]}`, where each
 entry is `{name, path, git}`. Directories only, dotfiles omitted, symlinks to

@@ -97,6 +97,7 @@ export function registerBuiltins() {
         () => (state.reviews.on ? 'Hide reviews' : 'Show reviews'), { keywords: 'code review findings adversarial' });
     viaButton('session.checklist', dom.btnChecklist, 'Checklist', { keywords: 'todo tasks' });
     viaButton('session.orchestrator', dom.btnOrch, 'Orchestrator', { keywords: 'workers dock' });
+    viaButton('session.restart', dom.btnRestartProc, 'Restart process', { keywords: 'reload tools mcp resume' });
     viaButton('session.reveal', dom.btnFolder, 'Reveal in file explorer', { keywords: 'folder open finder' });
     viaButton('session.pin', dom.btnPin,
         () => (state.current && state.current.pinned ? 'Unpin session' : 'Pin session'));
