@@ -15,6 +15,8 @@
 // said it is done plainly got past its plan, whether or not the plan is still
 // on file, and the timeline says so rather than drawing a gap.
 
+import { toolDisplayName } from './tool-name.js';
+
 /** The inbox kinds that are a worker asking, and the runner's word for each. */
 const ASK_KINDS = { plan: 'plan', permission: 'tool', ask: 'question' };
 
@@ -255,7 +257,7 @@ export function stageLine(w, stage, inbox, { runner = null, now = Date.now(), de
             const what = b && b.kind === 'plan' ? 'Plan' : b && b.kind === 'tool' ? 'Permission' : 'Question';
             const reader = !item ? null : item.status === 'new' ? 'the orchestrator has not read it yet'
                 : 'the orchestrator is on it';
-            const tool = b && b.kind === 'tool' && item && item.ask ? item.ask.displayName || item.ask.tool : null;
+            const tool = b && b.kind === 'tool' && item && item.ask ? toolDisplayName(item.ask.displayName || item.ask.tool) : null;
             return { lead: `${what} waiting${since(item && item.at)}`, detail: [tool, reader].filter(Boolean).join(' · ') || null };
         }
         case 'you':

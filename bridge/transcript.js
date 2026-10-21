@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { toolDisplayName } = require('./tool-name');
 
 // Entries that carry conversation content. Everything else is bookkeeping.
 const CONTENT_TYPES = new Set(['user', 'assistant', 'system']);
@@ -1749,7 +1750,7 @@ function describeTool(block) {
         case 'WebSearch': return `Searching the web`;
         case 'ExitPlanMode': return 'Presenting a plan';
         case 'AskUserQuestion': return 'Asking you a question';
-        default: return `Running ${name}`;
+        default: return `Running ${toolDisplayName(name)}`;
     }
 }
 

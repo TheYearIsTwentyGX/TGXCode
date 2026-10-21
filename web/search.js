@@ -40,6 +40,7 @@ import { get } from './api.js';
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { ago } from './format.js';
+import { toolDisplayName } from './tool-name.js';
 import { closeOtherPanels, openAtHit, paintPanels, projectColor, rememberView } from './app.js';
 import { paint } from './boards/parts.js';
 import { termPane } from './term-pane.js';
@@ -125,10 +126,15 @@ export async function jumpToHit(hit) {
 
 const KIND_LABEL = { user: 'You', assistant: 'Claude', tool: 'Tool' };
 
-function Segments({ segments }) {
+// A tool hit's text opens with the tool's raw name, which is what the index
+// holds. Friendlier here rather than in the index, which would mean rebuilding
+// every session's; searching still matches the raw name.
+const friendly = (t) => t.replace(/\bmcp__[A-Za-z0-9_-]+/g, toolDisplayName);
+
+function Segments({ segments, tool }) {
     return segments.map((s, i) => (s.hit
-        ? html`<mark key=${i}>${s.text}</mark>`
-        : html`<span key=${i}>${s.text}</span>`));
+        ? html`<mark key=${i}>${tool ? friendly(s.text) : s.text}</mark>`
+        : html`<span key=${i}>${tool ? friendly(s.text) : s.text}</span>`));
 }
 
 function Hit({ session, hit }) {
@@ -136,7 +142,7 @@ function Hit({ session, hit }) {
     return html`<button class="sx-hit" type="button" data-kind=${hit.kind} onClick=${open}
             title=${hit.turnNo > 0 ? `Turn ${hit.turnNo} of ${session.turns}` : 'Before the first turn'}>
         <span class="sx-hit-kind">${KIND_LABEL[hit.kind] || hit.kind}</span>
-        <span class="sx-hit-text"><${Segments} segments=${hit.segments} /></span>
+        <span class="sx-hit-text"><${Segments} segments=${hit.segments} tool=${hit.kind === 'tool'} /></span>
         <span class="sx-hit-when">${hit.turnNo > 0 ? `turn ${hit.turnNo}` : ''}</span>
     </button>`;
 }

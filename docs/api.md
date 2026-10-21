@@ -3796,6 +3796,13 @@ runner.js`. Both are null outside a working state, and `verb` is null whenever
 `spinner.randomize` is off, in which case `activity` is exactly what it was
 before spinner verbs existed.
 
+An MCP tool is named the way a person reads it, not raw: `detail` for
+`mcp__tgxcode__set_summary` is `Running TGXCode: Set Summary`. The rule — server
+before the first `__` after `mcp__`, `claude_ai_` and `plugin_<x>_` prefixes
+dropped, words title-cased with acronyms kept upper case — is
+`bridge/tool-name.js`, and a client that draws a raw tool name of its own (an
+event's `name`) can apply the same rule to match.
+
 The halves are on the wire for one reason: a surface too narrow for the whole
 label has to choose which half to keep, and it should keep the informative one.
 The session rail is the only place in this app that does, at about twenty
@@ -5515,6 +5522,11 @@ The ask shape (`permission-request`, and `runner.pendingPermission`):
   "blockedPath": null, "agentId": null,
   "askedAt": 1786722343125 }
 ```
+
+`tool` is the raw name — match on it, and send it back in an allow rule.
+`displayName` is the label to draw: for an MCP tool it is always the friendly
+form (`mcp__tgxcode__set_summary` → `TGXCode: Set Summary`), whatever the CLI
+sent; for anything else it is the CLI's own label, usually the same as `tool`.
 
 **An ask does not expire.** There is no deadline to count down and no
 `expiresAt` — a card waits as long as you do, and a client that attaches later

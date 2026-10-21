@@ -42,6 +42,7 @@ import { state } from '../state.js';
 import { paintPerm, scrollToEnd } from '../app.js';
 import { closeFind } from './find.js';
 import { toolSummary } from './tools.js';
+import { toolDisplayName } from '../tool-name.js';
 import { exit, grow, isLeaving, isUp, present } from '../motion.js';
 
 // ── approvals, plans and questions ───────────────────────────────────────
@@ -217,7 +218,7 @@ function renderToolCard(ask) {
         'aria-label': `Permission needed for ${ask.displayName}` });
 
     card.append(el('div', { class: 'perm-head' },
-        el('span', { class: 'perm-tool' }, ask.displayName),
+        el('span', { class: 'perm-tool', title: ask.tool || null }, toolDisplayName(ask.displayName)),
         el('span', { class: 'perm-title' }, 'permission needed')));
 
     if (ask.agentId) card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
@@ -733,7 +734,7 @@ function adoptMode(mode) {
 export function resolveAsk(outcome) {
     if (!state.ask) return;
     const head = ASK_HEAD[state.ask.kind];
-    const tool = head ? head.name : state.ask.displayName;
+    const tool = head ? head.name : toolDisplayName(state.ask.displayName || state.ask.tool);
     state.ask = null;
     renderAsk();
     const word = DECISION_WORD[outcome] || 'Answered.';

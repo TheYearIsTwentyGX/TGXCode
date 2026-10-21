@@ -54,6 +54,7 @@ import { askBody } from '../notifications.js';
 import { answerAskFor, ASK_HEAD } from '../transcript/approvals.js';
 import { openSession } from '../transcript/conversation.js';
 import { toolSummary } from '../transcript/tools.js';
+import { toolDisplayName } from '../tool-name.js';
 import { enterSends, grow } from '../composer/send.js';
 import { prBadge } from '../rail.js';
 import {
@@ -643,7 +644,7 @@ class AskBar extends Component {
             <div class=${`lask lask-${kind}${row ? ' lask-row' : ''}`} data-for=${theirs ? 'orchestrator' : null}>
                 ${theirs ? html`<div class="lask-for">The orchestrator has it — you can answer first.</div>` : null}
                 <div class="lask-what">
-                    <b>${kind === 'tool' ? ask.displayName : ASK_HEAD[kind].name}</b>
+                    <b title=${kind === 'tool' ? ask.tool : null}>${kind === 'tool' ? toolDisplayName(ask.displayName) : ASK_HEAD[kind].name}</b>
                     ${what ? html`<span>${clip(what, row ? 70 : 90)}</span>` : null}
                 </div>
                 <div class="lask-acts">
