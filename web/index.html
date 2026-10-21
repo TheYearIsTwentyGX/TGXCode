@@ -45,6 +45,7 @@
 <link rel="stylesheet" href="./css/templates.css">
 <link rel="stylesheet" href="./css/pr-review.css">
 <link rel="stylesheet" href="./css/reviews.css">
+<link rel="stylesheet" href="./css/images.css">
 <link rel="stylesheet" href="./css/palette.css">
 </head>
 <body>
@@ -479,6 +480,16 @@
                         stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </button>
+              <button id="btn-images" class="icon-btn" type="button"
+                      title="Every image in this chat" aria-pressed="false">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"
+                        stroke="currentColor" stroke-width="1.7"/>
+                  <circle cx="9" cy="9.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="m4.5 17.5 4.8-4.6 3.2 3 2.6-2.4 4.4 4" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
               <button id="btn-folder" class="icon-btn" type="button"
                       title="Show the working directory in File Explorer">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -713,6 +724,24 @@
                         title="Put this to one side">Hide</button>
               </div>
               <div id="reviews-body" class="reviews-body" tabindex="-1"></div>
+            </div>
+          </aside>
+          <!-- Every image in this chat, once each — web/transcript/images.js. The
+               same box, strip and narrow-window behaviour as the two above. -->
+          <aside id="images" class="tasks images" hidden
+                 aria-label="Images in this chat">
+            <button id="images-strip" class="tasks-strip" type="button" hidden>
+              <span class="tasks-strip-label">Images</span>
+              <span id="images-strip-count" class="tasks-count"></span>
+            </button>
+            <div id="images-open" class="tasks-open">
+              <div class="tasks-head">
+                <span class="tasks-title">Images</span>
+                <span id="images-count" class="tasks-count"></span>
+                <button id="images-collapse" class="tasks-collapse" type="button"
+                        title="Put this to one side">Hide</button>
+              </div>
+              <div id="images-body" class="images-body" tabindex="-1"></div>
             </div>
           </aside>
           <nav id="turns" class="turns" aria-label="Your messages, plans and questions in this session"></nav>
@@ -2059,6 +2088,16 @@
 <div id="img-scrim" class="scrim img-scrim" hidden>
   <div class="img-bar">
     <span id="img-title" class="img-title"></span>
+    <!-- Drawn only when the Images pane opened this: the places the picture
+         appeared, and the way back to the one showing. -->
+    <span id="img-nav" class="img-nav" hidden>
+      <button id="img-prev" class="icon-btn" type="button" title="Where it appeared before"
+              aria-label="Previous place it appeared">‹</button>
+      <span id="img-occ" class="img-occ" aria-live="polite"></span>
+      <button id="img-next" class="icon-btn" type="button" title="Where it appeared next"
+              aria-label="Next place it appeared">›</button>
+      <button id="img-jump" class="img-jump" type="button">Jump to message</button>
+    </span>
     <button id="img-copy" class="icon-btn" type="button" title="Copy image" aria-label="Copy image"></button>
     <button id="img-save" class="icon-btn" type="button" title="Save image" aria-label="Save image"></button>
     <button class="icon-btn" data-close-img type="button" title="Close" aria-label="Close">✕</button>

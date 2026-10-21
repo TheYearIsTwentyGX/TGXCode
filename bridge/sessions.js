@@ -16,6 +16,7 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity, toolResultImage, branchOf } = require('./transcript');
 const { TurnIndex } = require('./turn-index');
 const { SkillRunIndex } = require('./skill-runs');
+const { ImageIndex } = require('./image-index');
 const { SearchIndex } = require('./search-index');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
@@ -49,6 +50,8 @@ class SessionIndex extends EventEmitter {
         /** Where each turn starts, so a long transcript can be opened from its end. */
         this.turnIndex = new TurnIndex();
         this.skillRunIndex = new SkillRunIndex();
+        /** Every image in each conversation, deduplicated. See bridge/image-index.js. */
+        this.imageIndex = new ImageIndex();
         /** What every transcript says, for `/api/search`. See bridge/search-index.js. */
         this.searchIndex = new SearchIndex();
         /**
@@ -769,6 +772,29 @@ class SessionIndex extends EventEmitter {
         return null;
     }
 
+    /**
+     * Every image in the conversation — yours and the tools', the session's and
+     * its subagents' — once each, newest first. Null for a session we do not
+     * know. See bridge/image-index.js.
+     */
+    images(sessionId, urlFor) {
+        const idx = this._imageIdx(sessionId);
+        return idx ? this.imageIndex.list(idx, urlFor) : null;
+    }
+
+    /** The bytes behind one of images()'s keys: `{mediaType, data}` or null. */
+    imageBytes(sessionId, key) {
+        const idx = this._imageIdx(sessionId);
+        return idx ? this.imageIndex.bytes(idx, key) : null;
+    }
+
+    _imageIdx(sessionId) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec || !rec.file) return null;
+        const agents = readSubagentIndex(path.join(rec.dir, sessionId));
+        return this.imageIndex.update(sessionId, rec.file, agents);
+    }
+
     /** Tool output that was too large to inline, read from its spill file. */
     persistedOutput(sessionId, filePath) {
         const rec = this.sessions.get(sessionId);
@@ -940,6 +966,7 @@ class SessionIndex extends EventEmitter {
         this.sessions.delete(sessionId);
         this.turnIndex.forget(sessionId);
         this.skillRunIndex.forget(sessionId);
+        this.imageIndex.forget(sessionId);
         this.searchIndex.forget(sessionId);
         // Deleting is deliberate, so it takes the reprieve with it: a session
         // removed on purpose must not be held alive by having been recent.

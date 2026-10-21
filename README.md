@@ -402,6 +402,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
+| `bridge/image-index.js` | Per-session index of every image in a conversation — yours and the tools', the session's and its subagents' — deduplicated by the sha256 of its bytes, read incrementally and cached, with where each one appeared; the Images pane is drawn from it |
 | `bridge/skill-runs.js` | Per-session index of every skill, slash command and subagent run — start, end, result text — that the Reviews pane is filtered from |
 | `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached |
 | `bridge/pricing.js` | API list prices per model, and the cost of one message's usage |
@@ -523,7 +524,8 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
 | `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |
 | `web/transcript/tools.js` | Tool calls: the one-line summary, the block, and the body built on first expand (`fillTool`) |
-| `web/transcript/image-viewer.js` | The full-size preview behind a tool result's image, with Copy and Save |
+| `web/transcript/image-viewer.js` | The full-size preview behind a tool result's image, with Copy and Save — and, opened from the Images pane, a step through each place it appeared and Jump to message |
+| `web/transcript/images.js` | The Images pane beside the transcript: every image in the chat once each, as a thumbnail grid with a ×N for repeats |
 | `web/transcript/approvals.js` | A blocked turn — the permission card, the plan pane and the question dock — and answering it |
 | `web/transcript/review.js` | Reviewing a plan or a question after the fact |
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |
@@ -598,6 +600,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/digest.css` | The while-you-were-away card (web/digest.js), from existing tokens only |
 | `web/css/templates.css` | The template rows in the Start-a-session dialog. Layout only, pending the dialog restyle |
 | `web/css/reviews.css` | The Reviews pane, the code-review findings dialog and Settings › Code reviews, from existing tokens only. After pr-review.css, whose finding rows it reuses |
+| `web/css/images.css` | The Images pane's grid and the image preview's occurrence stepper, from existing tokens only. After reviews.css |
 | `web/css/palette.css` | The command palette |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |

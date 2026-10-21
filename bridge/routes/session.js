@@ -2,7 +2,8 @@
 
 // One session's conversation: `/api/sessions/:id` itself (read, delete), and what
 // is sent to it and read out of it — `send`, `later`, `handoff`, `stop`,
-// `queue`, `permission`, `flags`, attachments, suggestions, tasks, subagents.
+// `queue`, `permission`, `flags`, attachments, suggestions, tasks, subagents,
+// and the images in it.
 // The routes about the *directory* it works in are session-workspace.js.
 //
 // **The split is by `tail`, and nothing else.** Both modules open with the same
@@ -46,6 +47,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // What `/tool-image` will serve. The API accepts these four and nothing else.
 const TOOL_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+// An image's key: the sha256 of its bytes, as bridge/image-index.js writes it.
+const IMAGE_KEY_RE = /^[0-9a-f]{64}$/;
 
 // Handed over by server.js — see the note above ROUTES there.
 let flags = null;
@@ -281,6 +284,32 @@ async function handle(req, res, url, pathname, seg, who) {
         // An image a tool result carried, as bytes — the event only describes it
         // (`result.images`). Raster types only: an SVG is a document that can
         // run script, and this is served from the app's own origin.
+        // Every image in the conversation, deduplicated by content — the Images
+        // pane. A list, never the bytes: each entry's `url` is the route below.
+        // Open to remote callers like tool-image beside it. See
+        // bridge/image-index.js for what counts and docs/api.md for the shape.
+        if (tail === 'images' && !seg[4] && req.method === 'GET') {
+            const base = `/api/sessions/${encodeURIComponent(sessionId)}/images/`;
+            const images = index.images(sessionId, key => base + key);
+            if (!images) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, { sessionId, images });
+        }
+        if (tail === 'images' && seg[4] && !seg[5] && req.method === 'GET') {
+            const key = seg[4];
+            const img = IMAGE_KEY_RE.test(key) ? index.imageBytes(sessionId, key) : null;
+            if (!img || !TOOL_IMAGE_TYPES.has(img.mediaType)) {
+                return send(res, 404, { error: 'image not available' });
+            }
+            res.writeHead(200, {
+                'Content-Type': img.mediaType,
+                'Content-Length': img.data.length,
+                'X-Content-Type-Options': 'nosniff',
+                // Addressed by its own hash, so the bytes behind a URL can never change.
+                'Cache-Control': 'private, max-age=31536000, immutable',
+            });
+            return res.end(img.data);
+        }
+
         if (tail === 'tool-image' && req.method === 'GET') {
             const n = Number(url.searchParams.get('n') || 0);
             const img = index.toolImage(sessionId, url.searchParams.get('toolUseId'), n);

@@ -371,6 +371,10 @@ symlinks refused.
 transcript they are read from: they read only that session's transcript and the
 subagent transcripts filed under its id.
 
+`GET /api/sessions/:id/images` and `…/images/:key` are readable remotely on the same
+terms as `…/tool-image`: they read only that session's transcript and its subagents',
+and serve the same four raster types.
+
 `GET /api/slash-commands` is readable remotely for the same reason, and is a
 different route from `GET /api/commands` despite the name — one is what the CLI
 will accept in the composer, the other is what the repository declares in
@@ -864,6 +868,75 @@ served: it is a document that can run script, from the app's own origin. Open to
 remote callers, like the transcript it is part of. It needs the token like any other
 route. A browser `<img>` on loopback gets it from the cookie; a phone has to send the
 header, so it cannot pass the URL to a plain image loader that does not let it add one.
+
+### `GET /api/sessions/:id/images`
+
+Every image in the conversation, **once each**: the Images pane. Never the bytes —
+each entry has a `url` to fetch them from.
+
+```
+{ sessionId: string,
+  images: [{
+    key: string,                      // sha256 of the decoded bytes, 64 hex characters
+    source: "user" | "tool",          // of the first occurrence
+    toolUseId: string | null,         // first occurrence's tool call, when source is "tool"
+    n: number | null,                 // its index in that call's result.images
+    uuid: string | null,              // first occurrence's transcript entry
+    at: string | null,                // ISO timestamp of the first occurrence
+    mediaType: string,                // as the transcript declared it
+    bytes: number,                    // decoded length
+    width: number | null, height: number | null,   // read off the image's own header
+    label: string,                    // "Your message", a Read's file name, or the tool's display name
+    url: string,                      // "/api/sessions/:id/images/:key"
+    count: number,                    // every time these bytes appeared
+    occurrences: [{
+      uuid, at, source, toolUseId, n, label,      // as above, for this one
+      agent: string | null,           // the Agent call's tool_use id, if it was in a subagent
+      anchor: { kind: "user" | "tool", id: string, offset: number } | null }] }] }
+```
+
+- **What counts.** An `image` block in a `user` entry: one at the top level of the
+  message (something you attached) or one inside a `tool_result` (a Read of an
+  image, a browser screenshot, any MCP tool that returned one). In the session's own
+  transcript and in each subagent's. Not counted: `api-request-blob` entries, which
+  repeat the request that carried a result; a Read's `toolUseResult.file.base64`,
+  which repeats the block beside it; images named in assistant markdown; scratchpad
+  files that the conversation never read.
+- **Dedup.** Two blocks are the same image when the sha256 of their **decoded bytes**
+  is the same, whatever kind of block they were in. One screenshot attached twice and
+  Read once is one entry, `count: 3`, three `occurrences`.
+- **Order.** `images` is **newest first by first occurrence** (its `at`), the way the
+  pane draws it. `occurrences` within an entry are oldest first, so `occurrences[0]`
+  is the first occurrence and the top-level fields repeat it. At most 200 occurrences
+  are listed per image. `count` keeps counting past that.
+- **`anchor`** is where to scroll for that occurrence. It is the same shape as a
+  review's `anchor`, and the same warning applies: `offset` is a byte offset in the
+  session's own transcript, not a window boundary. `kind: "user"` means `id` is a
+  `user` event's id. `kind: "tool"` means `id` is a `tool` event's id. For an image
+  in a subagent it is the Agent call that spawned it. `null` when the agent cannot be
+  traced back to the session's transcript.
+- **`url`** is the route below. The `tool-image` route serves the same bytes for an
+  occurrence with a `toolUseId`, so either works.
+
+**Incremental and cached.** Each file is read from where the last request stopped,
+so a transcript that has not grown costs one `stat` per file. A transcript rewritten
+from the start (it shrank, or its first line changed) is re-indexed from scratch.
+There is **no live event**. Ask again when a turn ends, or when `tail` brings new
+events (the desktop waits 1.5 s after the last one). `404` means the session id is
+unknown. Open to remote callers, like `tool-image`.
+
+### `GET /api/sessions/:id/images/:key`
+
+**Raw image bytes, not JSON**, for one `key` from the list above. `200` with
+`Content-Type` set to the image's type and `Cache-Control: private, max-age=31536000,
+immutable`, because the URL is named by the bytes' own hash. The bytes are read back
+out of the transcript and hashed again before they are sent. So a transcript
+rewritten since the list was fetched answers `404` rather than a different picture.
+
+`404 {error: "image not available"}` for an unknown session or key, a key that is not
+64 lowercase hex characters, and any type other than `image/png`, `image/jpeg`,
+`image/gif` or `image/webp`. The same token rules as `tool-image` apply: a phone has
+to send the header.
 
 ### `GET /api/sessions/:id/since?offset=N`
 
