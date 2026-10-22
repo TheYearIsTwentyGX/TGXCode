@@ -30,6 +30,9 @@ import { applySnippets, loadSnippets, wireSnippets } from './snippets/index.js';
 import { paintPinTitles } from './snippets/pins.js';
 import { closeSnips, showSnips } from './snippets/popover.js';
 import {
+    composerFindHasFocus, openComposerFind, stepComposerFind, wireComposerFind,
+} from './composer/find.js';
+import {
     applyTaskboard, loadTaskboard, renderTaskboard, taskboardVisible,
     tbPaintTools, tbSetFocus,
 } from './boards/taskboard.js';
@@ -3789,6 +3792,7 @@ dom.input.addEventListener('keydown', (e) => {
 });
 
 wireSlash();
+wireComposerFind();
 
 // Two stops, because the consequences differ. The first asks the turn to end
 // where it is, which leaves the session resumable and the transcript coherent.
@@ -4490,9 +4494,24 @@ document.addEventListener('keydown', (e) => {
         openFind();
         return;
     }
+    // F3 from the composer while its own find is up steps through the box's
+    // matches; from the bar itself it never gets here — the bar handles its keys.
+    if ((command === 'find.next' || command === 'find.prev') && composerFindHasFocus()) {
+        e.preventDefault();
+        stepComposerFind(command === 'find.prev' ? -1 : 1);
+        return;
+    }
     if ((command === 'find.next' || command === 'find.prev') && state.current && !inTerm) {
         e.preventDefault();
         stepFind(command === 'find.prev' ? -1 : 1);
+        return;
+    }
+    // Find and replace in the composer. Yields to the terminal like the find
+    // chords above, and for a sharper reason: Ctrl+H is the shell's backspace.
+    if ((command === 'composer.find' || command === 'composer.replace') && !inTerm) {
+        if (!state.current || dom.input.disabled) return;
+        e.preventDefault();
+        openComposerFind({ replace: command === 'composer.replace' });
         return;
     }
     if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }

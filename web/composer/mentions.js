@@ -257,9 +257,13 @@ export function insertAt(c, from, to, text) {
     const caret = from + text.length;
     box.focus();
     let done = false;
-    if (document.activeElement === box && text) {
+    // Splicing in nothing is a deletion, which `insertText` with an empty string
+    // does not reliably record; `delete` over the selection does, and is the same
+    // single undo step. Find and replace is the caller that needs it.
+    if (document.activeElement === box && (text || from < to)) {
         box.setSelectionRange(from, to);
-        try { done = document.execCommand('insertText', false, text); } catch { done = false; }
+        const cmd = text ? 'insertText' : 'delete';
+        try { done = document.execCommand(cmd, false, text); } catch { done = false; }
         done = done && box.value === want;
     }
     if (!done) {
