@@ -2075,6 +2075,26 @@ that project, not an addition to yours. A save is checked entry by entry — a b
 dropped and reported in `problems`, a missing `id` is made from `skill`, a missing `label`
 is the skill, an unknown `colour` becomes `"blue"`.
 
+`brief` is the agent brief: the pre-prompt every session the bridge starts is given,
+and the sections behind the `tgxcode_guide` MCP tool (`bridge/brief.js`). **A project
+may set it**, key by key, and it is **applied by the bridge** when it spawns `claude` —
+read at every spawn, new or resumed, so a change reaches a session the next time its
+process starts. The keys are flat so a project can switch one section off without
+replacing the texts you edited:
+
+| Key | Type | |
+|---|---|---|
+| `enabled` | **bool**, default `true` | `false` sends no brief at all, and `tgxcode_guide` answers that the guide is off. An orchestrator's or worker's own role brief is sent either way. |
+| `mainText` | **string (≤ 8000) or null**, default `null` | the main brief, appended with `--append-system-prompt`. `null`, absent or whitespace-only means the text the bridge ships, so an untouched default follows upgrades; a string replaces it whole. |
+| `<id>Enabled` | **bool**, default `true` | one per section, for `<id>` in `sessions`, `tasks`, `scheduling`, `phone`, `servers`, `commands`, `browser`, `orchestration`. |
+| `<id>Text` | **string (≤ 8000) or null**, default `null` | that section's text, with `null` meaning the shipped one, as `mainText`. |
+
+A `PUT` with `null` removes the key, which at user scope is "reset to the default" and at a
+project scope is "inherit". A text may carry `{{#if name}}…{{else}}…{{/if}}` blocks (`!name`
+negates) and, in `mainText`, `{{sections}}` for the list of available sections; the names
+and the rules are `GET /api/brief`'s. The bridge does not validate the template on save —
+an unbalanced tag is kept as literal text and reported by `GET /api/brief` in `problems`.
+
 ### `GET /api/wispr`
 
 `{available: boolean}` — whether a Wispr Flow chord pressed through this bridge can
@@ -2156,6 +2176,39 @@ to go and read a directory. There is one now, and this is what its checkboxes
 are drawn from — which is why the panel needed no route of its own. Read-only.
 Not local-only either: the names and contents of verb groups are not a
 capability worth refusing a phone.
+
+### `GET /api/brief?cwd=<path>&role=<role>`
+
+The agent brief as a session in `cwd` with that role would be sent it — what the
+Settings preview draws. `role` is `"worker"` or `"orchestrator"`; anything else, or
+none, is an ordinary session. Read-only, and **not local-only**, for `/api/prefs`'s
+reason: it is the settings, read.
+
+| Field | Type | |
+|---|---|---|
+| `enabled` | bool | `brief.enabled` in force |
+| `text` | string | exactly what `--append-system-prompt` carries ahead of any role brief; `""` when off |
+| `words` | number | of `text` |
+| `role` | string or null | as understood |
+| `main` | object `{edited: bool, source: string, parts: [{text, on: bool, why?: string}]}` | `source` is the template in force (the shipped one unless edited); `parts` is it rendered, in order, with `on: false` for what a condition left out and `why` naming the condition (`"devbrowser"`, `"!headless"`, `"else of phone"`). Joining the `on` parts gives `text` before whitespace is tidied. |
+| `sections` | array of objects | one per section, in listing order: `{id, title, summary: string, requires: [string], enabled: bool, edited: bool, missing: [string], available: bool, source: string, text: string, parts: […]}`. `available` is `enabled && every requires is on && brief.enabled`; `missing` names the `requires` features that are off. `text` is rendered whether or not it is available. |
+| `features` | object `{devbrowser, headless, projectCommands, worker, orchestrator}`, each bool | what the conditions test: `devbrowser.show`; `agentBrowser.mode === "headless"`; the project declares at least one command; and the role. |
+| `featureNames` | object, feature → string | a one-line description of each feature, for a UI |
+| `problems` | [string] | template problems, prefixed with the text they are in (`"Main brief: …"`, `"Scheduling: …"`): an unclosed `{{#if}}`, a stray `{{/if}}` or `{{else}}` (each kept as literal text), an unknown condition name (treated as off), an unknown `{{variable}}` (kept as text) |
+
+A condition is a feature name, a section id (true when that section is available — so a
+main-brief line about a section goes when the section does), or `sections` (true when any
+is). A tag alone on its line removes the line with it.
+
+### `GET /api/brief/guide?cwd=<path>&role=<role>&topic=<id>`
+
+What the `tgxcode_guide` MCP tool returns: **always `200`** with `{ok: bool, text: string}`.
+With a `topic` that is available, `ok: true` and the section's rendered text. Without one,
+`ok: true` and the list of available topics. An unknown topic, one that is switched off or
+needs a feature that is off, or a brief that is off altogether, is `ok: false` with a
+sentence saying which and the list — an answer for the model, not a failure of the call.
+The tool passes its own working directory and role, so this is gated at read time as well
+as in the listing the session was started with.
 
 ### `GET /api/sessions/:id/devservers`
 
@@ -3786,7 +3839,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest, reviews, power}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest, reviews, power, brief}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed'\|'script', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own, and on every successful `PUT /api/claude-config/hook-script` — with `scope: 'script'` and `file` the script's absolute path, a fifth value no settings write produces — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |

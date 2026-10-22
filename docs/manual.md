@@ -1105,6 +1105,46 @@ before it is saved rather than discovered as missing buttons. Like Hooks it is a
 draft: *Revert*, and *Save* — or *Create the file* when there is none yet. Each
 command folds to its name. See `docs/plans/21-command-editor.md`.
 
+#### Agent brief
+
+Every session this bridge starts is told, in a couple of hundred words appended to
+its system prompt, that it is running inside TGXCode: that you may be reading on a
+phone, what the `tgxcode` tools are for, where attachments and scratch files go,
+and which longer **sections** it can read on demand with the `tgxcode_guide` tool —
+sessions and handoffs, suggested tasks, scheduling, phone installs, dev servers and
+previews, project commands, the agent test browser, and (for a worker) working for
+an orchestrator. The short part costs tokens on every session; the sections cost
+nothing until an agent asks for one, which is why the detail lives there.
+
+The group has a master switch, the main text, and each section with its own switch
+and text. A text is a draft with *Save* and *Revert*; **Reset to default** puts the
+shipped text back, and from then on that text follows upgrades again — an edited one
+does not. At a project scope the same button reads **Use inherited** and removes
+that file's copy. A project may switch a section off or reword it (a repository can
+already add to the prompt through CLAUDE.md, so this grants nothing new), and does
+so key by key, so it never takes your edited texts with it.
+
+What a session is told depends on what is on for it. A section that needs a feature
+— project commands needs a `.tgxcode/commands.json` with something in it; working
+for an orchestrator needs the session to be a worker — is neither listed nor
+readable where that feature is off, and switching a section off drops the main
+brief's line about it too. Inside a text, `{{#if devbrowser}}…{{else}}…{{/if}}`
+keeps a passage only when a condition holds (`!` negates). A condition is a feature
+— `devbrowser`, `headless`, `projectCommands`, `worker`, `orchestrator` — a section
+id, or `sections` (any section available); `{{sections}}` in the main text becomes
+the list. A tag alone on its line takes the line with it. A tag that does not
+balance is kept as literal text rather than guessed at, and the group lists it as a
+problem.
+
+The **Preview** at the foot is what a session in the project selected at the top of
+the panel is sent, as an ordinary session, a worker or an orchestrator, with the
+word count and the features as chips. What a condition left out is struck through,
+so a missing line can be traced to the switch that removed it. An orchestrator gets
+the same brief as an ordinary session, followed by its own (Settings → Orchestrators adds to that one).
+
+Changes reach a session the next time its `claude` starts — a new session, or the
+next message to one whose process has exited — not one mid-turn.
+
 #### Wispr Flow
 
 Only on a host where Wispr Flow can be reached (Windows, via WSL); elsewhere the

@@ -426,6 +426,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/digest.js` | "While you were away": what happened since a time the client names, assembled from stores the bridge already keeps (pure) |
 | `bridge/flags.js` | Pinned, archived and test state |
+| `bridge/brief.js` | The agent brief: the short pre-prompt every session is given, the sections `tgxcode_guide` reads, the `{{#if}}` syntax, and gating both on the session's settings, project and role |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
 | `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
 | `bridge/claude-version.js` | Installed Claude Code against the registry, and which live sessions are on an older binary |
@@ -453,7 +454,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
 | `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
 | `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
-| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session, install an APK on the phone |
+| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session, install an APK on the phone, read the agent brief's sections |
 | `bridge/phone-installs.js` | APKs filed for the phone: the copy and its sha256, the state the phone reports, the first-`downloading` claim, progress heartbeats, `stalled` and the 3-minute release of a claim gone quiet, retry, and the 24h retention |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
@@ -515,6 +516,7 @@ Two rules worth knowing before you send a patch:
 | `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
+| `web/settings/brief.js` | The Agent brief group — the switches, each text as a draft with Reset to default, and a preview with what is left out struck through |
 | `web/settings/review-types.js` | The Code reviews group — which skills count as reviews, edited as a list and saved whole |
 | `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over). `fitBar()` fits the bar to the window: labels go first, then buttons move into More from the end, and back when there is room |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |

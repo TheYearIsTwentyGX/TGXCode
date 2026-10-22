@@ -163,6 +163,8 @@ function sessionEnv({ browser = 'visible' } = {}) {
 // line, where `ps` can read it, which is why the port travels here and the token
 // is read off disk at the other end instead.
 const AGENT_TOOLS = [
+    // A read of the agent brief's sections; see bridge/brief.js.
+    'mcp__tgxcode__tgxcode_guide',
     'mcp__tgxcode__suggest_session',
     'mcp__tgxcode__list_sessions',
     'mcp__tgxcode__message_session',
@@ -394,6 +396,10 @@ class Runner extends EventEmitter {
         // Whether the browser an agent tests with gets a window. Supplied by the
         // pool from `agentBrowser.mode`; see sessionEnv().
         this.agentBrowser = opts.agentBrowser || (() => 'visible');
+        // The agent brief for this session, or null — see bridge/brief.js.
+        // Supplied by the pool and asked at each spawn, so a settings change
+        // reaches the next process, resumed ones included.
+        this.agentBrief = opts.agentBrief || (() => null);
         this.lastActivityAt = null;    // the last stream line, tool or answered ask
         this.stalled = false;
         this._stallTimer = null;
@@ -566,10 +572,16 @@ class Runner extends EventEmitter {
         args.push('--mcp-config', mcpConfig(this.sessionId, this.role));
         for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
         for (const tool of (this.role && ROLE_TOOLS[this.role]) || []) args.push('--allowedTools', tool);
-        // What an orchestrator or a worker is for, and the user's own addendum.
-        // Appended rather than replacing anything, so CLAUDE.md and the rest of
-        // the default prompt still apply.
-        if (role && role.brief) args.push('--append-system-prompt', role.brief);
+        // What TGXCode is and offers (bridge/brief.js), then what an orchestrator
+        // or a worker is for, with the user's own addendum. Appended rather than
+        // replacing anything, so CLAUDE.md and the rest of the default prompt
+        // still apply. One flag carrying both, joined here: whether the CLI
+        // concatenates a repeated --append-system-prompt or keeps the last one
+        // is not something to find out from a worker that lost its brief.
+        let general = null;
+        try { general = this.agentBrief(this.cwd, this.role); } catch { /* no brief beats no session */ }
+        const prompt = [general, role && role.brief].filter(Boolean).join('\n\n');
+        if (prompt) args.push('--append-system-prompt', prompt);
         // `--session-id` mints the id; `--resume` continues it. Which one is right
         // is a fact about *this start*, not about the runner — see the reset below
         // the spawn, and the bug that reset fixes.
@@ -2436,6 +2448,9 @@ class RunnerPool extends EventEmitter {
         // And whether an agent's test browser draws a window. `visible` is what
         // every session did before there was a setting.
         this.agentBrowser = () => 'visible';
+        // And the agent brief, replaced by the server with bridge/brief.js.
+        // None is what a session got before there was one.
+        this.agentBrief = () => null;
         // Orchestration, replaced by the server with bridge/orchestration.js.
         // Without one no session has a role and nobody answers for a window.
         this.roleOf = () => null;
@@ -2541,7 +2556,8 @@ class RunnerPool extends EventEmitter {
             thinking: (dir, last) => this.thinking(dir, last),
             rerollAfter: (dir) => this.rerollAfter(dir),
             stallAfter: (dir) => this.stallAfter(dir),
-            agentBrowser: (dir) => this.agentBrowser(dir) });
+            agentBrowser: (dir) => this.agentBrowser(dir),
+            agentBrief: (dir, role) => this.agentBrief(dir, role) });
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
         r.hasViewer = () => this.hasViewer(r.sessionId);

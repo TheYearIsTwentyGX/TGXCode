@@ -82,6 +82,16 @@
 // bridge/keepawake.js. **User-only**: whether this machine stays awake is not a
 // repository's to decide.
 //
+// `brief` is the agent brief — the pre-prompt every session gets and the sections
+// behind `tgxcode_guide` (bridge/brief.js). A master switch, then per text an
+// on/off and an edited copy; a text that is absent or null is the shipped one,
+// which is what lets an untouched default follow upgrades. **Not user-only**,
+// unlike the orchestrator addenda: a repository can already add to every
+// session's prompt through CLAUDE.md, so letting one switch a section off or
+// reword it grants nothing new — and "this project has no dev servers" is a fact
+// about the project. Flat keys rather than a map so a project file can switch one
+// section off without replacing every text the user edited.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -113,6 +123,7 @@ const { readJson, serialize, writeAtomic, writable, refuse } = require('./jsonfi
 // project's colour ends up in the same stylesheet as a snippet group's, so the
 // two must not drift apart.
 const { isAccent } = require('./snippets');
+const brief = require('./brief');
 const { projectRootOf } = require('./transcript');
 const wispr = require('./wispr');
 
@@ -463,6 +474,13 @@ const DEFAULTS = {
             { id: 'adversarial', label: 'Adversarial', skill: 'adversarial-reviewer', colour: 'red' },
         ],
     },
+    // `enabled`, `mainText`, and for each section in bridge/brief.js an
+    // `<id>Enabled` and `<id>Text` — filled in below, from the section list, so
+    // a section added there needs nothing added here.
+    brief: {
+        enabled: true,
+        mainText: null,
+    },
     power: {
         // Hold off system sleep while any turn is busy or starting — this
         // bridge's or a terminal's — and for two minutes after the last one.
@@ -471,6 +489,11 @@ const DEFAULTS = {
         keepAwake: false,
     },
 };
+
+for (const id of brief.SECTION_IDS) {
+    DEFAULTS.brief[`${id}Enabled`] = true;
+    DEFAULTS.brief[`${id}Text`] = null;
+}
 
 // Sections a project may not set, however the precedence would otherwise fall.
 //
@@ -673,7 +696,21 @@ const SHAPE = {
     power: {
         keepAwake: (v) => typeof v === 'boolean',
     },
+    brief: briefShape(),
 };
+
+// Null is a value here rather than only a removal: it is what the defaults
+// write, and it means the shipped text.
+function briefShape() {
+    const bool = (v) => typeof v === 'boolean';
+    const text = (v) => v === null || (typeof v === 'string' && v.length <= brief.MAX_TEXT);
+    const shape = { enabled: bool, mainText: text };
+    for (const id of brief.SECTION_IDS) {
+        shape[`${id}Enabled`] = bool;
+        shape[`${id}Text`] = text;
+    }
+    return shape;
+}
 
 /**
  * `keyboard.bindings`, entry by entry.
@@ -1168,6 +1205,7 @@ class Prefs {
             agentBrowser: { ...DEFAULTS.agentBrowser },
             digest: { ...DEFAULTS.digest },
             power: { ...DEFAULTS.power },
+            brief: { ...DEFAULTS.brief },
             reviews: { types: DEFAULTS.reviews.types.map(t => ({ ...t })) },
             sources: [],
             problems: [],

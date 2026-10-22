@@ -24,6 +24,11 @@
 //                           which installs it itself. See bridge/phone-installs.js.
 //   phone_install_status  — look in on one later, rather than guess or file it again.
 //
+// And one that is about the app itself:
+//
+//   tgxcode_guide  — read a section of the agent brief, the longer half of the
+//                    pre-prompt every session gets. See bridge/brief.js.
+//
 // The permission modes those offer stop short of bypassPermissions. That is a
 // guardrail on the tool, not a boundary — the agent can read the same token
 // this process does — and it exists so the obvious call cannot produce an
@@ -558,6 +563,24 @@ const PHONE_INSTALL_STATUS = {
     },
 };
 
+const GUIDE = {
+    name: 'tgxcode_guide',
+    title: 'Read the TGXCode guide',
+    description: [
+        'Read one section of the TGXCode guide: how the app around this session works',
+        'and how to use what it offers — handoffs, suggested tasks, scheduling, phone',
+        'installs, dev servers and more. The topics available to this session are',
+        'listed at the end of the TGXCode part of your system prompt; call this with no',
+        'topic to list them again.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            topic: { type: 'string', description: 'The topic id, e.g. "servers". Omit to list them.' },
+        },
+    },
+};
+
 // ---------------------------------------------------------------------------
 // Orchestration — listed only to a session with a role. See
 // bridge/orchestration.js for what each call does on the bridge side.
@@ -822,7 +845,7 @@ const REPORT = {
 const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WORKER, ANSWER_WORKER,
     READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY];
 
-const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
+const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
     INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
     ...(ROLE === 'worker' ? [REPORT] : [])];
@@ -1275,6 +1298,21 @@ async function callPhoneInstallStatus(id, args) {
     return say(id, lines.join('\n'));
 }
 
+/**
+ * A section of the agent brief, composed by the bridge for this directory and
+ * role — so what is switched off now is refused now, whatever the listing this
+ * process was started with said.
+ */
+async function callGuide(id, args) {
+    const q = new URLSearchParams({ cwd: process.cwd() });
+    if (ROLE) q.set('role', ROLE);
+    if (typeof args.topic === 'string' && args.topic.trim()) q.set('topic', args.topic.trim());
+    const r = await api('GET', `/api/brief/guide?${q}`);
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok || !r.body) return toolError(id, msgOf(r));
+    return r.body.ok ? say(id, r.body.text) : toolError(id, r.body.text);
+}
+
 // ---------------------------------------------------------------------------
 // Orchestration calls
 // ---------------------------------------------------------------------------
@@ -1532,6 +1570,7 @@ async function handle(msg) {
     if (method === 'tools/call') {
         const name = params && params.name;
         const args = (params && params.arguments) || {};
+        if (name === 'tgxcode_guide') return callGuide(id, args);
         if (name === 'suggest_session') return callSuggest(id, args);
         if (name === 'list_sessions') return callList(id, args);
         if (name === 'message_session') return callMessage(id, args);
