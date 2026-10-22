@@ -253,7 +253,7 @@ reachable by an agent.
   not connected picks it up when it next is, for 24 hours; Android asks you to tap
   Install the first time an app arrives this way. See `docs/api.md` §*Phone installs*.
 - **The phone pill in the bar says where every install got to.** It sits beside the
-  quota pill whenever something went to the phone in the last day: a count (or the
+  quota pill (move it, or put it in the More menu, under *Settings → Toolbar*) whenever something went to the phone in the last day: a count (or the
   download's percentage) while one is in flight, and yellow with *Stalled*, *Failed*
   or *Tap Install* when one needs you. Click it — or the toast, or *Phone installs*
   in the palette — for the last twenty, newest first, each with its state and how
@@ -933,6 +933,15 @@ lights up while one of its views is open. Two buttons cannot be put away.
 Settings can go into the menu but cannot be hidden, since it is where a hidden
 button is brought back from. The quota pill stays on the bar, since its popover
 holds Restart bridge. *Reset to default* puts the whole bar back.
+
+The phone-installs pill can go anywhere, but wherever it is it only appears
+while something was sent to the phone in the last day. In the More menu it is a
+row only then, and its count of installs still moving or failed is added to ⋯'s,
+yellow when one has stalled, failed or is waiting for a tap. Hidden, the install
+toasts still come, and clicking one — or *Phone installs* in the palette — opens
+the list under ⋯, or under the bar's right-hand end if ⋯ is not showing. A layout
+saved before the pill could be placed puts it just before the quota pill, where
+it always sat.
 
 Like the keys, this is kept in your own settings file only, as `toolbar.items`,
 and a project's file cannot change it.

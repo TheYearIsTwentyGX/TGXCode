@@ -24,6 +24,16 @@
 // are hand-edited, the split web/quota.js describes. The toast is built by
 // toast() in dom.js and edited by hand afterwards, which is fine there and would
 // not be under Preact: these nodes are `el()`'s.
+//
+// **Where it sits is Settings → Toolbar's** (`phoneInstalls` in web/settings/
+// toolbar.js): the bar, the More menu or nowhere. `hidden` on the wrap stays
+// this module's — nothing from the last day — and holds in every place, so in
+// the More menu it is a row only while there is a list behind it. The pill
+// carries a name and a `.bar-badge` that only the menu shows, which is how the
+// ⋯ button counts it. The popover cannot hang off a pill that is in a closed
+// menu or not drawn, so off the bar it is moved out to the bar itself and
+// pinned under ⋯ (or the bar's right end) — see dockPhoneInstalls(). The
+// toast and the palette open it the same way wherever the pill is.
 
 import { html, render } from './vendor/preact.js';
 import { get, post } from './api.js';
@@ -209,7 +219,9 @@ function summary(rows, now) {
         [failed.length, 'failed'], [waiting.length, 'waiting for a tap on the phone']]) {
         if (n) parts.push(`${n} ${what}`);
     }
-    return { text, kind, title: `Phone installs${parts.length ? ` — ${parts.join(', ')}` : ''}` };
+    // What the More menu's ⋯ adds up: everything still moving or wanting a look.
+    const count = flight.length + failed.length;
+    return { text, kind, count, title: `Phone installs${parts.length ? ` — ${parts.join(', ')}` : ''}` };
 }
 
 /** "downloading · 3m, no update for 2m" */
@@ -269,7 +281,10 @@ export function renderPhoneInstalls() {
     dom.piPill.dataset.kind = s.kind;
     dom.piPill.title = s.title;
     dom.piPill.setAttribute('aria-label', s.title);
-    render(html`${PHONE_ICON}${s.text && html`<span>${s.text}</span>`}`, dom.piPill);
+    render(html`${PHONE_ICON}<span class="pi-name">Phone installs</span>
+        ${s.text && html`<span class="pi-text">${s.text}</span>`}
+        <span class=${s.kind === 'warn' ? 'bar-badge urgent' : 'bar-badge'} hidden=${!s.count}>${s.count}</span>`,
+    dom.piPill);
     if (!dom.piMenu.hidden) {
         render(rows.length ? rows.map(r => rowV(r, now))
             : html`<div class="quota-note">Nothing sent to the phone in the last day.</div>`, dom.piBody);
@@ -281,9 +296,29 @@ export function renderPhoneInstalls() {
     else if (!moving && ticker) { clearInterval(ticker); ticker = 0; }
 }
 
+/**
+ * Put the popover where it can be seen: inside the pill while the pill is on
+ * the bar, and otherwise — in the More menu, spilled there by a narrow window,
+ * or hidden by Settings — on the bar, fixed under the ⋯ button or the bar's
+ * right-hand end. Called by paintToolbar() on every refit and again on open.
+ */
+export function dockPhoneInstalls() {
+    const bar = dom.barMoreWrap.parentElement;
+    const onBar = dom.piWrap.parentElement === bar && !dom.piWrap.hasAttribute('data-bar-hidden');
+    const home = onBar ? dom.piWrap : bar;
+    if (dom.piMenu.parentElement !== home) home.appendChild(dom.piMenu);
+    dom.piMenu.classList.toggle('pi-detached', !onBar);
+    if (onBar) { dom.piMenu.style.top = ''; dom.piMenu.style.right = ''; return; }
+    const r = !dom.barMoreWrap.hidden ? dom.barMore.getBoundingClientRect() : bar.getBoundingClientRect();
+    const pad = dom.barMoreWrap.hidden ? parseFloat(getComputedStyle(bar).paddingRight) || 0 : 0;
+    dom.piMenu.style.top = `${r.bottom + 8}px`;
+    dom.piMenu.style.right = `${window.innerWidth - r.right + pad}px`;
+}
+
 export function showPhoneInstalls(on) {
     if (on && dom.piWrap.hidden) return;
     if (on === isUp(dom.piMenu)) return;
+    if (on) dockPhoneInstalls();
     present(dom.piMenu, on, { as: 'menu' });
     dom.piPill.setAttribute('aria-expanded', String(on));
     if (on) {
@@ -300,5 +335,9 @@ dom.piPill.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-    if (!dom.piMenu.hidden && !e.target.closest('#pi-wrap')) showPhoneInstalls(false);
+    if (!dom.piMenu.hidden && !e.target.closest('#pi-wrap, #pi-menu')) showPhoneInstalls(false);
 });
+
+// Drawn once now, empty, so the pill has its icon before anything was sent —
+// the Toolbar settings row copies its glyph from it.
+renderPhoneInstalls();

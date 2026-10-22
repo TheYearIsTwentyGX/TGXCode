@@ -11,12 +11,12 @@ import { html, useRef, useState } from '../vendor/preact.js';
 import { dom } from '../dom.js';
 import { icon } from '../boards/parts.js';
 import { showCv, showQuota } from '../quota.js';
-import { showPhoneInstalls } from '../phone-installs.js';
+import { dockPhoneInstalls, showPhoneInstalls } from '../phone-installs.js';
 import { devBrowserShown } from '../app.js';
 import { showNewMenu } from '../new-session/recent.js';
 import { saveSetting } from './index.js';
 import { isUp, present } from '../motion.js';
-import { planBar } from '../bar-fit.js';
+import { planBar, resolveLayout } from '../bar-fit.js';
 
 // ── the top bar's layout ─────────────────────────────────────────────────
 //
@@ -52,6 +52,13 @@ const TOOLBAR = [
     { id: 'settings', node: 'btnSettings', name: 'Settings', icon: true, label: false,
         places: ['bar', 'more'],
         why: 'Settings can go in More, but not away — it is where hidden buttons come back from.' },
+    // Absent until something went to the phone in the last day — in the More
+    // menu too, where it is a row only while it has a list to open. A layout
+    // saved before it existed puts it where it always sat: `before` anchors it
+    // to the quota pill rather than to whatever happens to precede it here.
+    // No label toggle: its text is a status, not a name.
+    { id: 'phoneInstalls', node: 'piWrap', name: 'Phone installs', before: 'quota',
+        note: 'Only appears while something was sent to the phone in the last day.' },
     { id: 'quota', node: 'quotaWrap', name: 'Quota',
         places: ['bar'], why: 'Always on the bar — its popover holds Restart bridge.' },
     { id: 'devbrowser', node: 'dbStatus', name: 'DevBrowser' },
@@ -59,39 +66,13 @@ const TOOLBAR = [
 const TOOLBAR_PLACES = [['bar', 'Bar'], ['more', 'More menu'], ['hidden', 'Hidden']];
 
 /**
- * The saved list, resolved against the catalogue.
- *
- * What was saved comes first and in its own order; anything it does not mention
- * — everything, on a file that never touched this, or a button added since —
- * goes back in after the button it follows by default, so a new one lands where
- * it would have been rather than at the end.
+ * The saved list, resolved against the catalogue — resolveLayout() in
+ * web/bar-fit.js, pure so a test can pin where a new button lands.
  *
  * @returns {Array<{def, place, label}>}
  */
 function toolbarLayout() {
-    const byId = new Map(TOOLBAR.map(d => [d.id, d]));
-    const out = [];
-    const saved = (BOOT_PREFS.toolbar && BOOT_PREFS.toolbar.items) || [];
-    for (const e of Array.isArray(saved) ? saved : []) {
-        const def = e && byId.get(e.id);
-        if (!def || out.some(o => o.def === def)) continue;
-        const places = def.places || ['bar', 'more', 'hidden'];
-        out.push({
-            def,
-            place: places.includes(e.place) ? e.place : 'bar',
-            label: typeof e.label === 'boolean' ? e.label : def.label !== false,
-        });
-    }
-    TOOLBAR.forEach((def, i) => {
-        if (out.some(o => o.def === def)) return;
-        let at = 0;
-        for (let j = i - 1; j >= 0; j--) {
-            const k = out.findIndex(o => o.def === TOOLBAR[j]);
-            if (k >= 0) { at = k + 1; break; }
-        }
-        out.splice(at, 0, { def, place: def.start || 'bar', label: def.label !== false });
-    });
-    return out;
+    return resolveLayout(TOOLBAR, BOOT_PREFS.toolbar && BOOT_PREFS.toolbar.items);
 }
 
 /** The layout as the settings file spells it. */
@@ -129,8 +110,12 @@ function place(spill) {
         // absent unless something is behind, not a button anybody places. It
         // rides beside the quota pill, which is always on the bar, rather than
         // being left wherever the moves above happened to strand it.
-        // The phone-installs pill is the same kind of indicator, and rides there too.
-        if (def.id === 'quota') onBar.splice(onBar.length - 1, 0, dom.cvWrap, dom.piWrap);
+        // Ahead of the phone pill when that sits right before quota, which is
+        // the order the two had before the phone pill could be placed.
+        if (def.id === 'quota') {
+            const at = onBar.length - 1;
+            onBar.splice(onBar[at - 1] === dom.piWrap ? at - 1 : at, 0, dom.cvWrap);
+        }
         // An attribute of our own rather than `hidden`, which the quota pill
         // already uses to mean "no data yet" and must keep meaning.
         node.toggleAttribute('data-bar-hidden', where === 'hidden');
@@ -145,6 +130,7 @@ function place(spill) {
     }
     arrange(bar, onBar, dom.barMoreWrap);
     arrange(dom.barMoreMenu, [...spilled, ...inMenu], null);
+    dockPhoneInstalls();
     paintBarMore();
 }
 
@@ -309,8 +295,10 @@ function waitForClose() {
     scheduleFit();
 }
 
+// `hidden` as well: the phone pill is in the menu only while it has something
+// to show, and an empty one is not a row to arrow onto or a reason for ⋯.
 function barMoreRows() {
-    return [...dom.barMoreMenu.children].filter(n => !n.hasAttribute('data-bar-hidden'));
+    return [...dom.barMoreMenu.children].filter(n => !n.hidden && !n.hasAttribute('data-bar-hidden'));
 }
 
 // The bar's own listeners, and its first paint. A function rather than top-level
@@ -365,7 +353,6 @@ export function wireToolbar() {
     ro.observe(dom.barMoreWrap.parentElement);
     for (const def of TOOLBAR) ro.observe(dom[def.node]);
     ro.observe(dom.cvWrap);
-    ro.observe(dom.piWrap);
 }
 
 // ── the Toolbar settings group ───────────────────────────────────────────
@@ -502,7 +489,8 @@ function toolbarRow(o, i, layout, locked, { commit, onDragStart, onDragEnd, drag
         onDragStart=${(e) => onDragStart(e, def.id)}
         onDragEnd=${onDragEnd}>
         <span class="snip-grip" title="Drag to reorder">${icon('grip', 14)}</span>
-        <span class="settings-bar-name">${barGlyph(def)}<span>${def.name}</span></span>
+        <span class="settings-bar-name">${barGlyph(def)}<span>${def.name}${def.note
+            ? html`<span class="settings-bar-note">${def.note}</span>` : null}</span></span>
         ${def.icon
             ? html`<label class="settings-check settings-bar-label">
                 <input type="checkbox" checked=${o.label} disabled=${locked}

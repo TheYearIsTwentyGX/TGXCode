@@ -640,6 +640,7 @@
     font-size: var(--fs-md); color: var(--text-2); }
 .settings-bar-name svg { flex: none; color: var(--text-3); }
 .settings-bar-noglyph { flex: none; width: 14px; }
+.settings-bar-note { display: block; font-size: var(--fs-xs); color: var(--text-4); }
 .settings-bar-row .snip-move:disabled { opacity: 0.3; cursor: default; background: transparent; }
 .settings-bar-label { flex: none; display: flex; align-items: center; gap: var(--sp-3);
     width: 110px; font-size: var(--fs-sm); color: var(--text-3); }

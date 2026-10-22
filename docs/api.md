@@ -1952,9 +1952,9 @@ an **array of objects** `[{id, place, label}]` in the order the bar draws them:
 
 | Field | Type | |
 |---|---|---|
-| `id` | string | one of `tasks`, `live`, `dashboard`, `analytics`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
+| `id` | string | one of `tasks`, `live`, `dashboard`, `analytics`, `history`, `drafts`, `schedules`, `hooks`, `settings`, `phoneInstalls`, `quota`, `devbrowser` |
 | `place` | `"bar"`, `"more"` or `"hidden"` | on the bar, in its More menu, or not drawn. Missing means `"bar"` |
-| `label` | bool | whether the name shows beside the icon. Missing means `true`. Only the seven views have an icon, so it means nothing on `quota` or `devbrowser` |
+| `label` | bool | whether the name shows beside the icon. Missing means `true`. Only the views have an icon, so it means nothing on `phoneInstalls`, `quota` or `devbrowser` |
 
 The default is `[]`, which means the built-in layout. An id the list leaves out
 is drawn in its default place, so a button added later shows up without anyone

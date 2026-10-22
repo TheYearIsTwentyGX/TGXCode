@@ -81,3 +81,45 @@ function plan(avail, fixed, items, more, moreShown) {
     }
     return { compact: true, spill };
 }
+
+/**
+ * The saved `toolbar.items`, resolved against the catalogue (TOOLBAR in
+ * web/settings/toolbar.js) — which buttons, in what order, where.
+ *
+ * What was saved comes first and in its own order; anything it does not mention
+ * — everything, on a file that never touched this, or a button added since —
+ * goes back in where it would have been rather than at the end: before the
+ * entry its `before` names when the list has that one, else after the button
+ * it follows in the catalogue. It starts at `start` (default the bar).
+ *
+ * @param {Array<{id: string, places?: string[], label?: boolean, start?: string, before?: string}>} catalogue
+ * @param {Array<{id: string, place?: string, label?: boolean}>|undefined} saved
+ * @returns {Array<{def, place: string, label: boolean}>}
+ */
+export function resolveLayout(catalogue, saved) {
+    const byId = new Map(catalogue.map(d => [d.id, d]));
+    const out = [];
+    for (const e of Array.isArray(saved) ? saved : []) {
+        const def = e && byId.get(e.id);
+        if (!def || out.some(o => o.def === def)) continue;
+        const places = def.places || ['bar', 'more', 'hidden'];
+        out.push({
+            def,
+            place: places.includes(e.place) ? e.place : 'bar',
+            label: typeof e.label === 'boolean' ? e.label : def.label !== false,
+        });
+    }
+    catalogue.forEach((def, i) => {
+        if (out.some(o => o.def === def)) return;
+        let at = def.before ? out.findIndex(o => o.def.id === def.before) : -1;
+        if (at < 0) {
+            at = 0;
+            for (let j = i - 1; j >= 0; j--) {
+                const k = out.findIndex(o => o.def === catalogue[j]);
+                if (k >= 0) { at = k + 1; break; }
+            }
+        }
+        out.splice(at, 0, { def, place: def.start || 'bar', label: def.label !== false });
+    });
+    return out;
+}

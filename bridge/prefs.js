@@ -142,7 +142,7 @@ const MAX_ORDER = 500;
 const MAX_LINK_PATTERNS = 200;
 
 // What the top bar is made of, in the order it has always been drawn. The page
-// holds the same list — see TOOLBAR in web/app.js — and this copy exists so a
+// holds the same list — see TOOLBAR in web/settings/toolbar.js — and this copy exists so a
 // file naming a button that does not exist is told so rather than kept.
 //
 // Two of them have rules the rest do not, and they are enforced here rather
@@ -155,7 +155,7 @@ const MAX_LINK_PATTERNS = 200;
 //  - `quota` stays on the bar. Its popover is anchored to the pill and holds
 //    Restart bridge, and neither works from inside another popover.
 const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'analytics', 'history', 'drafts', 'schedules',
-    'hooks', 'settings', 'quota', 'devbrowser'];
+    'hooks', 'settings', 'phoneInstalls', 'quota', 'devbrowser'];
 const TOOLBAR_PLACES = new Set(['bar', 'more', 'hidden']);
 const TOOLBAR_PINNED = { settings: new Set(['bar', 'more']), quota: new Set(['bar']) };
 

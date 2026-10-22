@@ -910,6 +910,27 @@ a:hover { text-decoration: underline; }
 .pi-pill svg { flex: none; }
 .pi-pill span { font-variant-numeric: tabular-nums; }
 
+/* The name and the count are for the More menu, where the pill is a row and ⋯
+   adds up its badge; on the bar the icon and the status say it. */
+.pi-pill .pi-name, .pi-pill .bar-badge { display: none; }
+.bar-more-menu .pi-wrap { width: 100%; }
+.bar-more-menu .pi-pill {
+    width: 100%;
+    height: 34px;
+    padding: 0 var(--sp-5);
+    gap: var(--sp-5);
+    justify-content: flex-start;
+    background: transparent;
+    border-radius: var(--r-xs);
+}
+.bar-more-menu .pi-pill:hover { background: var(--s4); }
+.bar-more-menu .pi-pill .pi-text { display: none; }
+.bar-more-menu .pi-pill .pi-name { display: inline; }
+.bar-more-menu .pi-pill .bar-badge:not([hidden]) { display: inline-flex; }
+/* Off the bar the popover has no pill to hang from: dockPhoneInstalls() pins it
+   under ⋯ or the bar's end, and sets top and right. */
+.pi-menu.pi-detached { position: fixed; }
+
 /* Twenty rows of this fit nowhere a popover can sit, so the list scrolls. */
 .pi-menu { width: 340px; }
 #pi-body { max-height: min(60vh, 520px); overflow-y: auto; margin-right: calc(-1 * var(--sp-4)); padding-right: var(--sp-4); }
