@@ -35,6 +35,8 @@ it, and how the pieces fit together. Start there if you have not already.
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
 two), `Ctrl+1`–`Ctrl+9` the nine things the main pane can show, `Ctrl+F` find
 in the conversation with `F3`/`Shift+F3` for the next and previous match,
+`Ctrl+H` find and replace in the message you are writing (`Ctrl+Alt+F` for
+find alone),
 `Ctrl+K` the command palette (sessions, views and every header button in one
 searchable list; press it again with words typed to hand them to the rail's
 filter), `Ctrl+Shift+K` the rail filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
@@ -316,6 +318,41 @@ orchestrator really enters or leaves a worktree with EnterWorktree or ExitWorktr
 which is a decision of its own and wins. Turning off the orchestrator role or
 deleting the session also clears it. A `cd` into a worktree afterwards no longer
 moves where it resumes.
+
+### Find and replace in the message
+
+`Ctrl+H` opens a bar above the composer with *Find* and *Replace*;
+`Ctrl+Alt+F` opens it with *Find* alone, and the › at its left end shows or
+hides *Replace* either way. A one-line selection in the box becomes the query.
+Every match is marked in the box, the current one with a yellow edge, and the
+counter says where you are (*3 of 12*), *No results*, or *Invalid regex* — with
+the reason on hover — for a pattern that does not compile, which then does
+nothing else.
+
+- **`Enter` / `Shift+Enter`** in Find, or **`F3` / `Shift+F3`** from the bar or
+  the box, step through the matches, wrapping at either end. **`Esc`** closes the
+  bar and leaves the current match selected in the box.
+- **`Aa` Match case, `ab|` Whole word, `.*` Regex** — also `Alt+C`, `Alt+W`,
+  `Alt+R` while the bar has the focus. A regex is JavaScript's, with `^` and `$`
+  meaning a line of the message, and the replacement takes `$1`, `$<name>`, `$&`
+  and `$$` as `String.prototype.replace` does. Without *Regex*, both fields are
+  literal, `$` included. Whole word only refuses an edge where a word would be
+  cut, so `foo(` still finds `foo(x)`.
+- **`Enter`** in Replace (or *Replace*) replaces the current match and moves to
+  the next; **`Ctrl+Alt+Enter`** (or *Replace all*) replaces every one.
+
+**Each replace is one `Ctrl+Z`** in the box, *Replace all* included however many
+matches it covered: the edit goes in the way typing does, so the draft is saved,
+`/` and `@` completion react, and the box resizes exactly as if you had typed it.
+The counter stops at 10 000 and says *10000+*, which keeps a huge paste
+responsive; *Replace all* is not capped.
+
+**Why not `Ctrl+F`.** The composer has the focus most of the time, so a `Ctrl+F`
+that searched the box whenever the caret was in it would, in practice, stop
+searching the conversation. `Ctrl+F` is still the conversation's find everywhere
+but inside this bar, where it goes back to the bar's own field. Both message
+chords can be rebound under *Settings → Keyboard → Composer*, and neither fires
+from the terminal, where `Ctrl+H` is backspace.
 
 ### The send queue holds messages back on purpose
 
@@ -876,9 +913,9 @@ dropdowns themselves keep their own order either way. The permission cycle skips
 a session everything — though from either one it still steps out. The model is
 remembered per session.
 
-**The shortcut table** covers all nineteen: the eight views; *Start a session*,
+**The shortcut table** covers all twenty-one: the eight views; *Start a session*,
 *Filter sessions* and the *Terminal* (``Ctrl+` ``); the composer's *Snippets*
-(`Ctrl+/`) and the four picker cycles; and the three find shortcuts. *Change* listens for a chord and swallows it, so binding
+(`Ctrl+/`), the four picker cycles and the two message finds; and the three find shortcuts. *Change* listens for a chord and swallows it, so binding
 `Ctrl+4` does not open the dashboard on the way past; *Unbind* leaves a command
 with no shortcut, which is a thing you can ask for and is not the same as
 resetting it; *Reset* puts it back to the default by removing the override

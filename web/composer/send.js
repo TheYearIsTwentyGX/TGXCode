@@ -22,6 +22,7 @@ import { renderPins } from '../snippets/pins.js';
 import { openSessionSoon } from '../transcript/conversation.js';
 import { branchFor, cancelBranch } from './branch.js';
 import { enter } from '../motion.js';
+import { syncComposerFind } from './find.js';
 
 // ── composer ─────────────────────────────────────────────────────────────
 
@@ -38,7 +39,11 @@ export function grow(ta, min, max) {
 }
 
 // Never below the button height, so an empty composer stays centred.
-export const autoGrow = () => grow(dom.input, 38, 220);
+//
+// Also where find-in-message hears about a value written from code — a send
+// clearing the box, a draft loaded on switching session — since every such
+// write is followed by this and none of them fires `input`.
+export const autoGrow = () => { grow(dom.input, 38, 220); syncComposerFind(); };
 
 
 /**

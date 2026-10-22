@@ -830,7 +830,49 @@
               <button id="lock-anyway" class="lock-btn" type="button">Send anyway</button>
             </div>
 
+            <!-- Find and replace in the box below — web/composer/find.js. Above the
+                 input row and below the lock, so it sits against the text it is
+                 searching. Ctrl+H, or Ctrl+Alt+F without the Replace row; Ctrl+F
+                 is still the conversation's find, for the reason find.js gives. -->
+            <div id="cfind" class="cfind" hidden role="search" aria-label="Find in message">
+              <div class="cfind-row">
+                <button id="cfind-toggle" class="cfind-btn cfind-toggle" type="button"
+                        aria-expanded="false" aria-controls="cfind-replace-row"
+                        title="Toggle Replace" aria-label="Toggle Replace">&#8250;</button>
+                <input id="cfind-input" class="cfind-field" type="text" aria-label="Find in message"
+                       placeholder="Find in message" autocomplete="off" spellcheck="false"
+                       aria-describedby="cfind-count">
+                <button id="cfind-case" class="cfind-opt" type="button" aria-pressed="false"
+                        title="Match case (Alt+C)" aria-label="Match case">Aa</button>
+                <button id="cfind-word" class="cfind-opt" type="button" aria-pressed="false"
+                        title="Whole word (Alt+W)" aria-label="Whole word">ab|</button>
+                <button id="cfind-regex" class="cfind-opt" type="button" aria-pressed="false"
+                        title="Regular expression (Alt+R)" aria-label="Regular expression">.*</button>
+                <span id="cfind-count" class="find-count cfind-count" role="status" aria-live="polite"></span>
+                <button id="cfind-prev" class="find-btn" type="button" disabled
+                        title="Previous match — Shift+Enter or Shift+F3"
+                        aria-label="Previous match">&#8593;</button>
+                <button id="cfind-next" class="find-btn" type="button" disabled
+                        title="Next match — Enter or F3"
+                        aria-label="Next match">&#8595;</button>
+                <button id="cfind-close" class="find-btn" type="button"
+                        title="Close — Esc" aria-label="Close find in message">&#10005;</button>
+              </div>
+              <div id="cfind-replace-row" class="cfind-row" hidden>
+                <input id="cfind-replace" class="cfind-field" type="text" aria-label="Replace with"
+                       placeholder="Replace" autocomplete="off" spellcheck="false">
+                <button id="cfind-one" class="cfind-act" type="button" disabled
+                        title="Replace this match — Enter">Replace</button>
+                <button id="cfind-all" class="cfind-act" type="button" disabled
+                        title="Replace every match — Ctrl+Alt+Enter">Replace all</button>
+              </div>
+            </div>
+
             <div class="input-row">
+              <!-- Behind the textarea, holding the same text in transparent ink
+                   with the find matches marked — a textarea cannot style its own
+                   text. Placed and sized from script; see composer/find.js. -->
+              <div id="input-marks" class="input-marks" aria-hidden="true" hidden></div>
               <!-- Slash-command completion. Anchored to the input row and drawn
                    upward, so it opens into the log rather than pushing the box
                    you are typing in down the screen. Focus never moves here —

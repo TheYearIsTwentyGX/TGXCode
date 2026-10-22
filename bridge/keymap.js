@@ -96,6 +96,8 @@ const COMMANDS = [
     { id: 'composer.permissionModePrev', group: 'Composer', label: 'Cycle permission mode backwards', default: 'Ctrl+Shift+P' },
     { id: 'composer.model', group: 'Composer', label: 'Cycle model', default: 'Ctrl+M' },
     { id: 'composer.modelPrev', group: 'Composer', label: 'Cycle model backwards', default: 'Ctrl+Shift+M' },
+    { id: 'composer.find', group: 'Composer', label: 'Find in message', default: 'Ctrl+Alt+F' },
+    { id: 'composer.replace', group: 'Composer', label: 'Find and replace in message', default: 'Ctrl+H' },
     { id: 'find.open', group: 'Find', label: 'Find in conversation', default: 'Ctrl+F' },
     { id: 'find.next', group: 'Find', label: 'Next match', default: 'F3' },
     { id: 'find.prev', group: 'Find', label: 'Previous match', default: 'Shift+F3' },

@@ -20,6 +20,7 @@ import { dom } from '../dom.js';
 import { setDockSide, setFocus, showView, startRename } from '../app.js';
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
+import { openComposerFind } from '../composer/find.js';
 import { SETTINGS } from '../settings/general.js';
 import { openSettingsAt } from '../settings/index.js';
 import { clickCommand } from '../commands.js';
@@ -113,6 +114,17 @@ export function registerBuiltins() {
     registerAction({
         id: 'find.open', group: 'Actions', title: 'Find in conversation', command: 'find.open',
         when: () => !!state.current, run: () => openFind(),
+    });
+    registerAction({
+        id: 'composer.find', group: 'Actions', title: 'Find in message', command: 'composer.find',
+        keywords: 'composer search', when: () => !!state.current && !dom.input.disabled,
+        run: () => openComposerFind(),
+    });
+    registerAction({
+        id: 'composer.replace', group: 'Actions', title: 'Find and replace in message',
+        command: 'composer.replace', keywords: 'composer substitute regex',
+        when: () => !!state.current && !dom.input.disabled,
+        run: () => openComposerFind({ replace: true }),
     });
     registerAction({
         id: 'rail.filter', group: 'Actions', title: 'Filter sessions', command: 'rail.filter',
