@@ -108,7 +108,7 @@ import {
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, paintOrchestrator, toggleOrchestrator } from './orchestrator.js';
-import { applyPhoneInstall } from './phone-installs.js';
+import { applyPhoneInstall, loadPhoneInstalls, showPhoneInstalls } from './phone-installs.js';
 import { orchPageTick } from './orchestrator-page.js';
 import { STUCK_MS } from './orchestrator-model.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
@@ -2648,6 +2648,9 @@ function connect() {
         // The version check has the same missed-push problem, and this is also
         // how the first answer arrives at all.
         loadCv();
+        // And the phone installs: a `phone_install` missed while the stream was
+        // down is not sent again, and the pill is the only sign one went quiet.
+        loadPhoneInstalls();
         // And the pull requests. `prs-changed` is only sent when the answer moves,
         // so a push missed here is not followed by another one — a conflict that
         // appeared while the stream was down would otherwise stay invisible until
@@ -4372,6 +4375,7 @@ document.addEventListener('keydown', (e) => {
     // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.cvMenu.hidden) { showCv(false); dom.cvPill.focus(); return; }
+    if (e.key === 'Escape' && !dom.piMenu.hidden) { showPhoneInstalls(false); dom.piPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.barMoreMenu.hidden) { showBarMore(false); dom.barMore.focus(); return; }
     // Both snippet popovers, and above the modal rung rather than below it — the

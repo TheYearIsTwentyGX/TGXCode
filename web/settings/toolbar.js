@@ -11,6 +11,7 @@ import { html, useRef, useState } from '../vendor/preact.js';
 import { dom } from '../dom.js';
 import { icon } from '../boards/parts.js';
 import { showCv, showQuota } from '../quota.js';
+import { showPhoneInstalls } from '../phone-installs.js';
 import { devBrowserShown } from '../app.js';
 import { showNewMenu } from '../new-session/recent.js';
 import { saveSetting } from './index.js';
@@ -128,7 +129,8 @@ function place(spill) {
         // absent unless something is behind, not a button anybody places. It
         // rides beside the quota pill, which is always on the bar, rather than
         // being left wherever the moves above happened to strand it.
-        if (def.id === 'quota') onBar.splice(onBar.length - 1, 0, dom.cvWrap);
+        // The phone-installs pill is the same kind of indicator, and rides there too.
+        if (def.id === 'quota') onBar.splice(onBar.length - 1, 0, dom.cvWrap, dom.piWrap);
         // An attribute of our own rather than `hidden`, which the quota pill
         // already uses to mean "no data yet" and must keep meaning.
         node.toggleAttribute('data-bar-hidden', where === 'hidden');
@@ -180,7 +182,7 @@ const fit = { prev: null, prevAvail: undefined, frame: 0, pending: false };
 
 // The window-state pills: what the machine is doing, not a place to go. They
 // keep a ground of their own and stand a little apart from the view buttons.
-const isState = (n) => n === dom.quotaWrap || n === dom.cvWrap || n === dom.dbStatus;
+const isState = (n) => n === dom.quotaWrap || n === dom.cvWrap || n === dom.piWrap || n === dom.dbStatus;
 
 function fitBar() {
     // `hidden`, not isUp(): a menu playing its exit is still on screen.
@@ -295,7 +297,7 @@ export function showBarMore(on) {
     if (on && dom.barMoreWrap.hidden) return;
     present(dom.barMoreMenu, on, { as: 'menu' });
     dom.barMore.setAttribute('aria-expanded', String(on));
-    if (on) { showQuota(false); showNewMenu(false); showCv(false); }
+    if (on) { showQuota(false); showNewMenu(false); showCv(false); showPhoneInstalls(false); }
     // The menu keeps `hidden` off until its exit has played, so this waits a
     // frame at a time for it to go.
     else if (fit.pending) waitForClose();
@@ -363,6 +365,7 @@ export function wireToolbar() {
     ro.observe(dom.barMoreWrap.parentElement);
     for (const def of TOOLBAR) ro.observe(dom[def.node]);
     ro.observe(dom.cvWrap);
+    ro.observe(dom.piWrap);
 }
 
 // ── the Toolbar settings group ───────────────────────────────────────────

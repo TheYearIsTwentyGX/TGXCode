@@ -286,8 +286,8 @@ so does `POST /api/sessions/:id/restart`, for any session);
 **every method of `/api/claude-docs` likewise**;
 `POST /api/sessions/:id/attachments/open`;
 `POST /api/phone-installs` and `POST /api/phone-installs/:id/cancel` (the list, the
-APK download and the status report stay open — the phone is who they are for; see
-§*Phone installs*).
+APK download, the status report and `…/retry` stay open — the phone is who they are
+for; see §*Phone installs*).
 
 The two attachment uploads are **not** refused — a phone has nowhere else to put a
 photo — but a remote caller's cap is **10MB** rather than 25MB; see
@@ -3803,7 +3803,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, any time after the one that said `listening`, seconds or minutes later. `web` (bool) as in the run record |
-| `phone_install` | **the whole record** of one phone install (§*Phone installs*), so there is nothing to refetch — `{id, fileName, size, sha256, label, sessionId, createdAt, state, message, packageName, versionName, updatedAt}`. Sent on create and on every change: a status post, a cancel, and the 24h expiry — so it can fire without anybody having done anything. Ungated, like `drafts-changed`: every open stream gets it, a phone's included, with no `POST /api/subscribe` flag. **The name is snake_case**, unlike every other event here; it is spelled exactly `phone_install`. There is no replay — a phone that connects later reads `GET /api/phone-installs` for anything still `pending` |
+| `phone_install` | **the whole record** of one phone install (§*Phone installs*), so there is nothing to refetch — `{id, fileName, size, sha256, label, sessionId, createdAt, state, message, packageName, versionName, updatedAt, progress {bytes, total} or null, stalled boolean, attempts number}`. Sent on create and on every change: a status post (progress heartbeats at most once a second per record), a cancel, a retry, the stall release, and the 24h expiry — and once more, with `updatedAt` unchanged, when a claimed record turns `stalled` — so it can fire without anybody having done anything. Ungated, like `drafts-changed`: every open stream gets it, a phone's included, with no `POST /api/subscribe` flag. **The name is snake_case**, unlike every other event here; it is spelled exactly `phone_install`. There is no replay — a phone that connects later reads `GET /api/phone-installs` for anything still `pending` |
 | `commands-config` | `{at, scope, project, file}` — a project's `.tgxcode/` command file was written through `PUT /api/commands-config`. The fact of a change, never its content: these files carry `env` values the route classifies as local-only, and this channel reaches a paired phone. Re-read the file, and re-read `GET /api/commands` for any directory inside `project` — a renamed command's button does not change on its own. It does **not** fire for a hand edit; nothing watches these files, and the `409` on save is what catches that |
 
 `runner-status` is the full shape — the one the two narrower `runner` objects are cut
@@ -6187,6 +6187,9 @@ The record, on every route and in the event:
 | `state` | string — one of `pending`, `downloading`, `installing`, `needs_action`, `installed`, `failed`, `cancelled` |
 | `message` | string or null — whatever the last status post said, or why it was cancelled. Replaced, not appended, on every status post |
 | `packageName`, `versionName` | strings or null — reported by the phone. Kept when a later post leaves them out |
+| `progress` | `{bytes: number, total: number or null}` or null — the last download progress the phone reported. Only ever non-null while `state` is `downloading`; cleared by any other state, a release and a retry |
+| `stalled` | boolean — **computed when served, never stored**: `true` when `state` is `downloading` or `installing` and `updatedAt` is more than 90 seconds old. `needs_action` never stalls (it waits on a person, not the phone) |
+| `attempts` | number — how many times a phone has claimed it (moved it into `downloading` from any other state) since it was filed **or last retried**: `…/retry` resets it to `0`. A progress heartbeat is not a claim. Records filed before this field existed read `1` if claimed, else `0` |
 
 The states:
 
@@ -6197,15 +6200,30 @@ The states:
 | `installing` | the phone handed it to PackageInstaller | the phone |
 | `needs_action` | Android is waiting on the person holding the phone (the install prompt, or the "install unknown apps" permission) | the phone |
 | `installed` | done. **Final** | the phone |
-| `failed` | the phone gave up; `message` says why. **Not final**: another `downloading` may retry it while the APK is still stored | the phone |
-| `cancelled` | taken back at the desk, or expired. **Final** | `…/cancel`, the 24h expiry, or the phone |
+| `failed` | the phone gave up, or it stalled on its third attempt; `message` says why. **Not final**: another `downloading` may retry it while the APK is still stored | the phone, or the stall release |
+| `cancelled` | taken back at the desk, or expired. **Final to the phone** (the desk can still `…/retry` it while the APK is stored) | `…/cancel`, the 24h expiry, or the phone |
+
+**Stalls.** A phone that claims a record and then goes away — the app killed, the
+network lost — never says so. So the bridge checks every 15 seconds: a `downloading`
+or `installing` record whose `updatedAt` is more than 90 seconds old reads
+`stalled: true` (broadcast once as it turns), and one with **no update for 3
+minutes** is released: back to `pending`, the claim and `progress` cleared, `message`
+`"Phone stopped responding; queued again"`, broadcast. A connected phone then picks
+it up again through its normal catch-up (a `pending` record, from the event or from
+the list). Releases are bounded by `attempts`: when the record goes quiet on its
+**third** claim (`attempts >= 3`) it becomes `failed` instead, `message`
+`"Phone stopped responding 3 times; giving up. Retry it from TGXCode"`. A phone
+that is still working keeps its claim by posting progress heartbeats (below); one
+that comes back after being released simply claims it again with `downloading`.
 
 **The APK is copied when the record is filed**, to
 `~/.local/share/tgxcode/phone-installs/<id>.apk`, so a rebuild cannot change it
 under a download and `sha256` always describes what is served.
 
-**Retention.** The stored APK is deleted as soon as a record reaches `installed` or
-`cancelled`, and in any case 24 hours after `createdAt`. At that point a record
+**Retention.** The stored APK is deleted as soon as a record reaches `installed`, and
+in any case 24 hours after `createdAt`. A `cancelled` record keeps its file until
+then so `…/retry` can undo the cancel, but `…/apk` answers `410` for it as if it were
+gone. At that point a record
 still `pending`, `downloading` or `installing` becomes `cancelled` with `message`
 `"Expired: no phone installed it within 24 hours"`; one in `needs_action` keeps its
 state (the phone already has the APK and can still report `installed`), and one in
@@ -6235,25 +6253,42 @@ The APK. Open to remote callers, token-authenticated like every other route.
   file with `200`.
 - `If-None-Match: "<sha256>"` gets `304`.
 - `404 {error}` for an unknown id. **`410 {error, state}`** when the record exists
-  but its APK has been deleted (installed, cancelled, or past 24h) — stop retrying.
+  but its APK has been deleted (installed, or past 24h) **or the record is
+  `cancelled`** — stop retrying.
 
 ### `POST /api/phone-installs/:id/status`
 
-Body `{state: string, message?: string, packageName?: string, versionName?: string}`.
-Open to remote callers; needs `X-TGXCode-Client: 1` like every write. `200` the
-updated record, which is also broadcast as `phone_install`.
+Body `{state: string, message?: string, packageName?: string, versionName?: string,
+progress?: {bytes: number, total?: number}}`. Open to remote callers; needs
+`X-TGXCode-Client: 1` like every write. `200` the updated record, which is also
+broadcast as `phone_install` (heartbeats throttled — below).
 
 - `state` must be one of `downloading`, `installing`, `needs_action`, `installed`,
   `failed`, `cancelled` — else `400 {error}`. `pending` is refused.
 - `message` is trimmed and capped at 1000 characters; `packageName` at 256,
   `versionName` at 128.
+- **`progress`** is read only with `state: "downloading"` (ignored otherwise, and any
+  other state clears it). `bytes` must be a number `>= 0`, else `400 {error}`;
+  `total` defaults to the record's `size` when absent or null, and `bytes` is
+  clamped to it.
+- **A progress heartbeat.** A `downloading` posted onto a record that is already
+  `downloading` (by its claimant, or by a client with no viewer id) is a heartbeat:
+  it **always** refreshes `updatedAt` — which is what keeps the record from stalling
+  and being released — and updates `progress` (and `message`, if given; a heartbeat
+  without them keeps the previous ones). It is written and broadcast **at most once
+  per second per record**; a heartbeat inside that second still gets `200` with the
+  up-to-date record, but no event. Post one at least every 30 seconds while a
+  download is running, and keep posting through a slow `installing` step by
+  re-posting `installing` (a state post that is not a heartbeat is never throttled).
 - **The claim.** If the request carries `X-TGXCode-Viewer: <id>` (the same id as in
   §*Polling counts as watching only if you say so*), the first `downloading` records
   that id as the claimant, and a `downloading` from a **different** viewer id gets
   `409 {error: "another phone is already installing this"}` — leave the record
   alone. The claimant may re-post `downloading` freely. A post with no viewer
-  header can neither claim nor be refused. Posting `failed` releases the claim. The
-  claim is not on the wire; the `409` is how a phone learns it is not the one.
+  header can neither claim nor be refused. Posting `failed` releases the claim, as
+  do the stall release, `…/cancel` and `…/retry`. Each claim (entering
+  `downloading` from another state) adds one to `attempts`. The claim is not on the
+  wire; the `409` is how a phone learns it is not the one.
 - `409 {error}` for: anything but `installed` after `installed`; anything but
   `installed` or `cancelled` after `cancelled` (a cancel that crossed an install
   already done on the phone is corrected by posting `installed`); and `downloading`
@@ -6278,7 +6313,22 @@ zip; `404 {error}` when nothing is at `path`; `413 {error}` over 1GB.
 No body. Sets `cancelled` and deletes the APK; `200` the record (also broadcast).
 Cancelling a cancelled record is a no-op `200`; an `installed` one is
 `409 {error}`. **Refused to remote callers** (`403 … "remote": true`); a phone that
-wants to give one up posts `cancelled` or `failed` to `…/status` instead.
+wants to give one up posts `cancelled` or `failed` to `…/status` instead. The APK is
+kept until the 24h sweep (so `…/retry` can undo it), but `…/apk` answers `410`.
+
+### `POST /api/phone-installs/:id/retry`
+
+No body. **Open to remote callers**; needs `X-TGXCode-Client: 1` like every write.
+Puts the record back in the queue: a `downloading`, `installing`, `failed`,
+`needs_action` or `cancelled` record becomes `pending`, with the claim, `progress`
+and `message` cleared and `attempts` reset to `0`. `200` the record, broadcast as
+`phone_install` — which is how a connected phone hears there is something to pick
+up. A `pending` record is a no-op `200` (no event).
+
+- `404 {error}` for an unknown id.
+- `409 {error}` for an `installed` record.
+- `410 {error}` when the APK is no longer stored (past 24h, or evicted) — build it
+  and file it again.
 
 ### The `install_on_phone` MCP tool
 
@@ -6286,8 +6336,19 @@ Every session the bridge starts has it: `{apk_path: string, label?: string}`. A
 relative `apk_path` is resolved against the session's working directory. It files
 the APK with the session's id, then polls `GET /api/phone-installs/:id` for up to
 90 seconds and returns once the record is `installed`, `failed`, `needs_action` or
-`cancelled` — or, after 90 seconds, says it is still queued (it stays so for 24h).
+`cancelled` — or, after 90 seconds, says it is still queued (it stays so for 24h),
+still in progress, or **stalled** when the record reads `stalled: true`.
 A phone client sees nothing different about these records.
+
+### The `phone_install_status` MCP tool
+
+Every session has it too, auto-approved (it only reads): `{id?: string}`. With an
+`id` it reads `GET /api/phone-installs/:id`; without one it reads
+`GET /api/phone-installs` and reports the newest record whose `sessionId` is the
+calling session. It says where the install got to in the same words
+`install_on_phone` uses, plus progress, `stalled`, `attempts` and how long ago it
+was filed and last updated. An error result when there is no such id, or the
+session has filed nothing in the newest 20.
 
 ## Publishing to GitHub
 

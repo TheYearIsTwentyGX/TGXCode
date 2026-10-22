@@ -16,7 +16,7 @@
 // an app.js binding at module top level, only when a function is called.
 
 import { state } from '../state.js';
-import { dom } from '../dom.js';
+import { dom, toast } from '../dom.js';
 import { setDockSide, setFocus, showView, startRename } from '../app.js';
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
@@ -126,6 +126,14 @@ export function registerBuiltins() {
     pill('bar.quota', dom.quotaPill, 'Usage quota', 'limits tokens');
     pill('bar.version', dom.cvPill, 'Claude Code version', 'update changelog');
     pill('bar.devbrowser', dom.dbStatus, 'Refresh DevBrowser status', 'devbrowser');
+    // Always offered, unlike the pills above: "is my install still going?" is
+    // asked most when the answer is that there is none, and saying so beats an
+    // entry that is not there.
+    registerAction({
+        id: 'bar.phoneInstalls', group: 'Actions', title: 'Phone installs', keywords: 'apk android install phone',
+        run: () => (onScreen(dom.piPill) ? dom.piPill.click()
+            : toast('Nothing has been sent to the phone in the last day', 'info')),
+    });
     registerAction({
         id: 'rail.hideDone', group: 'Actions', keywords: 'rail filter',
         title: () => (state.hideDone ? 'Show finished sessions' : 'Hide finished sessions'),

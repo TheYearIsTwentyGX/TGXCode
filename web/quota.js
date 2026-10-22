@@ -49,6 +49,7 @@ import { openContextMenu } from './transcript/context-menu.js';
 import { renderSettings } from './settings/index.js';
 import { showBarMore } from './settings/toolbar.js';
 import { isUp, present } from './motion.js';
+import { showPhoneInstalls } from './phone-installs.js';
 
 // ── quota ────────────────────────────────────────────────────────────────
 //
@@ -719,7 +720,7 @@ export function showQuota(on) {
     // pill does not draw — the pill only clocks a window that has a percentage
     // or a status — so opening it is one of the ways a first reset time reaches
     // the screen, and closing it is one of the ways the last one leaves.
-    if (on) { renderQuotaPanel(); showNewMenu(false); showBarMore(false); showCv(false); }
+    if (on) { renderQuotaPanel(); showNewMenu(false); showBarMore(false); showCv(false); showPhoneInstalls(false); }
     syncQuotaClock();
 }
 
@@ -863,7 +864,7 @@ export function showCv(on) {
     if (on === isUp(dom.cvMenu)) return;
     present(dom.cvMenu, on, { as: 'menu' });
     dom.cvPill.setAttribute('aria-expanded', String(on));
-    if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
+    if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); showPhoneInstalls(false); }
 }
 
 async function updateClaudeNow() {

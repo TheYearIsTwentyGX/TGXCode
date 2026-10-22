@@ -95,6 +95,7 @@ const TASK = {
         assert.deepStrictEqual(list.result.tools.map(t => t.name), [
             'suggest_session', 'list_sessions', 'message_session',
             'find_tasks', 'start_task', 'set_task_status', 'schedule_session', 'install_on_phone',
+            'phone_install_status',
         ]);
         for (const t of list.result.tools) {
             const modes = t.inputSchema.properties.permissionMode;
@@ -103,7 +104,7 @@ const TASK = {
                     `${t.name} does not offer bypassPermissions`);
             }
         }
-        ok('tools/list has the eight tools, and none offers bypassPermissions');
+        ok('tools/list has the nine tools, and none offers bypassPermissions');
 
         // find_tasks: the query string, the headers, and oldest first.
         answers.set('GET /api/suggestions', { status: 200, body: {
@@ -230,8 +231,12 @@ const TASK = {
         r = await phone({ state: 'pending' });
         assert.match(r.text, /^No phone picked it up within 90s — it stays queued for 24 hours/);
         assert.ok(seen.length > 2, 'it polled while it waited');
-        r = await phone({ state: 'downloading' });
-        assert.match(r.text, /still working on app-debug\.apk \(downloading\)/);
+        r = await phone({ state: 'downloading', stalled: false, updatedAt: Date.now() });
+        assert.match(r.text, /still working on app-debug\.apk \(downloading\) after 90s/);
+        r = await phone({ state: 'downloading', stalled: true, updatedAt: Date.now() - 120_000,
+            progress: { bytes: 1048576, total: 4194304 } });
+        assert.match(r.text, /^Stalled: the phone claimed app-debug\.apk \(downloading \(25%, 1\.0 of 4\.0 MB\)\) but has not reported for 2m/);
+        assert.match(r.text, /Retry/);
         r = await mcp.call('install_on_phone', {});
         assert.strictEqual(r.isError, true);
         assert.strictEqual(seen.length, 0, 'refused before the bridge is asked');
@@ -240,6 +245,38 @@ const TASK = {
         assert.strictEqual(r.isError, true);
         assert.strictEqual(r.text, '/x.apk is not a zip', 'the bridge\'s refusal, verbatim');
         ok('install_on_phone files the APK, waits for the phone, and says what happened');
+
+        // phone_install_status: by id, or this session's latest from the list.
+        answers.set('GET /api/phone-installs/inst-1', { status: 200, body: { ...REC, state: 'downloading',
+            stalled: false, attempts: 1, createdAt: Date.now() - 60_000, updatedAt: Date.now() - 2000,
+            progress: { bytes: 524288, total: 1048576 } } });
+        r = await mcp.call('phone_install_status', { id: ' inst-1 ' });
+        assert.strictEqual(r.isError, false, r.text);
+        assert.strictEqual(seen[0].route, '/api/phone-installs/inst-1');
+        assert.strictEqual(seen[0].method, 'GET');
+        assert.match(r.text, /^The phone is still working on app-debug\.apk \(downloading \(50%, 0\.5 of 1\.0 MB\)\)\. /);
+        assert.doesNotMatch(r.text, /after 90s/, 'no wait happened here');
+        assert.match(r.text, /install id: inst-1/);
+        assert.match(r.text, /attempts: 1/);
+        answers.set('GET /api/phone-installs', { status: 200, body: { installs: [
+            { ...REC, id: 'other', sessionId: 'someone-else', state: 'installed' },
+            { ...REC, id: 'mine-new', sessionId: 'me', state: 'pending', attempts: 1,
+                message: 'Phone stopped responding; queued again', createdAt: Date.now() - 300_000 },
+            { ...REC, id: 'mine-old', sessionId: 'me', state: 'installed' },
+        ] } });
+        r = await mcp.call('phone_install_status', {});
+        assert.strictEqual(seen[0].route, '/api/phone-installs');
+        assert.match(r.text, /install id: mine-new/, 'the newest of this session\'s, not anyone\'s');
+        assert.match(r.text, /^Queued for the phone for 5m, not picked up yet \(Phone stopped responding; queued again\)/);
+        answers.set('GET /api/phone-installs', { status: 200, body: { installs: [
+            { ...REC, id: 'other', sessionId: 'someone-else', state: 'installed' }] } });
+        r = await mcp.call('phone_install_status', {});
+        assert.strictEqual(r.isError, true);
+        assert.match(r.text, /has not filed a phone install/);
+        r = await mcp.call('phone_install_status', { id: 'nope' });
+        assert.strictEqual(r.isError, true);
+        assert.match(r.text, /No phone install with id nope/);
+        ok('phone_install_status reads one by id, or this session\'s latest, and says where it got to');
 
         // set_summary, as an orchestrator: the brief's structured fields are in the
         // schema, and only the ones the model passed reach the bridge — a field

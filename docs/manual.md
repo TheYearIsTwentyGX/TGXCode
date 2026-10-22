@@ -252,6 +252,20 @@ reachable by an agent.
   *installed* (with Cancel while nothing has reached the phone yet). A phone that is
   not connected picks it up when it next is, for 24 hours; Android asks you to tap
   Install the first time an app arrives this way. See `docs/api.md` §*Phone installs*.
+- **The phone pill in the bar says where every install got to.** It sits beside the
+  quota pill whenever something went to the phone in the last day: a count (or the
+  download's percentage) while one is in flight, and yellow with *Stalled*, *Failed*
+  or *Tap Install* when one needs you. Click it — or the toast, or *Phone installs*
+  in the palette — for the last twenty, newest first, each with its state and how
+  long it has been there ("downloading · 3m, no update for 2m"), a progress bar
+  while it downloads, what the phone said, and **Retry**, **Cancel** and **Copy**.
+  Opening the list counts as having seen a failure; the pill stops shouting about it.
+- **An install the phone went quiet on recovers by itself.** After 90 seconds
+  without a word from the phone it reads *stalled*; after 3 minutes the bridge puts
+  it back in the queue for the next phone that connects, and on the third time it
+  gives up and marks it failed so a person looks. Retry starts it over with a fresh
+  three tries. An agent can ask about one later with `phone_install_status` rather
+  than filing the same build again.
 - **The woken session resumes in plan mode.** It reads the message, checks the
   claim against the files it names, and comes back with a plan — so it lands in
   *needs you* on the board, with something to approve, rather than having edited a
