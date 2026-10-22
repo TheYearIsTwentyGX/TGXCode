@@ -634,6 +634,66 @@ function runner() {
         ok('a role reaches the argv: --role on the MCP server, the brief, and the tools');
     }
 
+    // --- the agent brief: every spawn, composed with a role's ---------------
+    // One --append-system-prompt carrying both, TGXCode's first: whether the CLI
+    // keeps a repeated flag's last value or joins them is not something a worker
+    // should find out by losing its brief.
+    {
+        reset();
+        const r = runner();
+        const asked = [];
+        r.agentBrief = (cwd, role) => { asked.push({ cwd, role }); return `GENERAL(${role || 'none'})`; };
+        r.roleOf = (id) => (id === r.sessionId ? { role: 'orchestrator', brief: 'BRIEF-TEXT' } : null);
+        r.send('hello');
+        await until(() => turns().length === 1, 5000, 'the turn');
+        let argv = turns()[0].argv;
+        assert.strictEqual(argv.filter(a => a === '--append-system-prompt').length, 1, 'one flag');
+        assert.strictEqual(argv[argv.indexOf('--append-system-prompt') + 1],
+            'GENERAL(orchestrator)\n\nBRIEF-TEXT', 'the orchestrator brief still composes');
+        assert.deepStrictEqual(asked, [{ cwd: root, role: 'orchestrator' }], 'asked with the cwd and role');
+        await r.stop({ hard: true });
+
+        reset();
+        const plain = runner();
+        plain.agentBrief = (cwd, role) => `GENERAL(${role || 'none'})`;
+        plain.send('hello');
+        await until(() => turns().length === 1, 5000, 'the turn');
+        argv = turns()[0].argv;
+        assert.strictEqual(argv[argv.indexOf('--append-system-prompt') + 1], 'GENERAL(none)');
+        await plain.stop({ hard: true });
+
+        // A brief that cannot be composed costs the brief, not the session.
+        reset();
+        const broken = runner();
+        broken.agentBrief = () => { throw new Error('bad settings'); };
+        broken.send('hello');
+        await until(() => turns().length === 1, 5000, 'the turn');
+        assert.ok(!turns()[0].argv.includes('--append-system-prompt'));
+        await broken.stop({ hard: true });
+
+        // And the pool's answer reaches a runner it makes, on a resume too.
+        reset();
+        const pool = bridge();
+        pool.agentBrief = () => 'FROM-POOL';
+        const id = randomUUID();
+        const pr = pool.ensure(id, { cwd: root, isNew: true });
+        made.push(pr);
+        pr.send('hello');
+        await until(() => turns().length === 1 && pr.state === 'idle', 5000, 'the turn');
+        assert.strictEqual(turns()[0].argv[turns()[0].argv.indexOf('--append-system-prompt') + 1], 'FROM-POOL');
+        pool.agentBrief = () => 'CHANGED';
+        assert.strictEqual(pool.recycle(id), true);
+        const again = pool.get(id);
+        made.push(again);
+        again.send('again');
+        await until(() => turns().length === 2, 5000, 'the resumed turn');
+        assert.ok(turns()[1].argv.includes('--resume'));
+        assert.strictEqual(turns()[1].argv[turns()[1].argv.indexOf('--append-system-prompt') + 1], 'CHANGED',
+            'read at each spawn, so a settings change reaches a resumed session');
+        pool.shutdown({ force: true });
+        ok('the agent brief reaches every spawn, joined ahead of a role\'s brief');
+    }
+
     {
         const pool = bridge();
         const id = randomUUID();

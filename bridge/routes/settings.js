@@ -1,7 +1,8 @@
 'use strict';
 
 // Settings, three kinds of them: this app's (`/api/prefs`, and the two catalogues
-// its page is drawn from, `/api/keymap` and `/api/spinner/groups`), Claude Code's
+// its page is drawn from, `/api/keymap` and `/api/spinner/groups`, plus the agent
+// brief those settings compose into, `/api/brief`), Claude Code's
 // own (`/api/claude-config`), and Claude Code's memory files (`/api/claude-docs`).
 //
 // **Local and remote differ per route, and each says so beside it.** Reading
@@ -18,6 +19,7 @@
 // so their order, their fall-through and their status codes are what they were.
 
 const path = require('path');
+const brief = require('../brief');
 const { MAX_DOC_BYTES } = require('../claude-docs');
 const { MAX_SCRIPT_BYTES } = require('../hook-scripts');
 const cfg = require('../config');
@@ -28,6 +30,7 @@ const keymap = require('../keymap');
 const { norm: spinnerNorm } = require('../spinner');
 
 // Handed over by server.js — see the note above ROUTES there.
+let briefFor = null;
 let claudeConfig = null;
 let claudeDocs = null;
 let evaluateKeepAwake = null;
@@ -38,7 +41,8 @@ let registry = null;
 let spinner = null;
 
 function init(deps) {
-    ({ claudeConfig, claudeDocs, evaluateKeepAwake, hookScripts, hookSources, prefs, registry, spinner } = deps);
+    ({ briefFor, claudeConfig, claudeDocs, evaluateKeepAwake, hookScripts, hookSources, prefs, registry,
+        spinner } = deps);
 }
 
 /**
@@ -159,6 +163,26 @@ async function handle(req, res, url, pathname, seg, who) {
         // it off lets go now, rather than at the next status event.
         try { evaluateKeepAwake(); } catch { /* the 30s backstop will */ }
         return send(res, 200, { file: saved.file, prefs: saved.prefs, files: saved.files });
+    }
+
+    // The agent brief as a given session would be told it (bridge/brief.js):
+    // the composed text, each section with whether it is available and why not,
+    // and the parts a condition left out, which is what the Settings preview
+    // strikes through. `?role=` is `worker` or `orchestrator`; anything else is
+    // an ordinary session. Open to a remote caller for /api/prefs's reason — it
+    // is the settings, read.
+    //
+    // `/api/brief/guide` is what the `tgxcode_guide` tool reads: one section by
+    // `?topic=`, or the list without one. Always 200 with `{ok, text}` — "that
+    // topic is switched off" is an answer for the model, not a failure.
+    if ((pathname === '/api/brief' || pathname === '/api/brief/guide') && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        const asked = url.searchParams.get('role');
+        const role = asked === 'worker' || asked === 'orchestrator' ? asked : null;
+        const composed = briefFor(cwd, role);
+        if (pathname === '/api/brief/guide') return send(res, 200, brief.guide(composed, url.searchParams.get('topic')));
+        return send(res, 200, { ...composed, role, featureNames: brief.FEATURES,
+            words: composed.text ? composed.text.split(/\s+/).length : 0 });
     }
 
     // ── Claude Code's own settings ──────────────────────────────────────────

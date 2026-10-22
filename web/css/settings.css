@@ -1360,3 +1360,42 @@
     font: 400 var(--fs-sm)/var(--lh-tight) var(--mono);
 }
 
+
+/* Agent brief — web/settings/brief.js. Each section is a switch row with its
+   text folded under it; the preview is the composed brief, with what a
+   condition left out struck through. */
+.brief-sec + .brief-sec, .brief-sec { border-top: 1px solid var(--outline-soft); }
+.brief-sec .settings-row { padding-bottom: var(--sp-2); }
+.brief-id { font: 400 var(--fs-xs) var(--mono); color: var(--text-4); }
+.brief-tag { font-size: var(--fs-xs); color: var(--yellow); }
+.brief-edit { padding: 0 0 var(--sp-6); }
+.brief-edit > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-3); }
+.brief-edit[open] > summary { margin-bottom: var(--sp-4); }
+.brief-text { padding: var(--sp-4) 0 var(--sp-6); }
+.brief-preview-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6); margin: var(--sp-5) 0; }
+.brief-struck { display: inline-flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--text-3); }
+.brief-features { display: inline-flex; flex-wrap: wrap; gap: var(--sp-3); }
+.brief-feature {
+    padding: 1px var(--sp-4);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    font: 400 var(--fs-xs) var(--mono);
+    color: var(--text-4);
+    text-decoration: line-through;
+}
+.brief-feature.on { color: var(--green); border-color: currentColor; text-decoration: none; }
+.brief-problems { margin: 0 0 var(--sp-5); padding-left: var(--sp-9); font-size: var(--fs-sm); color: var(--yellow); }
+.brief-preview {
+    margin: 0;
+    padding: var(--sp-6);
+    max-height: 520px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
+    color: var(--text-2);
+}
+.brief-preview del { color: var(--text-4); text-decoration-color: var(--red-soft); background: transparent; }

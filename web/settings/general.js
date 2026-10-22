@@ -39,6 +39,7 @@ import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderClaudeDocs } from './memory.js';
 import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
+import { briefCard } from './brief.js';
 import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
 import { renderToolbarSettings } from './toolbar.js';
@@ -456,6 +457,13 @@ export const SETTINGS = [
     {
         title: 'Code reviews', section: 'reviews', category: 'claude', tocTitle: 'Code reviews',
         card: () => reviewTypesCard(),
+    },
+    // What every session is told about TGXCode, and the sections behind its
+    // guide tool. A `card` because each text is a draft with its own Save, and
+    // the preview is the bridge's; see web/settings/brief.js.
+    {
+        title: 'Agent brief', section: 'brief', category: 'claude', tocTitle: 'Agent brief',
+        card: () => briefCard(),
     },
     {
         title: 'Projects', section: 'projects', category: 'projects', node: 'setGProjects',

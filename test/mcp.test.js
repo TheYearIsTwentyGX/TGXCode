@@ -93,7 +93,7 @@ const TASK = {
     try {
         const list = await mcp.rpc('tools/list', {});
         assert.deepStrictEqual(list.result.tools.map(t => t.name), [
-            'suggest_session', 'list_sessions', 'message_session',
+            'tgxcode_guide', 'suggest_session', 'list_sessions', 'message_session',
             'find_tasks', 'start_task', 'set_task_status', 'schedule_session', 'install_on_phone',
             'phone_install_status',
         ]);
@@ -104,7 +104,32 @@ const TASK = {
                     `${t.name} does not offer bypassPermissions`);
             }
         }
-        ok('tools/list has the nine tools, and none offers bypassPermissions');
+        ok('tools/list has the ten tools, and none offers bypassPermissions');
+
+        // tgxcode_guide: the bridge composes and gates; the tool passes where it
+        // is and what it is, and turns a refusal into a tool error.
+        answers.set('GET /api/brief/guide', { status: 200, body: { ok: true, text: '## Servers' } });
+        let g = await mcp.call('tgxcode_guide', { topic: ' servers ' });
+        assert.strictEqual(g.isError, false);
+        assert.strictEqual(g.text, '## Servers');
+        assert.strictEqual(seen[0].query.get('topic'), 'servers');
+        assert.strictEqual(seen[0].query.get('cwd'), process.cwd());
+        assert.strictEqual(seen[0].query.get('role'), null, 'no role, none sent');
+        g = await mcp.call('tgxcode_guide', {});
+        assert.strictEqual(seen[0].query.get('topic'), null, 'no topic lists them');
+        answers.set('GET /api/brief/guide', { status: 200, body: { ok: false, text: 'switched off' } });
+        g = await mcp.call('tgxcode_guide', { topic: 'phone' });
+        assert.strictEqual(g.isError, true);
+        assert.strictEqual(g.text, 'switched off');
+        const wk = startMcp(port, ['--role', 'worker']);
+        try {
+            answers.set('GET /api/brief/guide', { status: 200, body: { ok: true, text: 'x' } });
+            await wk.call('tgxcode_guide', { topic: 'orchestration' });
+            assert.strictEqual(seen[0].query.get('role'), 'worker');
+        } finally {
+            wk.child.kill();
+        }
+        ok('tgxcode_guide asks the bridge with its cwd, role and topic, and a refusal is a tool error');
 
         // find_tasks: the query string, the headers, and oldest first.
         answers.set('GET /api/suggestions', { status: 200, body: {

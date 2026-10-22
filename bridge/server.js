@@ -38,6 +38,8 @@ const { Snippets } = require('./snippets');
 const { Templates } = require('./templates');
 const { Schedules } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
+const brief = require('./brief');
+const projectCommands = require('./commands');
 const { NotificationLog, ReadState } = require('./notifications');
 const { Usage } = require('./usage');
 const { Beacon } = require('./beacon');
@@ -708,7 +710,7 @@ const ROUTE_DEPS = {
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent, keepAwake, evaluateKeepAwake,
-    phoneInstalls,
+    phoneInstalls, briefFor,
 };
 for (const routes of ROUTES) if (routes.init) routes.init(ROUTE_DEPS);
 
@@ -869,6 +871,21 @@ pool.stallAfter = (cwd) => {
 // reaches the next session started; one already running keeps its browser.
 pool.agentBrowser = () => {
     try { return prefs.forCwd().agentBrowser.mode; } catch { return 'visible'; }
+};
+// The agent brief — what TGXCode is and offers, appended to every session's
+// system prompt at each spawn, new or resumed. See bridge/brief.js. Composed from
+// the settings in force for the session's directory, the project's commands and
+// its role, so a section the session cannot use is not mentioned to it.
+function briefFor(cwd, role = null) {
+    const p = prefs.forCwd(cwd);
+    let declared = null;
+    try { const l = projectCommands.load(cwd); declared = l && l.commands; } catch { /* none, then */ }
+    return brief.compose({ brief: p.brief,
+        features: brief.featuresFor({ prefs: p, role, commands: declared }) });
+}
+pool.agentBrief = (cwd, role) => {
+    const c = briefFor(cwd, role);
+    return c.enabled && c.text ? c.text : null;
 };
 
 // "Any agent is working": a turn of ours busy or starting, or a session in a
