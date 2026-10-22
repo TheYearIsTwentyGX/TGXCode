@@ -569,6 +569,7 @@ Two rules worth knowing before you send a patch:
 | `web/link-policy.js` | Which chat links open in the browser preview — the `preview.list` pattern matcher, pure so a test can import it |
 | `web/bar-fit.js` | What the top bar gives up in a narrow window — labels, then buttons from the end, never the quota pill — with a band of slack so it does not flicker at the edge — and `resolveLayout()`, where a button the saved `toolbar.items` never mentioned lands. Pure, so a test can import it; `fitBar()` measures and moves |
 | `web/startup.js` | What a new window opens to — turns Settings › On startup into the address a launch restores, and stays out of the way on a refresh. Pure, so a test can import it |
+| `web/live-over.js` | Whether the live board stays up over a whole-screen panel and how it docks there, from Settings › Live board visibility — `side`/`stacked` are layouts, `always` follows the dock toggle. Pure, so a test can import it |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/orchestrator.js` | An orchestrator's plumbing: loading its payload, the header's role toggle, the one line above the composer (the plain conversation's strip back to the page, or a worker's line up to its orchestrator), and the inbox list and settings form the page reuses |

@@ -302,7 +302,7 @@ The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskbo
 `spinner`, `changes`, `restart`, `restart-process`, `handoff`, `drafts`, `later`, `snippets`, `snippet-trigger`, `caret`,
 `templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
-`claude-docs`, `ask-result`, `commands`, `message-date`, `folded`,
+`claude-docs`, `ask-result`, `commands`, `message-date`, `folded`, `live-over`,
 `claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `worker-read`, `code-reviews`, `tool-image`, `images`, `hook-scripts`, `hook-sources`, `overview-hosts`, `session-index`, `session-title`, `tool-name`, `keepawake`, `startup`, `viewers`, `spend`, `pr-reviews`, `worktree-branch`, `bar-fit` and `phone-installs` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an

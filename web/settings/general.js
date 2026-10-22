@@ -63,9 +63,9 @@ const RAIL_SORT_OPTIONS = RAIL_SORTS.map(([v, label]) => [v, label]);
 // `userOnly` mirrors USER_ONLY in bridge/prefs.js. It is drawn rather than
 // hidden at a project scope, because a section that vanishes reads as a bug and
 // a section that says why it is disabled teaches the rule.
-// The four answers to "does the board stay up over this panel?", in the order
-// the radios and the All views buttons draw them. See DEFAULTS.live in
-// bridge/prefs.js for what each one means.
+// The four answers to "does the board stay up over this panel, and how?", in
+// the order the radios and the All views buttons draw them. See DEFAULTS.live
+// in bridge/prefs.js for what each one means, and web/live-over.js for the rule.
 const LIVE_OVER_OPTIONS = [
     ['hidden', 'Hidden'], ['always', 'Always'], ['side', 'Side-by-Side'], ['stacked', 'Stacked'],
 ];
@@ -199,10 +199,10 @@ export const SETTINGS = [
                     + 'notification. An open tool call — a long build — never counts. '
                     + '0 turns it off.' },
             { type: 'heading', label: 'Live board visibility',
-                note: 'Whether the board stays up, docked beside or under the screen, '
-                    + 'while one of these is open. Side-by-Side and Stacked keep it '
-                    + 'only while the board’s dock toggle says so; Hidden covers it, '
-                    + 'as before.' },
+                note: 'Whether the board stays up while one of these screens is open, '
+                    + 'and how it sits there. Side-by-Side docks it beside the screen '
+                    + 'and Stacked under it; Always keeps it the way the board’s dock '
+                    + 'toggle says; Hidden covers it, as before.' },
             { type: 'all', label: 'All views', keys: LIVE_OVER_ROWS.map(r => r.key),
                 options: LIVE_OVER_OPTIONS,
                 note: 'Sets every screen below at once.' },

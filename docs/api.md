@@ -1815,8 +1815,13 @@ panel is open, one per panel: `overTasks`, `overDashboard`, `overHistory`,
 |---|---|
 | `hidden` | covered (the behaviour before these keys existed) |
 | `always` | docked beside or under the panel, whichever way the board's dock toggle is set |
-| `side` | docked beside the panel while the dock toggle is *side by side*, covered while it is *stacked* |
-| `stacked` | docked under the panel while the dock toggle is *stacked*, covered while it is *side by side* |
+| `side` | docked beside the panel, whatever the dock toggle says |
+| `stacked` | docked under the panel, whatever the dock toggle says |
+
+`side` and `stacked` were once conditions — kept only while the dock toggle
+matched, covered otherwise. The values kept their names when they became layouts,
+so a stored file needs nothing; a client that drew the old rule hides the board
+where the web client now shows it.
 
 The dock toggle itself is per-browser (`localStorage`), not a pref. Any other
 string, including `"bottom"`, is refused with `400` (`code: "value"`). The

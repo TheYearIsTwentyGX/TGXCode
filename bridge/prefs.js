@@ -203,11 +203,13 @@ const DEFAULTS = {
         // Whether the board stays on screen while one of the whole-screen
         // panels is up, one key per panel. `hidden` is how it always was — the
         // panel covers the board without closing it. `always` docks the board
-        // beside or under the panel the way it docks beside a conversation;
-        // `side` and `stacked` do that only while the dock toggle says so, so
-        // the one toggle in the board's header can bring it along or leave it
-        // behind. Flat keys rather than a map, so that each one can be set,
-        // inherited and cleared on its own like every other row in Settings.
+        // beside or under the panel the way it docks beside a conversation,
+        // whichever way the dock toggle says; `side` and `stacked` keep it and
+        // dock it that way over that panel, whatever the toggle says. They were
+        // once conditions on the toggle instead, which read as the setting not
+        // working — see web/live-over.js. Flat keys rather than a map, so
+        // that each one can be set, inherited and cleared on its own like every
+        // other row in Settings.
         overTasks: 'hidden',
         overDashboard: 'hidden',
         overHistory: 'hidden',

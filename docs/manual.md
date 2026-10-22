@@ -626,12 +626,15 @@ screen the way it docks beside a conversation — `overTasks`, `overDashboard`,
 `overHistory`, `overDrafts`, `overSchedules` and `overSettings`, each one of:
 
 - `"hidden"` — covered, as before. The default.
-- `"always"` — kept, whichever way the board is docked.
-- `"side"` — kept only while the board's dock toggle says *Side by side*.
-- `"stacked"` — kept only while it says *Stacked*.
+- `"always"` — kept, docked whichever way the board's dock toggle says.
+- `"side"` — kept, docked beside that screen.
+- `"stacked"` — kept, docked under that screen.
 
-The last two make the dock toggle double as a switch: set Tasks to `side`, and
-flipping the board to *Stacked* leaves it behind whenever Tasks is open.
+The last two are layouts, and they win over the dock toggle for as long as that
+screen is open: the toggle shows the arrangement in force and is greyed out until
+you leave, because flipping it would only change how the board sits beside a
+conversation. So the board can sit beside your conversations and under Tasks
+without touching the toggle in between.
 *Settings → Live board → Live board visibility* has a radio row per screen, and
 an **All views** row whose buttons set all six at once.
 

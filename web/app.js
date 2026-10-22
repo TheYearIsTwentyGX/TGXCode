@@ -8,6 +8,7 @@ import { configurePaths } from './markdown.js';
 import { PreviewPane, canPreviewUrls } from './preview.js';
 import { opensInPreview } from './link-policy.js';
 import { loadPrOwners, wirePrRefs } from './pr-refs.js';
+import { liveOverDock, liveOverFixed } from './live-over.js';
 import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
@@ -1159,13 +1160,20 @@ export function setDockSide(side) {
 }
 
 function paintDockButton() {
-    const side = state.live.dock === 'side';
+    // Over a panel whose setting fixes the layout, the toggle shows that layout
+    // and stands down: flipping it would change only the conversation's
+    // arrangement, which is not on screen, so the click would look like nothing.
+    const fixed = state.live.open && liveOverFixed(liveOverRule());
+    const side = liveDockNow() === 'side';
     dom.liveSide.setAttribute('aria-pressed', String(side));
     dom.liveSide.classList.toggle('on', side);
+    dom.liveSide.disabled = fixed;
     dom.liveSideLabel.textContent = side ? 'Side by side' : 'Stacked';
-    dom.liveSide.title = side
-        ? 'Put the board under the conversation'
-        : 'Put the board beside the conversation';
+    dom.liveSide.title = fixed
+        ? `Docked ${side ? 'beside' : 'under'} this screen by Settings › Live board visibility`
+        : side
+            ? 'Put the board under the conversation'
+            : 'Put the board beside the conversation';
     // The icon is the arrangement itself: two boxes above one another, or two
     // next to each other.
     const [a, b] = [dom.liveSideA, dom.liveSideB];
@@ -1445,21 +1453,28 @@ const LIVE_OVER_KEY = {
     sx: null,
 };
 
+/** The open panel's `live.over*` rule, or null with no panel open. */
+function liveOverRule() {
+    const panel = PANELS.find(p => state[p].open);
+    return panel ? BOOT_PREFS.live[LIVE_OVER_KEY[panel]] : null;
+}
+
 /**
- * The open panel, if the settings keep the board on screen over it.
- *
- * Asked of the dock toggle as it stands, which is the point of `side` and
- * `stacked`: the one button in the board's header then decides whether the
- * board comes along to that panel as well as how it sits there. Answers whether
- * or not the board is switched on — showLive asks before turning it on.
+ * How the board docks over the open panel, if the settings keep it on screen
+ * there — `side` or `bottom` — or null. See web/live-over.js for why `side` and
+ * `stacked` are layouts and not conditions on the toggle. Answers whether or not
+ * the board is switched on — showLive asks before turning it on.
  */
 function liveKeptOver() {
-    const panel = PANELS.find(p => state[p].open);
-    if (!panel) return null;
-    const rule = BOOT_PREFS.live[LIVE_OVER_KEY[panel]];
-    const side = state.live.dock === 'side';
-    const kept = rule === 'always' || (rule === 'side' && side) || (rule === 'stacked' && !side);
-    return kept ? panel : null;
+    return liveOverDock(liveOverRule(), state.live.dock);
+}
+
+/**
+ * Which way the board actually docks right now: the open panel's layout when
+ * its setting fixes one, the dock toggle otherwise.
+ */
+function liveDockNow() {
+    return liveKeptOver() || state.live.dock;
 }
 
 /**
@@ -1542,8 +1557,9 @@ export function paintPanels() {
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
     // and the board has to know whether it is a strip or a column.
-    dom.live.dataset.dock = state.live.dock;
-    dom.main.dataset.dock = docked && !liveUnder ? state.live.dock : 'bottom';
+    dom.live.dataset.dock = liveDockNow();
+    dom.main.dataset.dock = docked && !liveUnder ? liveDockNow() : 'bottom';
+    paintDockButton();
     // The conversation stays up under a docked board; a whole-screen panel
     // still covers it.
     dom.conv.hidden = covered || preview || full || !state.current;
