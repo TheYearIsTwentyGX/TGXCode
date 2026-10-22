@@ -67,10 +67,12 @@ import {
  * `state.live.dock` is not this question. It remembers which side you docked to
  * and keeps saying 'bottom' when the board has the whole window, where nothing
  * runs sideways at all — so anything about the arrangement has to ask
- * `data-mode` as well. Both the stripped-down card and the jump's scroll axis
- * want this one.
+ * `data-mode` as well. Nor is it the arrangement over a panel whose
+ * `live.over*` fixes one, which is why this reads the `data-dock` paintPanels
+ * wrote rather than the toggle. Both the stripped-down card and the jump's
+ * scroll axis want this one.
  */
-export const liveStrip = () => dom.live.dataset.mode === 'dock' && state.live.dock === 'bottom';
+export const liveStrip = () => dom.live.dataset.mode === 'dock' && dom.live.dataset.dock === 'bottom';
 
 /**
  * The board's settings — the user's own, and deliberately never `state.prefs`.

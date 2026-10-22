@@ -846,6 +846,11 @@ span.lw-title { cursor: default; color: var(--text-3); }
    first one pushes; the second sits beside it. */
 .live-btn + .live-btn { margin-left: 0; }
 .live-btn.on { background: var(--blue-cont); color: var(--blue); }
+/* The dock toggle over a screen whose Live board visibility fixes the layout:
+   it still shows the arrangement, it just is not the one deciding it. */
+.live-btn:disabled { opacity: .55; cursor: default; }
+.live-btn:disabled:not(.on):hover { background: var(--s3); color: var(--text-3); }
+.live-btn.on:disabled:hover { background: var(--blue-cont); color: var(--blue); }
 .live[data-mode="dock"] .live-btn { height: 24px; padding: 0 var(--sp-5); font-size: var(--fs-sm); }
 
 /* Focus mode: the board with the window to itself, for a second monitor.
