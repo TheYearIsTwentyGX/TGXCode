@@ -4375,7 +4375,11 @@ document.addEventListener('keydown', (e) => {
     // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.cvMenu.hidden) { showCv(false); dom.cvPill.focus(); return; }
-    if (e.key === 'Escape' && !dom.piMenu.hidden) { showPhoneInstalls(false); dom.piPill.focus(); return; }
+    if (e.key === 'Escape' && !dom.piMenu.hidden) {
+        showPhoneInstalls(false);
+        (dom.piMenu.classList.contains('pi-detached') ? dom.barMore : dom.piPill).focus();
+        return;
+    }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.barMoreMenu.hidden) { showBarMore(false); dom.barMore.focus(); return; }
     // Both snippet popovers, and above the modal rung rather than below it — the

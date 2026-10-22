@@ -793,6 +793,18 @@ assert.deepStrictEqual(prefs.forCwd().toolbar.items, [], 'null did not put the d
 assert.ok(!('toolbar' in read(userFile)), 'an emptied section should leave the file');
 ok('a toolbar save refuses what the file would coerce, and null resets it');
 
+// The phone-installs pill is placed like any button: anywhere, hidden included.
+for (const place of ['more', 'hidden', 'bar']) {
+    const back = prefs.save({ scope: 'user', patch: { toolbar: { items: [
+        { id: 'phoneInstalls', place, label: true }, { id: 'quota', place: 'bar', label: true },
+    ] } } });
+    assert.deepStrictEqual(back.prefs.toolbar.items[0], { id: 'phoneInstalls', place, label: true });
+    prefs.cache.clear();
+    assert.deepStrictEqual(prefs.forCwd().toolbar.items[0], { id: 'phoneInstalls', place, label: true });
+}
+prefs.save({ scope: 'user', patch: { toolbar: { items: null } } });
+ok('the phone-installs pill can go to the bar, the More menu or nowhere, and stays there');
+
 // A repository does not get to rearrange your window.
 write(projFile, { toolbar: { items: [{ id: 'live', place: 'hidden', label: true }] } });
 prefs.cache.clear();

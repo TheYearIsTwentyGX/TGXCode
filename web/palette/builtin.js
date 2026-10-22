@@ -24,6 +24,7 @@ import { SETTINGS } from '../settings/general.js';
 import { openSettingsAt } from '../settings/index.js';
 import { clickCommand } from '../commands.js';
 import { openInDevBrowser } from '../channels.js';
+import { showPhoneInstalls } from '../phone-installs.js';
 import { registerAction, registerSource } from './registry.js';
 
 const shown = (node) => !!node && !node.hidden && !node.disabled;
@@ -131,8 +132,10 @@ export function registerBuiltins() {
     // entry that is not there.
     registerAction({
         id: 'bar.phoneInstalls', group: 'Actions', title: 'Phone installs', keywords: 'apk android install phone',
-        run: () => (onScreen(dom.piPill) ? dom.piPill.click()
-            : toast('Nothing has been sent to the phone in the last day', 'info')),
+        // Not a click on the pill: it may be in the More menu or hidden, and the
+        // popover opens wherever it is (see dockPhoneInstalls()).
+        run: () => (dom.piWrap.hidden ? toast('Nothing has been sent to the phone in the last day', 'info')
+            : showPhoneInstalls(true)),
     });
     registerAction({
         id: 'rail.hideDone', group: 'Actions', keywords: 'rail filter',

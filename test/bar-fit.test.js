@@ -16,7 +16,7 @@ const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
 process.removeAllListeners('warning');
 
 (async () => {
-    const { planBar } = await import('../web/bar-fit.js');
+    const { planBar, resolveLayout } = await import('../web/bar-fit.js');
 
     // Six view buttons 100 wide (40 without words), then the quota pill (200,
     // never moves) and DevBrowser (100, 60). 300 of wordmark and search floor.
@@ -91,6 +91,39 @@ process.removeAllListeners('warning');
     const out = plan(compactW + 5, { prev: stale, slack: 24 });
     assert.ok(!out.spill.includes('gone'));
     ok('a stale plan is dropped rather than kept by the slack');
+
+    // ── resolveLayout: where a button the saved list never mentioned lands ──
+    // The catalogue's tail as web/settings/toolbar.js has it.
+    const CAT = [
+        { id: 'schedules' },
+        { id: 'hooks', start: 'more' },
+        { id: 'settings', label: false, places: ['bar', 'more'] },
+        { id: 'phoneInstalls', before: 'quota' },
+        { id: 'quota', places: ['bar'] },
+        { id: 'devbrowser' },
+    ];
+    const lay = (saved) => resolveLayout(CAT, saved).map(o => `${o.def.id}:${o.place}`);
+
+    assert.deepStrictEqual(lay(undefined),
+        ['schedules:bar', 'hooks:more', 'settings:bar', 'phoneInstalls:bar', 'quota:bar', 'devbrowser:bar']);
+    // Saved before the phone pill could be placed, with Settings moved to the
+    // front: the pill goes beside quota, where it always sat, not after Settings.
+    const old = [
+        { id: 'settings', place: 'more', label: false }, { id: 'schedules', place: 'bar', label: true },
+        { id: 'hooks', place: 'more', label: true }, { id: 'devbrowser', place: 'bar', label: true },
+        { id: 'quota', place: 'bar', label: true },
+    ];
+    assert.deepStrictEqual(lay(old),
+        ['settings:more', 'schedules:bar', 'hooks:more', 'devbrowser:bar', 'phoneInstalls:bar', 'quota:bar']);
+    ok('a layout saved before the phone pill puts it right before quota, on the bar');
+
+    for (const place of ['more', 'hidden', 'bar']) {
+        const saved = [{ id: 'phoneInstalls', place, label: true }, ...old];
+        assert.deepStrictEqual(lay(saved)[0], `phoneInstalls:${place}`);
+    }
+    // A place the catalogue does not allow falls back to the bar.
+    assert.ok(lay([{ id: 'quota', place: 'hidden' }]).includes('quota:bar'));
+    ok('the phone pill keeps the place and position it was saved with');
 
     console.log(`\n${pass} passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
