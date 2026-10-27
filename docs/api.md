@@ -5741,7 +5741,8 @@ event:
               pr: null | { number: number, url: string|null, repo: string|null,
                            title: string|null, status: string, label: string|null },
               origin: null | origin }],
-  pendingSpawns: [{ id, title: string|null, at: number, origin: null | origin }],
+  pendingSpawns: [{ id, title: string|null, at: number, origin: null | origin,
+                   starting?: true }],
   openTasks: [{ id, at: number, status: "new"|"read", text: string,
                 cwd: string, title: string|null, model: string|null, effort: string|null,
                 permissionMode: string, test: boolean,
@@ -5763,6 +5764,13 @@ started, taken back or gone, oldest first — kept apart from `inbox` because th
 the newest 100, and a task left alone for a day must not fall off a client's page. Its
 rows are the task's settings without the full prompt; `text` is the first 8000
 characters of it. See *Tasks from the user* below.
+**`pendingSpawns`** is the queue, oldest first, and then any spawn being started right
+now, marked **`starting: true`**: one taken off the queue (or started directly) whose
+worktree is still being made. It is not a worker yet — no `workers` row, no runner —
+for as long as `git worktree add` takes, and before `starting` existed it was on
+neither list for that time, so a client looking then lost it. Its `id` is the session id
+the worker will have. It goes away when the worker row appears, or when the start fails
+(then a `note` in the inbox says why).
 **`settings.usageStop.autoResumeBy`** is who last set `autoResume`, stamped by the
 bridge on every `PUT` that sets it (never taken from the client): `by: "agent"` when
 the orchestrator did it for itself with its `set_auto_resume` tool, `"user"` for
@@ -6013,6 +6021,9 @@ The payload above. Never 404s: a session that is not one answers `enabled: false
   point anybody at it. Deleting the orchestrator session does the same.
 - `settings` that lower the cutoff below the current reading pause it at once, even
   with nothing of that orchestrator running yet (just after a bridge restart).
+- **Every settings save drains the queue** as far as the new settings allow: a
+  raised `maxRunning` starts queued spawns now, not when a worker next ends a turn.
+  Nothing starts while paused — including a pause the same save just caused.
 - `settings` alone merges into the current settings field by field; a bad value
   leaves that field as it was.
 - `settings.usageStop.autoResume` takes effect now: while paused it starts or stops

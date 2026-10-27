@@ -187,6 +187,11 @@ async function handle(req, res, url, pathname, seg, who) {
         // Already paused: the wake time follows the new settings — auto-resume
         // turned on starts the clock, turned off stops it.
         if (body.settings && body.settings.usageStop) orchestration.rearmPause(id);
+        // A raised cap, or a cutoff the reading is now under, has room for the
+        // queue now — not when some worker next ends a turn. drainSpawns starts
+        // nothing while paused, and checkUsage above has just paused it if the
+        // new settings are over the line.
+        orchestration.drainSpawns(id);
         return send(res, 200, orchestration.payload(id));
     }
 
