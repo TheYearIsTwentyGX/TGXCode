@@ -13,7 +13,7 @@ const { EventEmitter } = require('events');
 
 const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
-    readSubagentTranscript, lastActivity, toolResultImage, branchOf } = require('./transcript');
+    readSubagentTranscript, lastActivity, toolResultImage, placeOf } = require('./transcript');
 const { TurnIndex } = require('./turn-index');
 const { SkillRunIndex } = require('./skill-runs');
 const { ImageIndex } = require('./image-index');
@@ -349,7 +349,7 @@ class SessionIndex extends EventEmitter {
 
         for (const rec of this.sessions.values()) {
             const m = rec.meta;
-            if (project && m.projectCwd !== project) continue;
+            if (project && projectOf(this.orchestrators, m) !== project) continue;
             if (inTemp(m)) continue;
             if (!includeTest && this.flags && this.flags.isTest(m.sessionId)) continue;
             if (q) {
@@ -428,7 +428,7 @@ class SessionIndex extends EventEmitter {
             const m = rec.meta;
             if (!m.suggestions || !m.suggestions.length) continue;
             if (session && m.sessionId !== session) continue;
-            if (project && m.projectCwd !== project) continue;
+            if (project && projectOf(this.orchestrators, m) !== project) continue;
             if (inTemp(m)) continue;
             const flags = this.flags
                 ? this.flags.get(m.sessionId)
@@ -459,8 +459,8 @@ class SessionIndex extends EventEmitter {
                     // the fields a board labels a row with are these.
                     session: {
                         title: flags.title || m.title,
-                        projectName: projectName(m.projectCwd || m.cwd),
-                        projectCwd: m.projectCwd,
+                        projectName: projectName(projectOf(this.orchestrators, m) || m.cwd),
+                        projectCwd: projectOf(this.orchestrators, m),
                         worktree: worktreeOf(this.orchestrators, m),
                         test: flags.test,
                     },
@@ -496,10 +496,9 @@ class SessionIndex extends EventEmitter {
         // A name given in the rail beats all three, schedule included — the same
         // rule scheduledTitle applies to `custom-title`, one level further out.
         const fromSchedule = flags.title ? null : scheduledTitle(m, schedule);
-        // An orchestrator the user moved out of a worktree it had no way out of
-        // resumes where it was moved to, whatever the transcript's trail says.
-        // See Orchestrators#cwdOverride.
-        const moved = this.orchestrators ? this.orchestrators.cwdOverride(m.sessionId, m) : null;
+        // An orchestrator moved somewhere by the bridge resumes where it was
+        // moved to, whatever the transcript's trail says. See movedPlace.
+        const moved = movedPlace(this.orchestrators, m);
         const title = flags.title || fromSchedule || named.title;
         const titleSource = flags.title ? 'user' : fromSchedule ? 'schedule' : named.source;
         return {
@@ -530,13 +529,13 @@ class SessionIndex extends EventEmitter {
             // or null. See bridge/standing.js for where it comes from.
             standing: this.standing ? this.standing.forSession(m.sessionId) : null,
             cwd: moved ? moved.cwd : m.cwd,
-            projectCwd: m.projectCwd,
-            projectName: projectName(m.projectCwd || m.cwd),
-            // Moved, it is in the main checkout: the worktree it left is not where
-            // it is, and its branch is not the one it is on. The worktree it came
-            // from is still in the orchestrator payload's `location.override.from`.
-            gitBranch: moved ? branchOf(moved.cwd) : m.gitBranch,
-            worktree: moved ? null : m.worktree,
+            projectCwd: moved ? moved.projectCwd : m.projectCwd,
+            projectName: projectName(moved ? moved.projectCwd : (m.projectCwd || m.cwd)),
+            // Moved, it is where it was moved to: the worktree it left is not
+            // where it is, and its branch is not the one it is on. The worktree it
+            // came from is still in the orchestrator payload's `location.override.from`.
+            gitBranch: moved ? moved.gitBranch : m.gitBranch,
+            worktree: moved ? moved.worktree : m.worktree,
             prs: m.prs,
             model: m.model,
             // What the composer should open on for a session with no process of
@@ -580,7 +579,7 @@ class SessionIndex extends EventEmitter {
         const byCwd = new Map();
         for (const rec of this.sessions.values()) {
             if (inTemp(rec.meta)) continue;
-            const cwd = rec.meta.projectCwd || rec.meta.cwd;
+            const cwd = projectOf(this.orchestrators, rec.meta) || rec.meta.cwd;
             if (!cwd) continue;
             const cur = byCwd.get(cwd) || {
                 cwd, name: projectName(cwd), sessions: 0, mtimeMs: 0, active: 0,
@@ -1008,12 +1007,31 @@ class SessionIndex extends EventEmitter {
 }
 
 /**
- * The worktree a session is in, as the summary reports it: none for an
- * orchestrator moved to its main checkout, whatever the transcript says.
+ * Where an orchestrator the bridge moved is — `placeOf` its override, so
+ * `{cwd, projectCwd, worktree, gitBranch}` — or null for every session that
+ * was not moved, which is nearly all of them. The transcript's trail is not
+ * consulted: it is what pinned the session where it was to begin with, and
+ * every line the moved process writes would otherwise be a vote to put it back.
+ * See Orchestrators#cwdOverride.
+ */
+function movedPlace(orchestrators, m) {
+    const moved = orchestrators ? orchestrators.cwdOverride(m.sessionId, m) : null;
+    return moved ? placeOf(moved.cwd) : null;
+}
+
+/**
+ * The worktree a session is in, as the summary reports it: for a moved
+ * orchestrator, only the one it was moved into, whatever the transcript says.
  */
 function worktreeOf(orchestrators, m) {
-    const moved = orchestrators ? orchestrators.cwdOverride(m.sessionId, m) : null;
-    return moved ? null : m.worktree;
+    const moved = movedPlace(orchestrators, m);
+    return moved ? moved.worktree : m.worktree;
+}
+
+/** The project a session is filed under, as the summary reports it. */
+function projectOf(orchestrators, m) {
+    const moved = movedPlace(orchestrators, m);
+    return moved ? moved.projectCwd : m.projectCwd;
 }
 
 /**

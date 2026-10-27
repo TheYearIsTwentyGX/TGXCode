@@ -199,6 +199,20 @@
     transition: background var(--dur-fast) var(--ease-standard);
 }
 .orch-move button:hover { background: var(--s4); }
+.orch-move-row, .orch-move-pending { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.orch-move-form { display: flex; gap: var(--sp-3); width: 100%; }
+.orch-move-form input {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 var(--sp-4);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--s1);
+    color: var(--text);
+    font: 400 var(--fs-md)/var(--lh-none) var(--mono);
+}
+.orch-move-form input:focus { outline: none; border-color: var(--blue); }
 .orch-move button:focus-visible { outline: none; box-shadow: var(--ring-inset); }
 
 .orch-worker-line {

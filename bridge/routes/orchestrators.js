@@ -7,7 +7,7 @@
 //
 // Two audiences. The UI reads the payload, turns the role on and off, changes
 // the settings, dismisses an item, records the answer to one of the brief's
-// decisions, presses Resume and moves one back to its main checkout. The orchestrator's own MCP
+// decisions, presses Resume and moves one to its main checkout or elsewhere. The orchestrator's own MCP
 // tools (bridge/mcp.js) call the rest — spawn, next, send, answer, read, stop,
 // close, summary — with the orchestrator's id in the path, and a worker calls
 // `report` with its own. Those are refused to a remote caller in server.js:
@@ -214,9 +214,19 @@ async function handle(req, res, url, pathname, seg, who) {
 
     if (sub === 'resume' && req.method === 'POST') return guarded(res, () => orchestration.resume(id));
 
-    // Out of a worktree it had no way out of, and back to the main checkout —
-    // see orchestration.moveToCheckout. Open to a paired phone, as Resume is: it
-    // starts nothing, and the worktree is left as it was.
+    // Somewhere else — out of a worktree it had no way out of, or wherever it
+    // or the user asks — now if it is idle, at the end of the turn if not. See
+    // orchestration.moveTo. `move-to-checkout` is the same with no directory.
+    // DELETE drops a move still waiting for its turn to end. Open to a paired
+    // phone, as Resume is: it starts nothing, and what it leaves is left as it was.
+    if (sub === 'move' && !seg[5] && req.method === 'POST') {
+        const body = await readJson(req);
+        return guarded(res, () => orchestration.moveTo(id, {
+            cwd: body.cwd === undefined ? null : body.cwd, force: body.force === true }));
+    }
+    if (sub === 'move' && !seg[5] && req.method === 'DELETE') {
+        return guarded(res, () => orchestration.cancelMove(id));
+    }
     if (sub === 'move-to-checkout' && !seg[5] && req.method === 'POST') {
         const body = await readJson(req);
         return guarded(res, () => orchestration.moveToCheckout(id, { force: body.force === true }));

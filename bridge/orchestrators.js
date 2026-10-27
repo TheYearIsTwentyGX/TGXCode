@@ -493,6 +493,23 @@ function cleanCwdOverride(c) {
 }
 
 /**
+ * A move asked for while the orchestrator was mid-turn, waiting for the turn to
+ * end: `{cwd, from, force, at}`. Kept here rather than on the runner so a
+ * bridge restart in between does not lose it — the runner is adopted from the
+ * session host, but nothing it carries would say a move was asked for. One at a
+ * time: a second request replaces the first. See orchestration.settleMove.
+ */
+function cleanPendingMove(c) {
+    if (!c || typeof c !== 'object' || typeof c.cwd !== 'string' || !c.cwd) return null;
+    return {
+        cwd: c.cwd,
+        from: typeof c.from === 'string' && c.from ? c.from : null,
+        force: c.force === true,
+        at: Number.isFinite(c.at) ? c.at : 0,
+    };
+}
+
+/**
  * The override as it stands against the transcript, or null once it no longer
  * applies. It stops applying when a worktree-state entry is written after it —
  * the session really entered (or left) a worktree with EnterWorktree since, and
@@ -524,6 +541,7 @@ function cleanOrch(id, o) {
         seq: Number.isFinite(o.seq) ? o.seq : 0,
         lastNudgedSeq: Number.isFinite(o.lastNudgedSeq) ? o.lastNudgedSeq : 0,
         cwdOverride: cleanCwdOverride(o.cwdOverride),
+        pendingMove: cleanPendingMove(o.pendingMove),
     };
 }
 
@@ -753,6 +771,20 @@ class Orchestrators {
         if (!o) return null;
         o.cwdOverride = override ? cleanCwdOverride({ at: Date.now(), ...override }) : null;
         return this._touch(o);
+    }
+
+    /** Queue a move for the end of the turn — see cleanPendingMove. Null clears it. */
+    setPendingMove(sessionId, move) {
+        const o = this.byId.get(sessionId);
+        if (!o) return null;
+        o.pendingMove = move ? cleanPendingMove({ at: Date.now(), ...move }) : null;
+        return this._touch(o);
+    }
+
+    /** The move waiting for this orchestrator's turn to end, or null. */
+    pendingMove(sessionId) {
+        const o = this.byId.get(sessionId);
+        return (o && o.pendingMove) || null;
     }
 
     /**

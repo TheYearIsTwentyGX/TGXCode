@@ -585,6 +585,31 @@ function branchOf(dir) {
     }
 }
 
+/**
+ * Where a session moved to `dir` is, in the summary's terms: `{cwd, projectCwd,
+ * worktree, gitBranch}`. For an orchestrator the bridge moved (Orchestrators#
+ * cwdOverride), which the transcript's trail knows nothing about — so this is
+ * read off the directory alone, never off the trail.
+ *
+ * A worktree only when the directory is inside one: moved to a main checkout,
+ * or to a plain directory holding several repositories, it is in none, however
+ * many worktrees the trail visited. The project is the checkout that owns that
+ * worktree, or the directory itself — what Claude Code would file a session
+ * launched there under.
+ */
+function placeOf(dir) {
+    const root = worktreeRootOf(dir);
+    const projectCwd = projectRootOf(root || dir);
+    return {
+        cwd: dir,
+        projectCwd,
+        worktree: root ? {
+            name: worktreeNameOf(root), branch: branchOf(root), path: root, originalCwd: projectCwd,
+        } : null,
+        gitBranch: branchOf(root || workspaceOf(dir) || dir),
+    };
+}
+
 /** The checkout a worktree directory belongs to, or null if it is not one. */
 function worktreeBaseOf(dir) {
     const m = WORKTREE_DIR_RE.exec(dir || '');
@@ -2055,6 +2080,8 @@ module.exports = {
     // about a directory that scanMeta answers about a transcript: which checkout
     // is this, and is it a worktree of one.
     projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout, workspaceOf,
+    // For bridge/sessions.js, for an orchestrator moved somewhere by the bridge.
+    placeOf, worktreeRootOf,
     // Written by bridge/attachments.js, read back by the parser above. Shared so the
     // two halves of one format cannot drift apart.
     ATTACHMENT_NOTE_HEAD, parseAttachmentNote,

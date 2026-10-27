@@ -864,6 +864,11 @@ class Runner extends EventEmitter {
         // A message already handed over is the process's next turn, and it will
         // start it on its own. Writing another would put this one ahead of it.
         if (this.queue.some(q => q.handed)) return;
+        // A move is waiting for this turn to end (orchestration.settleMove). What
+        // is queued goes across with it and is the new process's first turn;
+        // written here, it would start one more turn in the directory being left,
+        // and the move would wait for that one too.
+        if (this.queue.length && this.holdQueue && this.holdQueue()) return;
         const entry = this.queue.shift();
         if (!entry) return;
         // Held until a result arrives: if the process dies first, this text
@@ -2455,6 +2460,9 @@ class RunnerPool extends EventEmitter {
         // Without one no session has a role and nobody answers for a window.
         this.roleOf = () => null;
         this.delegateFor = () => false;
+        // And whether a session's queue waits for a move at the end of its turn
+        // — `(sessionId, runner) => boolean`. See Runner#_flushQueue.
+        this.holdFor = () => false;
     }
 
     get(sessionId) {
@@ -2563,6 +2571,7 @@ class RunnerPool extends EventEmitter {
         r.hasViewer = () => this.hasViewer(r.sessionId);
         r.delegated = () => this.delegateFor(r.sessionId);
         r.roleOf = (id) => this.roleOf(id);
+        r.holdQueue = () => this.holdFor(r.sessionId, r);
         r.on('status', (s) => this.emit('status', s));
         r.on('notice', (n) => this.emit('notice', { sessionId: r.sessionId, ...n }));
         // Quota is account-wide, so this one deliberately does not carry a
@@ -2728,6 +2737,16 @@ class RunnerPool extends EventEmitter {
         if (!r) return false;
         this._replace(r, { model: r.model, effort: r.effort, cwd });
         return true;
+    }
+
+    /**
+     * Let a held queue go — a move that was holding it (`holdFor`) was cancelled
+     * or could not be made, and what is waiting should go to the process that
+     * is there after all.
+     */
+    release(sessionId) {
+        const r = this.runners.get(sessionId);
+        if (r) r._flushQueue();
     }
 
     /**
