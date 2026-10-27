@@ -390,7 +390,16 @@ a:hover { text-decoration: underline; }
     padding: 0 var(--sp-6) 0 var(--sp-7);
     -webkit-app-region: drag;
 }
-.bar > * { -webkit-app-region: no-drag; flex: none; }
+.bar > * { flex: none; }
+/* In the desktop app the bar is the window's titlebar, so everything on it
+   that is not a control moves the window: the wordmark, the dev badge, the
+   gaps, the spacer. A drag region takes the press for the OS, so the controls
+   are carved out of it — and carry a drag of their own, from a press that
+   travels (web/titlebar.js). Menus and popovers hanging off the bar are
+   carved out too, for the part of them that overlaps it. */
+.bar :is(button, input, a[href], label, .quota-wrap, .bar-more-wrap, .quota-menu, .bar-more-menu) {
+    -webkit-app-region: no-drag;
+}
 
 .wordmark {
     display: flex;
@@ -440,6 +449,58 @@ a:hover { text-decoration: underline; }
 .bar-search input::placeholder { color: var(--text-3); }
 
 .bar > .bar-spacer { flex: 1 1 0; }
+
+/* ── the bar as the titlebar ─────────────────────────────────────────────
+   `data-titlebar="custom"` is set on <html> by app/preload.js when the window
+   has no native titlebar (app/titlebar.js), and never in a browser.
+
+   The window controls are the OS's, drawn over the page at the bar's right
+   end — the traffic lights at its left on macOS. --tb-right and --tb-left are
+   the room they take, from the Window Controls Overlay rect (web/titlebar.js);
+   the fallbacks are what three Windows caption buttons and the macOS traffic
+   lights measure, for a shell where that API is missing. fitBar() reads the
+   padding back, so the buttons spill into More before reaching the controls. */
+html[data-titlebar="custom"] .bar {
+    padding-right: calc(var(--sp-4) + var(--tb-right, 138px));
+    user-select: none;
+}
+html[data-titlebar="custom"][data-platform="darwin"] .bar {
+    padding-left: calc(var(--sp-5) + var(--tb-left, 76px));
+    padding-right: var(--sp-6);
+}
+html[data-titlebar="custom"][data-window-full] .bar { --tb-left: 0px; --tb-right: 0px; }
+
+/* The strip that is always there to drag the window by, however full the bar.
+   fitBar() counts this floor as taken (`reserve` in web/bar-fit.js), so the
+   buttons go into More before the strip goes below it. 64px is about two
+   finger-widths of a mouse pointer's aim, and less than one view button. */
+html[data-titlebar="custom"] .bar > .bar-spacer { min-width: 64px; }
+
+/* The caption buttons take ~140px the bar used to have, and what is left on a
+   narrow window is the part that cannot go into More: the wordmark, the search
+   box's floor and the window-state pills. So a narrow titlebar gives up the
+   wordmark's words (the ◆ stays, and still drags) and some of the search box's
+   floor before those pills are pushed under the controls — a window snapped to
+   half a 1080p screen is about this wide. The text is a bare node, so it goes
+   by font-size; the ◆ and the dev badge set sizes of their own. */
+@media (max-width: 1100px) {
+    html[data-titlebar="custom"] .bar > .wordmark { font-size: 0; gap: 0; margin-right: var(--sp-5); }
+    html[data-titlebar="custom"] .bar > .wordmark .dev-badge { margin-left: var(--sp-4); }
+}
+@media (max-width: 1000px) {
+    html[data-titlebar="custom"] .bar > .bar-search { min-width: 112px; margin-right: var(--sp-4); }
+}
+
+/* A window in the background has a quieter titlebar, as a native one does.
+   The pills and buttons rather than their wrappers, so a popover that is open
+   when the window loses focus is not dimmed with them. No transition: a
+   native titlebar changes at once, and a transition here would replace the
+   buttons' own. */
+html[data-titlebar="custom"][data-window-focus="off"] :is(
+    .bar > .wordmark, .bar > .bar-search, .bar > .bar-btn, .bar > .db-status,
+    .bar > .quota-wrap > .quota-pill, .bar #bar-more) {
+    opacity: 0.55;
+}
 
 /* The view buttons — Tasks, Live, Dashboard, History, Drafts, Schedules,
    Settings. Places to go, so they are quiet: no ground until the pointer is on

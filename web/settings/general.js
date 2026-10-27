@@ -43,6 +43,7 @@ import { briefCard } from './brief.js';
 import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
 import { renderConvToolbarSettings, renderToolbarSettings } from './toolbar.js';
+import { windowCard, windowSettingsAvailable } from './window.js';
 
 // Here rather than beside paintRailSort() in app.js, which draws the rail head's
 // menu from it, because SETTINGS below reads it while this module evaluates —
@@ -338,6 +339,13 @@ export const SETTINGS = [
                 note: 'The order Ctrl+P and Ctrl+M step through Permissions and Model, '
                     + 'and Shift walks it backwards. The dropdowns keep their own order.' },
         ],
+    },
+    // The window's frame, which the desktop shell keeps rather than the
+    // settings file — see web/settings/window.js. Not in a browser.
+    {
+        title: 'Window', section: 'window', category: 'workspace',
+        when: () => windowSettingsAvailable(),
+        card: () => windowCard(),
     },
     {
         title: 'Snippets', section: 'snippets', category: 'input', node: 'setGSnippets',

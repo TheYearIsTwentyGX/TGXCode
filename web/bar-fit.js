@@ -37,6 +37,11 @@
  * @param {Array<{id: string, full: number, compact: number, spillable: boolean}>} o.items
  *                             On the bar, in bar order. Widths include the gap
  *                             after the item.
+ * @param {number} [o.reserve] Room that is never available to items: the
+ *                             blank strip the window is dragged by when the bar
+ *                             is the titlebar (web/titlebar.js). Taken before
+ *                             anything else, so buttons go into More before
+ *                             the strip would have to shrink below it.
  * @param {number} o.more      The More button with its gap, paid once anything
  *                             spills unless it is already showing.
  * @param {boolean} [o.moreShown]  More is up already (Settings put things in it).
@@ -46,7 +51,8 @@
  * @param {number} [o.slack]
  * @returns {{compact: boolean, spill: string[]}}
  */
-export function planBar({ avail, fixed, items, more, moreShown = false, prev = null, prevAvail, slack = 0 }) {
+export function planBar({ avail, fixed, items, more, moreShown = false, prev = null, prevAvail, slack = 0, reserve = 0 }) {
+    fixed += Math.max(0, reserve);
     const best = plan(avail, fixed, items, more, moreShown);
     if (!prev || rank(best) >= rank(prev)) return best;
     if (prevAvail !== undefined && prevAvail !== avail) return best;

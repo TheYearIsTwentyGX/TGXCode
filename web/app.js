@@ -68,6 +68,7 @@ import {
 import { cmdClearDrafts, loadCmdConfig } from './settings/project-commands.js';
 import { paintShortcutHints, wireShortcuts } from './settings/shortcuts.js';
 import { paintToolbar, showBarMore, wireToolbar } from './settings/toolbar.js';
+import { initTitlebar } from './titlebar.js';
 import {
     answerAsk, answerAskFor, ASK_HEAD, isTyping, openFeedback, refreshAsk, renderAsk,
     resolveAsk, setPlanAside,
@@ -2595,6 +2596,9 @@ document.addEventListener('keydown', (e) => {
 }, true);
 window.addEventListener('resize', closeSortMenu);
 paintRailSort();
+
+// The top bar is the window's titlebar in the desktop app; web/titlebar.js.
+initTitlebar();
 
 // The Settings panel and everything it draws are in web/settings/. These two
 // wire listeners that used to be registered here, and run at the same point.

@@ -28,6 +28,7 @@
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
     transform-origin: top left;
+    -webkit-app-region: no-drag;   /* opened over the bar, it is still a menu */
 }
 .ctx-menu[hidden] { display: none; }
 .ctx-menu .picker-row { padding: var(--sp-3) var(--sp-5); gap: var(--sp-5); }
