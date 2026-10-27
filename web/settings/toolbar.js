@@ -15,8 +15,9 @@ import { dockPhoneInstalls, showPhoneInstalls } from '../phone-installs.js';
 import { devBrowserShown } from '../app.js';
 import { showNewMenu } from '../new-session/recent.js';
 import { saveSetting } from './index.js';
+import * as keys from '../keys.js';
 import { isUp, present } from '../motion.js';
-import { planBar, resolveLayout } from '../bar-fit.js';
+import { inGroups, planBar, resolveLayout } from '../bar-fit.js';
 
 // ── the top bar's layout ─────────────────────────────────────────────────
 //
@@ -82,6 +83,7 @@ export function paintToolbar() {
     fit.prev = null;
     place([]);
     fitBar();
+    paintConvToolbar();
 }
 
 /**
@@ -142,6 +144,47 @@ function arrange(parent, nodes, before) {
         if (n.parentNode !== parent || n.nextElementSibling !== ref) parent.insertBefore(n, ref);
         ref = n;
     }
+}
+
+// ── the conversation header's row ────────────────────────────────────────
+//
+// The buttons at the top right of an open conversation — `toolbar.conversation`
+// in the settings file. The same arrangement as the top bar, smaller: the
+// buttons are all in web/index.html and are only moved and marked here, so
+// every painter that lights one or hides it (Restart without a process, the
+// orchestrator button on a worker) goes on finding it by id.
+//
+// Two places, shown and hidden, and no More menu: the row is short enough not
+// to need one. Hidden is `data-bar-hidden` rather than `hidden`, which those
+// painters own — and which the palette reads, so a hidden button's entry is
+// still offered whenever the button would have been. `group` is which of the
+// three runs it sits in; a button moves within its run and not out of it, and
+// a run with nothing showing takes its divider with it (transcript.css).
+const CONV_TOOLBAR = [
+    { id: 'orchestrator', node: 'btnOrch', name: 'Orchestrator', group: 0,
+        note: 'Not on a worker, which cannot be one.' },
+    { id: 'pin', node: 'btnPin', name: 'Pin', group: 0 },
+    { id: 'restart', node: 'btnRestartProc', name: 'Restart process', group: 0,
+        note: 'Only while the session has a live process.' },
+    { id: 'checklist', node: 'btnChecklist', name: 'Checklist', group: 1 },
+    { id: 'changes', node: 'btnChanges', name: 'Changes', group: 1 },
+    { id: 'reviews', node: 'btnReviews', name: 'Reviews', group: 1 },
+    { id: 'images', node: 'btnImages', name: 'Images', group: 1 },
+    { id: 'folder', node: 'btnFolder', name: 'Open folder', group: 1 },
+    { id: 'terminal', node: 'btnTerm', name: 'Terminal', group: 1, shortcut: 'terminal.toggle' },
+    { id: 'archive', node: 'btnArchive', name: 'Archive', group: 2 },
+    { id: 'delete', node: 'btnDelete', name: 'Delete', group: 2 },
+].map(d => ({ ...d, places: ['bar', 'hidden'] }));
+
+function convLayout() {
+    return inGroups(resolveLayout(CONV_TOOLBAR, BOOT_PREFS.toolbar && BOOT_PREFS.toolbar.conversation));
+}
+
+function paintConvToolbar() {
+    const groups = dom.btnOrch.closest('.conv-actions').querySelectorAll(':scope > .conv-act-group');
+    const layout = convLayout();
+    groups.forEach((g, n) => arrange(g, layout.filter(o => o.def.group === n).map(o => dom[o.def.node]), null));
+    for (const { def, place: where } of layout) dom[def.node].toggleAttribute('data-bar-hidden', where === 'hidden');
 }
 
 // ── fitting the bar to the window ────────────────────────────────────────
@@ -512,6 +555,65 @@ function toolbarRow(o, i, layout, locked, { commit, onDragStart, onDragEnd, drag
             disabled=${locked || (step < 0 ? i === 0 : i === layout.length - 1)}
             aria-label=${`Move ${def.name} ${step < 0 ? 'earlier' : 'later'}`}
             title=${step < 0 ? 'Earlier in the bar' : 'Later in the bar'}
+            onClick=${() => move(step)}>${step < 0 ? '↑' : '↓'}</button>`)}
+    </div>`;
+}
+
+// ── the Conversation toolbar settings group ──────────────────────────────
+//
+// One row per button, in its run: shown or hidden, and stepped up or down
+// within the run. No drag — eleven rows in three runs are two clicks apart at
+// most, and a drag that may not cross a run is a drag that mostly refuses.
+
+export function renderConvToolbarSettings(locked) {
+    return html`<${ConvToolbarSettings} key="conv-toolbar" locked=${locked} />`;
+}
+
+function ConvToolbarSettings({ locked }) {
+    const layout = convLayout();
+    const commit = (next) => saveSetting('toolbar', 'conversation',
+        next.map(o => ({ id: o.def.id, place: o.place })));
+    const hasSaved = (BOOT_PREFS.toolbar.conversation || []).length > 0;
+    return html`<div>
+        <div class="settings-bar">
+            ${layout.map((o, i) => convToolbarRow(o, i, layout, locked, commit))}
+        </div>
+        ${hasSaved ? html`<div class="settings-bar-foot">
+            <button class="linkish" type="button" disabled=${locked}
+                onClick=${() => saveSetting('toolbar', 'conversation', null)}>Reset to default</button>
+        </div>` : null}
+    </div>`;
+}
+
+function convToolbarRow(o, i, layout, locked, commit) {
+    const { def } = o;
+    const sameRun = (j) => j >= 0 && j < layout.length && layout[j].def.group === def.group;
+    const move = (step) => {
+        if (!sameRun(i + step)) return;
+        const next = layout.slice();
+        [next[i], next[i + step]] = [next[i + step], next[i]];
+        commit(next);
+    };
+    const set = (where) => commit(layout.map((x, j) => (j === i ? { ...x, place: where } : x)));
+    const combo = def.shortcut && keys.label(def.shortcut);
+    const reach = combo ? `Hidden, it is still in the palette and on ${combo}.`
+        : 'Hidden, it is still in the palette.';
+    const start = i > 0 && layout[i - 1].def.group !== def.group;
+
+    return html`<div key=${def.id} class=${start ? 'settings-bar-row group-start' : 'settings-bar-row'}
+        data-id=${def.id} data-place=${o.place}>
+        <span class="settings-bar-name">${barGlyph(def)}<span>${def.name}<span class="settings-bar-note">${
+            def.note ? `${def.note} ` : ''}${reach}</span></span></span>
+        <select class="settings-select settings-bar-place" disabled=${locked}
+            aria-label=${`Whether ${def.name} shows`} value=${o.place}
+            onChange=${(e) => set(e.target.value)}>
+            <option value="bar">Shown</option>
+            <option value="hidden">Hidden</option>
+        </select>
+        ${[-1, 1].map(step => html`<button key=${step} class="snip-move" type="button"
+            disabled=${locked || !sameRun(i + step)}
+            aria-label=${`Move ${def.name} ${step < 0 ? 'earlier' : 'later'}`}
+            title=${step < 0 ? 'Earlier in its group' : 'Later in its group'}
             onClick=${() => move(step)}>${step < 0 ? '↑' : '↓'}</button>`)}
     </div>`;
 }

@@ -817,6 +817,59 @@ refuses({ scope: 'project', dir: project, patch: { toolbar: { items: [] } } },
 clear();
 ok('a project file cannot set the toolbar');
 
+// --- the conversation toolbar ---------------------------------------------
+// The header row of an open conversation: shown or hidden, no More menu and no
+// labels, and nothing pinned — so `more` is not a place, and a `label` written
+// by hand is dropped rather than kept.
+clear();
+write(userFile, {
+    version: VERSION,
+    toolbar: {
+        conversation: [
+            { id: 'delete', place: 'hidden', label: false }, // label dropped quietly
+            { id: 'images', place: 'more' },                 // no More menu here
+            { id: 'live' },                                  // a top-bar button
+            { id: 'delete', place: 'bar' },                  // listed twice
+            'pin',                                           // a bare id: shown
+            { id: 'restart', place: 'hidden' },
+        ],
+    },
+});
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.toolbar.conversation, [
+    { id: 'delete', place: 'hidden' },
+    { id: 'pin', place: 'bar' },
+    { id: 'restart', place: 'hidden' },
+]);
+assert.deepStrictEqual(got.toolbar.items, [], 'the top bar should be untouched');
+assert.strictEqual(got.problems.length, 3, JSON.stringify(got.problems));
+assert.ok(got.problems.some(p => /"more" is not a place for images — bar, hidden/.test(p.message)));
+assert.ok(got.problems.some(p => /"live" is not a toolbar button/.test(p.message)));
+ok('conversation toolbar entries are cleaned one by one, to shown or hidden');
+
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+assert.deepStrictEqual(prefs.forCwd().toolbar.conversation, [], 'an old file should show everything');
+refuses({ scope: 'user', patch: { toolbar: { conversation: [{ id: 'pin', place: 'more' }] } } },
+    'value', 'a conversation button in More');
+let back = prefs.save({ scope: 'user', patch: { toolbar: { conversation: [{ id: 'pin', place: 'bar', label: true }] } } });
+assert.deepStrictEqual(back.prefs.toolbar.conversation, [{ id: 'pin', place: 'bar' }]);
+back = prefs.save({ scope: 'user', patch: { toolbar: { conversation: [
+    { id: 'archive', place: 'hidden' }, { id: 'delete', place: 'hidden' },
+] } } });
+assert.deepStrictEqual(back.prefs.toolbar.conversation.map(e => e.place), ['hidden', 'hidden']);
+prefs.cache.clear();
+assert.deepStrictEqual(prefs.forCwd().toolbar.conversation, [
+    { id: 'archive', place: 'hidden' }, { id: 'delete', place: 'hidden' },
+]);
+back = prefs.save({ scope: 'user', patch: { toolbar: { conversation: null } } });
+assert.deepStrictEqual(back.prefs.toolbar.conversation, [], 'null did not put the default back');
+refuses({ scope: 'project', dir: project, patch: { toolbar: { conversation: [] } } },
+    'readonly', 'a project conversation toolbar');
+clear();
+ok('a hidden conversation button survives a save and a read, and null shows it again');
+
 // --- the page copy -------------------------------------------------------
 // `sources` names files in somebody's home directory and nothing in the page
 // reads it, so the <meta> copy leaves it out along with the diagnostics.

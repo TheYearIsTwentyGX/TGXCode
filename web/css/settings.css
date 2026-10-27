@@ -646,6 +646,7 @@
     width: 110px; font-size: var(--fs-sm); color: var(--text-3); }
 .settings-bar-place { flex: none; width: 130px; }
 .settings-bar-fixed { flex: none; width: 130px; font-size: var(--fs-xs); color: var(--text-4); }
+.settings-bar-row.group-start { margin-top: var(--sp-3); }
 .settings-bar-foot { display: flex; justify-content: flex-end; padding-top: var(--sp-4); }
 
 /* A text-only button, for the actions inside a row where a pill would be three

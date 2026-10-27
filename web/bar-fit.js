@@ -123,3 +123,18 @@ export function resolveLayout(catalogue, saved) {
     });
     return out;
 }
+
+/**
+ * A resolved layout with each button inside its own group — the conversation
+ * header's row, whose buttons sit in three groups (CONV_TOOLBAR's `group`)
+ * that a saved order can rearrange within but never across. Stable, so the
+ * order the list gave is kept inside each group.
+ *
+ * @param {Array<{def: {group: number}}>} layout
+ * @returns {Array} the same entries, grouped
+ */
+export function inGroups(layout) {
+    return layout.map((o, i) => [o, i])
+        .sort((a, b) => (a[0].def.group - b[0].def.group) || (a[1] - b[1]))
+        .map(([o]) => o);
+}

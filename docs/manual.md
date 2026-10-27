@@ -986,6 +986,20 @@ it always sat.
 Like the keys, this is kept in your own settings file only, as `toolbar.items`,
 and a project's file cannot change it.
 
+#### The conversation toolbar
+
+The *Conversation toolbar* group, right after *Toolbar*, covers the buttons at
+the top right of an open conversation: Orchestrator, Pin and Restart process,
+then Checklist, Changes, Reviews, Images, Open folder and Terminal, then Archive
+and Delete. Each row has **Shown** or **Hidden**, and ↑/↓ moves a button within
+its own group (never into another one). Hiding is applied after the usual rules,
+so a shown Restart still appears only while the session has a process, and a
+shown Orchestrator still never appears on a worker. When every button in a group
+is hidden, the group goes, and so does its divider. A hidden button's action is
+still in the command palette, and Terminal keeps its shortcut (each row says
+so). *Reset to default* shows everything again. This is kept as
+`toolbar.conversation`, in your own settings file only.
+
 #### Claude Code's own settings
 
 The group below the app's own edits a different owner's files:
