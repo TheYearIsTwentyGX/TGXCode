@@ -789,6 +789,117 @@ function harness(name) {
     }
 
     {
+        // Raising the cap in the popover used to leave the queue waiting for some
+        // worker to end a turn: the settings PUT never drained it. The real
+        // handler, so the phone's save and set_auto_resume are covered too.
+        const { Readable } = require('stream');
+        const orchRoute = require('../bridge/routes/orchestrators');
+        const put = async (id, body) => {
+            const req = Readable.from([Buffer.from(JSON.stringify(body))]);
+            req.method = 'PUT';
+            let out = '';
+            const res = { writeHead: () => {}, end: (b) => { out = String(b); } };
+            await orchRoute.handle(req, res, null, `/api/sessions/${id}/orchestrator`,
+                ['api', 'sessions', id, 'orchestrator'], { remote: false });
+            return JSON.parse(out);
+        };
+        const h = harness('raise-cap');
+        orchRoute.init({ orchestrators: h.store, index: h.deps.index, drafts: null,
+            modeRefusal: () => null, normalizeMode: (m) => m || 'auto' });
+        orchestration.enable('O', { maxRunning: 1, worktree: false,
+            usageStop: { enabled: true, percent: 80, window: 'five_hour' } });
+        h.pool.ensure('O');
+        await orchestration.spawn('O', { prompt: 'a', title: 'A', worktree: false });
+        for (const t of ['B', 'C', 'D']) await orchestration.spawn('O', { prompt: t, title: t, worktree: false });
+        assert.strictEqual(h.created.length, 1);
+
+        await put('O', { settings: { maxRunning: 2 } });
+        await sleep(20);
+        assert.strictEqual(h.created.length, 2, 'a raised cap starts the next queued spawn now');
+        assert.strictEqual(h.created[1].prompt, 'B');
+
+        // Over the cutoff: the same save pauses it and the drain starts nothing.
+        h.setWindows([{ type: 'five_hour', usedPercent: 85 }]);
+        await put('O', { settings: { maxRunning: 4 } });
+        await sleep(20);
+        assert.ok(h.store.get('O').paused, 'the save over the line pauses it');
+        assert.strictEqual(h.created.length, 2, 'and a paused orchestrator starts nothing from the queue');
+        await put('O', { settings: { maxRunning: 5 } });
+        await sleep(20);
+        assert.strictEqual(h.created.length, 2, 'a later save while paused does not either');
+
+        // Lifting the pause drains it.
+        h.setWindows([{ type: 'five_hour', usedPercent: 10 }]);
+        orchestration.resume('O');
+        await sleep(20);
+        assert.strictEqual(h.created.length, 4, 'Resume starts what the new cap has room for');
+        assert.strictEqual(h.store.get('O').pendingSpawns.length, 0);
+
+        // A cutoff relaxed under the reading, not paused: the save drains.
+        // The pause stopped A and B; C and D are busy.
+        h.store.setSettings('O', { maxRunning: 2 });
+        await orchestration.spawn('O', { prompt: 'E', title: 'E', worktree: false });
+        assert.strictEqual(h.created.length, 4, 'E waits behind the cap');
+        await put('O', { settings: { maxRunning: 3, usageStop: { percent: 95 } } });
+        await sleep(20);
+        assert.strictEqual(h.created.length, 5);
+        ok('a settings save drains the queue as far as the cap allows, and never while paused');
+    }
+
+    {
+        // A drained spawn is off the queue and not yet a worker while its
+        // worktree is made — list_workers saw "3 open workers" and no queue for
+        // a worker that had just started. It shows as `starting` in that window,
+        // then as a worker that counts as running and whose reports reach its
+        // orchestrator.
+        const h = harness('drain-listed');
+        const repo = path.join(home, 'repo-drain');
+        fs.mkdirSync(repo);
+        execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
+        fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+        execFileSync('git', ['-C', repo, 'add', '.']);
+        execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'first']);
+        orchestration.enable('O', { maxRunning: 1, worktree: true });
+        h.pool.ensure('O').state = 'idle';
+        const a = await orchestration.spawn('O', { prompt: 'a', title: 'A', worktree: false });
+        const q = await orchestration.spawn('O', { prompt: 'titlebar', title: 'Custom titlebar', cwd: repo });
+        assert.strictEqual(q.queued, true);
+
+        h.store.setSettings('O', { maxRunning: 2 });
+        orchestration.drainSpawns('O');
+        let p = orchestration.payload('O');
+        assert.strictEqual(h.store.get('O').pendingSpawns.length, 0, 'off the queue');
+        assert.strictEqual(p.workers.length, 1, 'not a worker yet: its worktree is being made');
+        assert.deepStrictEqual(p.pendingSpawns.map(s => [s.title, s.starting]), [['Custom titlebar', true]],
+            'but listed as starting, not lost');
+
+        for (let i = 0; i < 100 && h.created.length < 2; i++) await sleep(30);
+        assert.strictEqual(h.created.length, 2);
+        const id = h.created[1].sessionId;
+        p = orchestration.payload('O');
+        assert.deepStrictEqual(p.pendingSpawns, [], 'starting is gone once the worker is filed');
+        const row = p.workers.find(w => w.id === id);
+        assert.ok(row && !row.closedAt && h.store.worker('O', id).title === 'Custom titlebar', 'listed as an open worker');
+        assert.strictEqual(h.store.roleOf(id), 'worker');
+        assert.strictEqual(h.store.orchestratorOf(id).id, 'O', 'filed under the orchestrator that queued it');
+        // list() leaves out anything under /tmp, so ask the cap instead: with both
+        // busy, a third spawn at maxRunning 2 waits.
+        assert.strictEqual(row.state, 'busy');
+        assert.strictEqual((await orchestration.spawn('O', { prompt: 'x', worktree: false })).queued, true,
+            'counted in running');
+
+        orchestration.report(id, 'update', 'halfway');
+        assert.ok(h.store.get('O').inbox.some(i => i.workerId === id && i.text === 'halfway'),
+            'its reports reach the orchestrator');
+        h.runners.get(id).state = 'idle';
+        orchestration.onTurnComplete({ sessionId: id });
+        assert.ok(h.store.get('O').inbox.some(i => i.workerId === id && i.kind === 'turn'),
+            'and so does its turn end');
+        assert.ok(a.sessionId);
+        ok('a worker started by a drain is listed as starting, then as a running worker with its reports routed');
+    }
+
+    {
         // The reset came but another window is still over: pause again for that.
         const h = harness('wake-again');
         orchestration.enable('O', { usageStop: { window: 'all', limits: { five_hour: 90, seven_day: 95 },

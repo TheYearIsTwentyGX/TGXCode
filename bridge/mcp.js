@@ -1387,7 +1387,14 @@ async function callListWorkers(id) {
     const head = [`${rows.length} open worker${rows.length === 1 ? '' : 's'}, `
         + `at most ${body.maxRunning} running at once.`];
     if (body.paused) head.push(`PAUSED: ${body.paused.reason}`);
-    if ((body.pendingSpawns || []).length) head.push(`${body.pendingSpawns.length} spawn(s) queued.`);
+    const spawns = body.pendingSpawns || [];
+    const starting = spawns.filter(q => q.starting);
+    const queued = spawns.length - starting.length;
+    if (queued) head.push(`${queued} spawn(s) queued.`);
+    if (starting.length) {
+        head.push(`${starting.length} starting (its worktree is being made): `
+            + `${starting.map(q => `"${q.title || 'untitled'}"`).join(', ')}.`);
+    }
     return say(id, `${head.join(' ')}\n\n${lines.join('\n\n')}`.trim());
 }
 

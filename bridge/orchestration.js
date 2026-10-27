@@ -284,7 +284,13 @@ function payload(id) {
         paused: o.paused,
         summary: o.summary,
         workers: o.workers.map(workerRow),
-        pendingSpawns: o.pendingSpawns.map(p => ({ id: p.id, title: p.title, at: p.at, origin: p.origin || null })),
+        // A spawn being started — its worktree still being made — is on neither
+        // list in the store: off the queue, not yet a worker. Shown at the end
+        // of the queue, so a look in that window does not lose it.
+        pendingSpawns: [
+            ...o.pendingSpawns.map(p => ({ id: p.id, title: p.title, at: p.at, origin: p.origin || null })),
+            ...[...(launching.get(id) || new Map()).values()].map(p => ({ ...p, starting: true })),
+        ],
         // Separate from `inbox`, which is only the newest hundred: a task the
         // orchestrator has ignored for a day must not fall off the page.
         openTasks: store.openTasks(id).map(taskRow),
@@ -539,6 +545,22 @@ function release(orchId) {
     else starting.delete(orchId);
 }
 
+// The same starts by name, for the payload: `{id, title, at, origin}` per
+// sessionId, from before the worktree is made until the worker is filed.
+const launching = new Map();
+
+function noteLaunching(orchId, sessionId, row) {
+    if (!launching.has(orchId)) launching.set(orchId, new Map());
+    launching.get(orchId).set(sessionId, row);
+}
+
+function doneLaunching(orchId, sessionId) {
+    const m = launching.get(orchId);
+    if (!m) return;
+    m.delete(sessionId);
+    if (!m.size) launching.delete(orchId);
+}
+
 function running(orchId) {
     return (starting.get(orchId) || 0) + store.openWorkers(orchId).filter((w) => {
         const r = pool.get(w.id);
@@ -648,6 +670,17 @@ async function launch(orchId, opts, free) {
     const wantTree = opts.worktree === undefined || opts.worktree === null
         ? o.settings.worktree : opts.worktree !== false;
 
+    noteLaunching(orchId, sessionId, { id: sessionId, title, at: Date.now(), origin: opts.origin || null });
+    emit(orchId);
+    try {
+        return await place(orchId, opts, free, { o, base, title, sessionId, wantTree });
+    } finally {
+        doneLaunching(orchId, sessionId);
+        emit(orchId);
+    }
+}
+
+async function place(orchId, opts, free, { o, base, title, sessionId, wantTree }) {
     let worktree = null;
     let startIn = base;
     if (wantTree) {
@@ -1471,6 +1504,6 @@ function onPrsChanged() {
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
     fileTask, withdrawTask, list,
-    report, noteAutoResume, resume, moveTo, moveToCheckout, cancelMove, settleMove, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, noteAutoResume, resume, drainSpawns, moveTo, moveToCheckout, cancelMove, settleMove, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

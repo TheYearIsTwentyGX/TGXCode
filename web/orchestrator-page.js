@@ -527,7 +527,7 @@ function matrix(p, now) {
             ${p.pendingSpawns.map((q, i) => html`<div key=${q.id} class="op-row op-queued">
                 <span class="op-who" title=${q.title || ''}><span class="op-dot" data-s="queued"></span>
                     <span class="op-name">${fromTag(q.origin)}${q.title || 'untitled'}</span></span>
-                <span class="op-track"><span class="op-say" title=${queuedSay(i)}><b>${queuedSay(i)}</b></span></span>
+                <span class="op-track"><span class="op-say" title=${queuedSay(q, i)}><b>${queuedSay(q, i)}</b></span></span>
             </div>`)}
             ${done.length ? html`<button key="fold" class="op-fold" type="button" aria-expanded=${String(ui.finished)}
                 title=${ui.finished ? null : done.map(w => w.title || 'untitled').join('\n')}
@@ -543,7 +543,8 @@ function matrix(p, now) {
 }
 
 const ordinal = (n) => (n === 2 ? 'second' : n === 3 ? 'third' : `${n}th`);
-const queuedSay = (i) => (i === 0 ? 'Queued — starts when a slot frees' : `Queued, ${ordinal(i + 1)} in line`);
+const queuedSay = (q, i) => (q.starting ? 'Starting — making its worktree'
+    : i === 0 ? 'Queued — starts when a slot frees' : `Queued, ${ordinal(i + 1)} in line`);
 
 function row(p, w, now) {
     const decision = openDecisionFor(p, w.id);
