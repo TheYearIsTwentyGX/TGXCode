@@ -571,7 +571,9 @@ Two rules worth knowing before you send a patch:
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
 | `web/link-policy.js` | Which chat links open in the browser preview — the `preview.list` pattern matcher, pure so a test can import it |
-| `web/bar-fit.js` | What the top bar gives up in a narrow window — labels, then buttons from the end, never the quota pill — with a band of slack so it does not flicker at the edge — and `resolveLayout()`, where a button the saved `toolbar.items` never mentioned lands. Pure, so a test can import it; `fitBar()` measures and moves |
+| `web/bar-fit.js` | What the top bar gives up in a narrow window — labels, then buttons from the end, never the quota pill — with a band of slack so it does not flicker at the edge and a `reserve` it never gives to a button (the titlebar's drag strip) — and `resolveLayout()`, where a button the saved `toolbar.items` never mentioned lands. Pure, so a test can import it; `fitBar()` measures and moves |
+| `web/titlebar.js` | The page's half of the custom titlebar: leaves room for the window controls from the Window Controls Overlay rect, sends the overlay its colours from the theme tokens, dims the bar when the window is in the background, and turns a press that travels on a bar button into a window drag |
+| `web/titlebar-drag.js` | Click or window drag? The 4px press state machine behind drag-through, pure so a test can drive it |
 | `web/startup.js` | What a new window opens to — turns Settings › On startup into the address a launch restores, and stays out of the way on a refresh. Pure, so a test can import it |
 | `web/live-over.js` | Whether the live board stays up over a whole-screen panel and how it docks there, from Settings › Live board visibility — `side`/`stacked` are layouts, `always` follows the dock toggle. Pure, so a test can import it |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
@@ -609,7 +611,8 @@ Two rules worth knowing before you send a patch:
 | `web/css/palette.css` | The command palette |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
-| `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |
+| `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes, and the titlebar's colours, drag and frame setting |
+| `app/titlebar.js` | The top bar as the window's titlebar: native caption-button overlay (traffic lights on macOS) coloured from the page's theme and resized with the zoom, the window drag a bar button carries, dragging out of maximised, and the *Use system titlebar* way back (`shell-prefs.json` in the shell's profile) |
 | `app/make-icon.js` | Generates the packaged shell's icon |
 
 `launch.sh` exists because the shell starts the bridge with `bash -lc` — a

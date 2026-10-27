@@ -18,6 +18,9 @@
     justify-content: center;
     z-index: var(--z-scrim);
     padding: var(--sp-9);
+    /* Over the bar, which is the window's titlebar in the desktop app: a
+       click on the scrim there closes the dialog rather than moving the window. */
+    -webkit-app-region: no-drag;
 }
 .scrim[hidden] { display: none; }
 

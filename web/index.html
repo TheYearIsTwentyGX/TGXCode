@@ -307,7 +307,8 @@
          and a flash announces nothing. Outside #quota-wrap on purpose: that
          element carries `hidden` whenever there is no window data to draw, and a
          live region inside a hidden subtree is not announced at all. A <span>
-         because `.bar > *` is given `-webkit-app-region: no-drag`. -->
+         rather than a control, so it is not carved out of the titlebar's
+         drag region — though out of flow it takes no room there anyway. -->
     <span id="quota-live" class="sr-only" role="status" aria-live="polite"></span>
 
     <button id="db-status" class="db-status" data-up="false" type="button"

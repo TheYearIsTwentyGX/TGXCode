@@ -25,6 +25,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawn, execFile } = require('child_process');
+const titlebar = require('./titlebar');
 
 // ── the rename ───────────────────────────────────────────────────────────
 //
@@ -96,6 +97,7 @@ const DEFAULTS = {
 const VIA_WSL = process.platform === 'win32';
 
 let mainWindow = null;
+let windowTitlebar = null;   // titlebar.attach()'s handle on mainWindow
 let bridgeStartedByUs = false;
 let bridgePid = null;   // the pid this app started, so we only shut that one down
 
@@ -414,6 +416,7 @@ function splash(message, detail) {
     const body = `
         <style>
           html,body{height:100%;margin:0}
+          .drag{position:fixed;top:0;left:0;right:0;height:52px;-webkit-app-region:drag}
           body{background:#131314;color:#c4c7c5;display:flex;align-items:center;
                justify-content:center;font:400 14px/1.6 "Google Sans Text","Segoe UI",system-ui,sans-serif}
           .box{max-width:520px;padding:32px;text-align:center}
@@ -425,6 +428,7 @@ function splash(message, detail) {
                background:#a8c7fa;margin-right:9px;animation:b 1.6s ease-in-out infinite}
           @keyframes b{0%,100%{opacity:1}50%{opacity:.3}}
         </style>
+        <div class="drag"></div>
         <div class="box">
           <h1><span class="dot"></span>${message}</h1>
           ${detail ? `<pre>${detail.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</pre>` : ''}
@@ -440,12 +444,18 @@ function createWindow() {
     const width = Math.max(900, Math.min(1600, Math.round(workAreaSize.width * 0.86)));
     const height = Math.max(620, Math.min(1040, Math.round(workAreaSize.height * 0.88)));
 
+    // The top bar is the titlebar unless the setting says otherwise — see
+    // app/titlebar.js. Read once: switching takes a restart, because a
+    // window's frame cannot change after it is made.
+    const custom = titlebar.wantsCustom(titlebar.readPrefs(app.getPath('userData')));
+
     mainWindow = new BrowserWindow({
         width,
         height,
         minWidth: 720,
         minHeight: 520,
         backgroundColor: '#131314',
+        ...titlebar.windowOptions(process.platform, custom),
         // Name the instance in the title bar: two identical windows, one of them
         // holding real work, is a mistake waiting to happen.
         title: PORT === DEFAULT_PORT ? 'TGXCode' : `TGXCode — dev :${PORT}`,
@@ -461,6 +471,11 @@ function createWindow() {
             // One channel, so a clicked notification can raise this window —
             // the only thing the page cannot do for itself. See preload.js.
             preload: path.join(__dirname, 'preload.js'),
+            // How the window is framed, for the preload to hand the page before
+            // its first paint — the bar's padding for the window controls
+            // depends on it. process.argv is one of the few things a sandboxed
+            // preload can read.
+            additionalArguments: [`--tgx-titlebar=${custom ? 'custom' : 'system'}`],
             // The in-app browser preview (web/preview.js). A <webview> rather
             // than an iframe because an iframe of another origin cannot be sent
             // back, screenshotted or inspected — which is most of the toolbar.
@@ -483,6 +498,11 @@ function createWindow() {
     });
 
     Menu.setApplicationMenu(null);
+
+    windowTitlebar = titlebar.attach({
+        win: mainWindow, ipcMain, screen, fromShell, custom,
+        userData: app.getPath('userData'), platform: process.platform,
+    });
 
     // Three panes and a transcript want room, and display scaling makes a fixed
     // size unpredictable. Start maximised; the computed size above is what the
@@ -511,6 +531,9 @@ function createWindow() {
             return;
         }
         event.preventDefault();
+        // The caption buttons are sized in DIP and the bar in CSS pixels, so a
+        // zoom has to resize the overlay to keep them level.
+        if (mod && key !== 'r') { windowTitlebar.applyOverlay(); windowTitlebar.send(); }
     });
 
     // Links to PRs and docs belong in the real browser, not in this window.

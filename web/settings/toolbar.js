@@ -230,6 +230,7 @@ function fitBar() {
     const next = planBar({
         avail: full.avail,
         fixed: full.fixed,
+        reserve: full.reserve,
         items: full.items.map(i => ({ ...i, compact: compact.items.find(c => c.id === i.id).full })),
         more: full.more,
         moreShown: !dom.barMoreWrap.hidden,
@@ -260,12 +261,20 @@ function measure(bar) {
     let fixed = 0;
     let more = 0;
     let shown = 0;
+    let reserve = 0;
     for (const n of bar.children) {
         if (!n.getClientRects().length) continue;
         const st = getComputedStyle(n);
         // Out of flow (the sr-only live region) takes no room and no gap.
         if (st.position === 'absolute' || st.position === 'fixed') continue;
         shown++;
+        // The spacer is the titlebar's drag strip (web/titlebar.js): its floor
+        // is reserved rather than measured, since it grows into whatever is
+        // left and its width is otherwise only the slack of this layout.
+        if (n.classList.contains('bar-spacer')) {
+            reserve = (parseFloat(st.minWidth) || 0) + gap;
+            continue;
+        }
         // The search box grows into whatever is left, so it costs only what it
         // will not shrink below.
         const w = (n.classList.contains('bar-search') ? parseFloat(st.minWidth) || 0 : n.getBoundingClientRect().width)
@@ -277,7 +286,7 @@ function measure(bar) {
     }
     // The More button is measured only while it shows; otherwise a square.
     if (!more) more = 34 + gap;
-    return { avail: avail + (shown ? gap : 0), fixed, items, more };
+    return { avail: avail + (shown ? gap : 0), fixed, items, more, reserve };
 }
 
 /** Mark the first of each run of view buttons or state pills. */

@@ -92,6 +92,40 @@ process.removeAllListeners('warning');
     assert.ok(!out.spill.includes('gone'));
     ok('a stale plan is dropped rather than kept by the slack');
 
+    // ── the titlebar's drag strip ──
+    // When the bar is the window's titlebar, 64 of it is the blank strip the
+    // window is dragged by, and no button may take it.
+    const R = 64;
+    assert.deepStrictEqual(plan(fullW, { reserve: R }), { compact: true, spill: [] });
+    assert.deepStrictEqual(plan(fullW + R, { reserve: R }), { compact: false, spill: [] });
+    // At the compact width a button spills rather than the strip shrinking.
+    // 864 + 40 for More is 104 over: DevBrowser and Schedules are 100, so Drafts too.
+    assert.deepStrictEqual(plan(compactW, { reserve: R }), { compact: true, spill: ['drafts', 'schedules', 'devbrowser'] });
+    assert.deepStrictEqual(plan(compactW + R, { reserve: R }), { compact: true, spill: [] });
+    ok('the drag strip is taken before any button is placed');
+
+    // Whatever the width, what stays on the bar plus the strip fits — unless
+    // every button that can leave has left, which is the one case the strip
+    // is allowed to be squeezed (the quota pill never moves).
+    for (let avail = 200; avail <= 1400; avail += 7) {
+        const p = plan(avail, { reserve: R });
+        const w = p.compact ? 'compact' : 'full';
+        const kept = items.filter(i => !p.spill.includes(i.id)).reduce((n, i) => n + i[w], 0);
+        const used = 300 + kept + (p.spill.length ? 40 : 0) + R;
+        const allOut = p.spill.length === items.filter(i => i.spillable).length;
+        assert.ok(used <= avail || allOut, `at ${avail}: ${used} used`);
+    }
+    ok('no width leaves the strip below its floor while a button could still go');
+
+    // The hysteresis holds with a reserve as it does without one.
+    const sp = plan(compactW, { reserve: R });
+    // Back at a width where the strip and every button fit, but with 5 to
+    // spare rather than 24: only what fits inside the slack comes back.
+    assert.deepStrictEqual(plan(compactW + R + 5, { reserve: R, prev: sp, prevAvail: compactW + R + 5, slack: 24 }),
+        { compact: true, spill: ['devbrowser'] });
+    assert.deepStrictEqual(plan(-5, { reserve: -5 }).spill.length, 7);
+    ok('a reserve keeps the slack band, and a negative one counts as none');
+
     // ── resolveLayout: where a button the saved list never mentioned lands ──
     // The catalogue's tail as web/settings/toolbar.js has it.
     const CAT = [

@@ -40,7 +40,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'tool-image.test.js', 'hook-scripts.test.js', 'hook-sources.test.js',
     'overview-hosts.test.js', 'session-index.test.js', 'keepawake.test.js',
     'session-title.test.js', 'phone-installs.test.js', 'tool-name.test.js', 'images.test.js',
-    'brief.test.js'];
+    'brief.test.js', 'titlebar.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

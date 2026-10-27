@@ -1201,6 +1201,10 @@ Both are written into `web/index.html` rather than built from the settings
 table, because their controls are wired once at load; the panel moves them into
 place so they still take their turn in the order the table lists.
 
+**Window** is not a settings-file setting either, for a different reason: *Use
+system titlebar* belongs to the desktop app, which stores it itself, and the
+group only appears there. See *The titlebar*.
+
 ### Test sessions
 
 A session can be marked **test**, which means only a development bridge lists it;
@@ -1228,6 +1232,68 @@ curl -sX POST http://127.0.0.1:45899/api/sessions/$ID/flags \
 Labelled sessions gather in a **Test sessions** card at the foot of the rail, so
 the ones left behind are easy to find and delete. Delete them; the label is a way
 to keep them out of sight until you do, not a substitute for cleaning up.
+
+### The titlebar
+
+In the desktop app the top bar *is* the window's titlebar — there is no separate
+native row above it, which gives the window back about 30 pixels. The window
+controls sit at the bar's right end on Windows and Linux (minimise,
+maximise/restore, close) and the traffic lights at its left on macOS. They are
+the system's own buttons drawn over the bar, not copies, so Windows still shows
+its Snap Layouts flyout when you hover maximise, and screen readers still name
+them. Their colours come from the app's theme and follow it; their height
+follows the zoom (Ctrl + / Ctrl −), within limits so they stay usable.
+
+**Moving the window.** Any blank part of the bar drags the window — the
+wordmark, the gaps, the dev badge, and the empty strip between the search box and
+the buttons. That strip is always at least 64 pixels wide: when the window gets
+narrow, buttons go into the ⋯ More menu before the strip shrinks below that,
+so there is always somewhere to grab. Dragging from a blank part is the system's
+own move, so everything it does still works — Aero Snap to an edge, Snap Layouts,
+double-click to maximise or restore (on macOS, whatever *Double-click a window's
+title bar to* is set to), and right-click for the window menu on Windows.
+
+You can also drag by a button. Press a button and let go without moving and it
+is a click; press and move more than about four pixels and the window moves with
+the pointer instead, and the click is cancelled. A maximised window restores as
+you drag it, keeping the pointer at the same place along the bar, as a native
+titlebar does. Text boxes are the exception: dragging in the search box selects
+text, as it always has. The window controls are never drag handles.
+
+Dragging by a button is done by the app rather than the system, so it is not
+quite the same as dragging by a blank part:
+
+- No Snap Layouts, no snapping to the left or right half, and no Aero Shake.
+  Letting go with the pointer at the top edge of the screen does maximise the
+  window, which is the one piece of snapping the app copies.
+- It follows the pointer at the display's refresh rate rather than with the
+  system's own move loop, so on a slow machine it can lag a pointer moved fast.
+
+**On a narrow window** the controls' room comes out of the bar, so the buttons
+go into More sooner than they did. Below about 1100 pixels the wordmark keeps
+only its ◆, and below 1000 the search box gets narrower, so the quota and
+version pills stay clear of the controls down to about 900 pixels. Narrower
+than that — the bar already ran off the window's edge there before — they can
+end up under the controls; widen the window or zoom out (Ctrl −).
+
+**When the window is in the background** the bar dims, as a native titlebar
+does. The window's title is still set (it is what the taskbar and Alt-Tab show),
+and full screen hides the controls and gives their room back to the bar.
+
+**Going back to the system titlebar.** *Settings → Window → Use system titlebar*
+puts the native titlebar back above the bar. It takes effect when you restart
+TGXCode — a window cannot change its frame while it is open. The choice is
+stored by the desktop app (`shell-prefs.json` in its profile folder), not in
+`~/.tgxcode/settings.json`, because it is about this window rather than about
+the bridge. If the custom bar is ever what is broken, starting the app with
+`TGXCODE_SYSTEM_TITLEBAR=1` in its environment does the same without reaching
+Settings. In a browser tab none of this applies and the group is not shown.
+
+Platform notes. Windows is where this is built and tested. macOS and Linux use
+the same code — Electron's caption-button overlay on Linux, the traffic lights on
+macOS — but neither has been tried on a real desktop yet. Some Linux window
+managers draw nothing for a window without a frame, or will not move one from
+the app's drag regions; on those, turn on *Use system titlebar*.
 
 ### The icon
 
