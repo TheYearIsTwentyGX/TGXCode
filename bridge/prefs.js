@@ -170,6 +170,14 @@ const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'analytics', 'history', 'draf
 const TOOLBAR_PLACES = new Set(['bar', 'more', 'hidden']);
 const TOOLBAR_PINNED = { settings: new Set(['bar', 'more']), quota: new Set(['bar']) };
 
+// The conversation header's buttons, left to right — CONV_TOOLBAR in
+// web/settings/toolbar.js. Shown or hidden, and nothing else: that row has no
+// More menu and no labels to turn on. None is pinned, because Settings is not
+// among them — every one of them is in the palette with the row hidden.
+const CONV_TOOLBAR_IDS = ['orchestrator', 'pin', 'restart', 'checklist', 'changes', 'reviews',
+    'images', 'folder', 'terminal', 'archive', 'delete'];
+const CONV_TOOLBAR_PLACES = new Set(['bar', 'hidden']);
+
 const DEFAULTS = {
     version: VERSION,
     transcript: {
@@ -391,6 +399,11 @@ const DEFAULTS = {
         // Hiding a view removes its button and nothing else: its shortcut still
         // opens it, so a button hidden by mistake is not a view lost.
         items: [],
+        // The conversation header's row, the same way: `{id, place}` in the
+        // order they are drawn, `place` being `bar` or `hidden`. Hiding is on
+        // top of whatever already decides whether a button shows — Restart
+        // still needs a live process — and the palette still has every one.
+        conversation: [],
     },
     wispr: {
         // {id, title, combo}, in the order the popover lists them. `combo` is
@@ -652,6 +665,10 @@ const SHAPE = {
             && v.every(e => e && TOOLBAR_IDS.includes(e.id) && TOOLBAR_PLACES.has(e.place)
                 && typeof e.label === 'boolean'
                 && (!TOOLBAR_PINNED[e.id] || TOOLBAR_PINNED[e.id].has(e.place))),
+        conversation: (v) => Array.isArray(v) && v.length <= CONV_TOOLBAR_IDS.length
+            && new Set(v.map(e => e && e.id)).size === v.length
+            && v.every(e => e && CONV_TOOLBAR_IDS.includes(e.id) && CONV_TOOLBAR_PLACES.has(e.place)
+                && Object.keys(e).length === 2),
     },
     wispr: {
         // The last gate again: cleanTransforms() has dropped the bad entries.
@@ -885,12 +902,25 @@ function cleanOrder(value, note) {
  *   default alone — which is what a value that is not a list at all gets.
  */
 function cleanToolbar(value, note) {
+    return cleanBar(value, note, TOOLBAR_IDS, TOOLBAR_PLACES, true);
+}
+
+/**
+ * `toolbar.conversation`: cleanToolbar() for the conversation header, which
+ * has two places and no labels — a `label` written there is dropped quietly,
+ * since it says nothing this row can do.
+ */
+function cleanConvToolbar(value, note) {
+    return cleanBar(value, note, CONV_TOOLBAR_IDS, CONV_TOOLBAR_PLACES, false);
+}
+
+function cleanBar(value, note, ids, places, labels) {
     if (!Array.isArray(value)) return undefined;
     const out = [];
     const seen = new Set();
     for (const raw of value) {
         const id = raw && typeof raw === 'object' ? raw.id : raw;
-        if (typeof id !== 'string' || !TOOLBAR_IDS.includes(id)) {
+        if (typeof id !== 'string' || !ids.includes(id)) {
             note(`${JSON.stringify(id)} is not a toolbar button`);
             continue;
         }
@@ -899,8 +929,13 @@ function cleanToolbar(value, note) {
             continue;
         }
         let place = raw.place === undefined ? 'bar' : raw.place;
-        if (!TOOLBAR_PLACES.has(place)) {
-            note(`${JSON.stringify(place)} is not a place for ${id} — bar, more or hidden`);
+        if (!places.has(place)) {
+            note(`${JSON.stringify(place)} is not a place for ${id} — ${[...places].join(', ')}`);
+            continue;
+        }
+        if (!labels) {
+            seen.add(id);
+            out.push({ id, place });
             continue;
         }
         const label = raw.label === undefined ? true : raw.label;
@@ -1012,7 +1047,7 @@ const SANITIZE = {
     keyboard: { bindings: cleanBindings },
     spinner: { weights: cleanWeights },
     projects: { colors: cleanColors, order: cleanOrder },
-    toolbar: { items: cleanToolbar },
+    toolbar: { items: cleanToolbar, conversation: cleanConvToolbar },
     wispr: { transforms: wispr.cleanTransforms },
     preview: { list: cleanLinkList },
     reviews: { types: cleanReviewTypes },
@@ -1196,7 +1231,8 @@ class Prefs {
             orchestrator: { ...DEFAULTS.orchestrator },
             spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
-            toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },
+            toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items],
+                conversation: [...DEFAULTS.toolbar.conversation] },
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
             preview: { ...DEFAULTS.preview, list: [...DEFAULTS.preview.list] },
             devbrowser: { ...DEFAULTS.devbrowser },
@@ -1402,5 +1438,5 @@ class Prefs {
     }
 }
 
-module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION, TOOLBAR_IDS,
+module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION, TOOLBAR_IDS, CONV_TOOLBAR_IDS,
     REVIEW_COLOURS };

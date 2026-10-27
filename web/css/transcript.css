@@ -106,7 +106,17 @@
    between groups rather than more space: at 36px a wider gap reads as a
    missing button. */
 .conv-act-group { display: flex; align-items: center; gap: var(--sp-1); }
-.conv-act-group + .conv-act-group::before {
+/* Hidden in Settings › Conversation toolbar — on top of `hidden`, which the
+   painters that decide whether a button applies keep to themselves. */
+.conv-act-group > [data-bar-hidden] { display: none; }
+/* A run with nothing showing goes, divider and all, and a divider is drawn only
+   between two runs that both show something: `~` rather than `+`, so a run
+   gone from the middle or the front leaves neither a double nor a leading rule.
+   :has() rather than a class, because Restart and the orchestrator button come
+   and go with the session and nothing here would hear about it. */
+.conv-act-group:not(:has(> :not([hidden], [data-bar-hidden]))) { display: none; }
+.conv-act-group:has(> :not([hidden], [data-bar-hidden]))
+    ~ .conv-act-group:has(> :not([hidden], [data-bar-hidden]))::before {
     content: "";
     width: 1px;
     height: 16px;

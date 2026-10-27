@@ -42,7 +42,7 @@ import { renderCmdConfig } from './project-commands.js';
 import { briefCard } from './brief.js';
 import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
-import { renderToolbarSettings } from './toolbar.js';
+import { renderConvToolbarSettings, renderToolbarSettings } from './toolbar.js';
 
 // Here rather than beside paintRailSort() in app.js, which draws the rail head's
 // menu from it, because SETTINGS below reads it while this module evaluates —
@@ -299,6 +299,16 @@ export const SETTINGS = [
         note: 'The buttons along the top: their order, which of them fold into the '
             + 'More menu, and which show their name beside the icon. A hidden view '
             + 'still opens from its shortcut.',
+        rows: [],
+    },
+    {
+        // `toolbar.conversation`, under a section of its own so it has its own
+        // card, contents entry and palette row — the key itself is in `toolbar`.
+        title: 'Conversation toolbar', section: 'conversationToolbar', category: 'workspace',
+        userOnly: true, convToolbar: true,
+        note: 'The buttons at the top right of an open conversation: which show, and their '
+            + 'order within each group. A button still shows only where it applies, and a '
+            + 'hidden one is still in the command palette.',
         rows: [],
     },
     {
@@ -711,6 +721,7 @@ export function settingsCard(group) {
         ${rows}
         ${group.keymap ? renderKeymap(locked) : null}
         ${group.toolbar ? renderToolbarSettings(locked) : null}
+        ${group.convToolbar ? renderConvToolbarSettings(locked) : null}
         ${group.status ? group.status() : null}
     </section>`;
 }

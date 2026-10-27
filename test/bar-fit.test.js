@@ -16,7 +16,7 @@ const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
 process.removeAllListeners('warning');
 
 (async () => {
-    const { planBar, resolveLayout } = await import('../web/bar-fit.js');
+    const { inGroups, planBar, resolveLayout } = await import('../web/bar-fit.js');
 
     // Six view buttons 100 wide (40 without words), then the quota pill (200,
     // never moves) and DevBrowser (100, 60). 300 of wordmark and search floor.
@@ -124,6 +124,41 @@ process.removeAllListeners('warning');
     // A place the catalogue does not allow falls back to the bar.
     assert.ok(lay([{ id: 'quota', place: 'hidden' }]).includes('quota:bar'));
     ok('the phone pill keeps the place and position it was saved with');
+
+    // ── the conversation header's row: the same resolver, two places, three runs ──
+    // Read off web/settings/toolbar.js rather than copied, so the page's catalogue
+    // and bridge/prefs.js's list of ids cannot drift apart unnoticed.
+    const src = require('fs').readFileSync(require('path').join(__dirname, '../web/settings/toolbar.js'), 'utf8');
+    const block = src.slice(src.indexOf('const CONV_TOOLBAR = ['), src.indexOf('].map(d =>', src.indexOf('const CONV_TOOLBAR = [')));
+    const CONV = [...block.matchAll(/\{ id: '(\w+)', node: '\w+', name: '[^']+', group: (\d)/g)]
+        .map(m => ({ id: m[1], group: Number(m[2]), places: ['bar', 'hidden'] }));
+    assert.deepStrictEqual(CONV.map(d => d.id), require('../bridge/prefs.js').CONV_TOOLBAR_IDS);
+    const conv = (saved) => inGroups(resolveLayout(CONV, saved)).map(o => `${o.def.id}:${o.place}`);
+    const today = ['orchestrator:bar', 'pin:bar', 'restart:bar', 'checklist:bar', 'changes:bar',
+        'reviews:bar', 'images:bar', 'folder:bar', 'terminal:bar', 'archive:bar', 'delete:bar'];
+    assert.deepStrictEqual(conv(undefined), today);
+    assert.deepStrictEqual(conv([]), today);
+    assert.deepStrictEqual(conv({ pin: 'hidden' }), today);
+    ok('a settings file that never mentioned the conversation toolbar shows every button, in order');
+
+    // Hide two, save what the page would save, read it back.
+    const hid = resolveLayout(CONV, undefined).map(o => ({ id: o.def.id,
+        place: ['archive', 'images'].includes(o.def.id) ? 'hidden' : o.place }));
+    const round = conv(JSON.parse(JSON.stringify(hid)));
+    assert.deepStrictEqual(round.filter(x => x.endsWith(':hidden')), ['images:hidden', 'archive:hidden']);
+    assert.strictEqual(round.length, CONV.length);
+    // `more` is not a place on this row; a hand-written one shows the button.
+    assert.ok(conv([{ id: 'pin', place: 'more' }]).includes('pin:bar'));
+    ok('a hidden conversation button stays hidden through a save and a read');
+
+    // A saved order that drags Delete to the front, or interleaves the runs,
+    // still leaves every button in its own run — in the order given inside it.
+    assert.deepStrictEqual(conv([{ id: 'delete' }, { id: 'terminal' }, { id: 'pin' }]), [
+        'orchestrator:bar', 'pin:bar', 'restart:bar',
+        'terminal:bar', 'checklist:bar', 'changes:bar', 'reviews:bar', 'images:bar', 'folder:bar',
+        'delete:bar', 'archive:bar',
+    ]);
+    ok('a reordered conversation toolbar keeps each button inside its group');
 
     console.log(`\n${pass} passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -1952,8 +1952,9 @@ whole thing rather than merging into it — inside the map `null` already means
 "unbound on purpose", so there is no spare spelling for "drop this one entry
 back to its default". Send all of it.
 
-`toolbar` is how the desktop page lays out its top bar. It has one key, `items`,
-an **array of objects** `[{id, place, label}]` in the order the bar draws them:
+`toolbar` is how the desktop page lays out its top bar and the button row in a
+conversation's header. It has two keys. The first, `items`, is the top bar, an
+**array of objects** `[{id, place, label}]` in the order the bar draws them:
 
 | Field | Type | |
 |---|---|---|
@@ -1976,6 +1977,26 @@ Hiding a view removes its button and nothing else: its shortcut in
 `keyboard.bindings` still opens it. User file only, and `items` is one key, so
 a `PUT` sends the whole list. The Android app draws no such bar and can ignore
 this section.
+
+The second key, `conversation`, is the row of buttons at the top right of an open
+conversation. It is an **array of objects** `[{id, place}]`, two fields and no
+`label`:
+
+| Field | Type | |
+|---|---|---|
+| `id` | string | one of `orchestrator`, `pin`, `restart`, `checklist`, `changes`, `reviews`, `images`, `folder`, `terminal`, `archive`, `delete` |
+| `place` | `"bar"` or `"hidden"` | shown or not. Missing means `"bar"`. There is no `"more"`: this row has no overflow menu |
+
+The default is `[]`, which shows every button, as before the key existed. An id
+the list leaves out is shown in its default position. The order counts only within
+the three groups the row is drawn in (`orchestrator` `pin` `restart` · `checklist`
+… `terminal` · `archive` `delete`), and a button never moves into another group.
+Entries are cleaned one at a time, as `items` is. In a file, a `label` on an entry
+is dropped without a `problems` line. A `PUT` with a `label` is accepted and stored
+without it, and a `"more"` place is refused with `400`. None of the buttons is pinned.
+`"hidden"` is applied on top of the page's own rules, so `restart` still shows only
+while the session has a process, and `orchestrator` still never shows on a worker.
+Every hidden button stays in the command palette. User file only, and a `PUT` sends the whole list.
 
 `wispr` is the Wispr Flow transforms the composers' Wispr button lists, and is one
 key:
@@ -4781,8 +4802,8 @@ are preserved, and `version` is stamped.
 
 **A key whose value is a map is still one key**, so naming it replaces the whole
 map. That is true of all three — `keyboard.bindings`, `spinner.weights` and
-`projects.colors` — and of the two lists, `toolbar.items` and
-`projects.order`, and it is deliberate: a client that holds the resolved map
+`projects.colors` — and of the three lists, `toolbar.items`,
+`toolbar.conversation` and `projects.order`, and it is deliberate: a client that holds the resolved map
 can say exactly what it wants by sending all of it, and there is no second
 spelling that would have to mean "drop one entry". See each one under
 `GET /api/prefs`.
