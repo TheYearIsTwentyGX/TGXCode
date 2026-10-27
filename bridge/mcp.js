@@ -97,6 +97,9 @@ const SESSION_ID = flag('session') || null;
 // 'orchestrator', 'worker' or null — which extra tools to list. See
 // bridge/orchestrators.js. Fixed at spawn: the CLI reads the list once.
 const ROLE = flag('role') || null;
+// Whether `preview.agentControl` was on when this session started, which is when
+// bridge/runner.js also gave it the `preview` server. Lists open_in_preview.
+const PREVIEW = process.argv.includes('--preview');
 
 // ---------------------------------------------------------------------------
 // Talking to the bridge
@@ -864,13 +867,61 @@ const REPORT = {
     },
 };
 
+// The browser preview, for an agent that has been asked to use it. Only listed
+// with `--preview`; the tools that then drive the page are the `preview` server's
+// (bridge/preview-mcp.js), and this is how a page gets there for them to drive.
+// The window decides whether it opens at once (a local page, or a site the user
+// approved) or asks the user first; see app/preview-grants.js.
+const OPEN_IN_PREVIEW = {
+    name: 'open_in_preview',
+    title: 'Open a page in the user\'s preview',
+    description: [
+        'Open a URL in the browser preview inside the user\'s TGXCode window, or bring it to',
+        'the front if it is already open, so the `preview` server\'s browser_* tools can drive',
+        'it while the user watches.',
+        '',
+        'Use the preview only when the user asks you to use it, or for an interactive check',
+        'they want to watch. It is the user\'s screen, not a test browser: for your own',
+        'testing use a headless browser instead.',
+        '',
+        'Local pages (localhost, 127.0.0.1) open at once. Any other site needs the user\'s',
+        'approval, asked in the preview; this waits up to a minute for the answer. If they',
+        'have not answered by then the prompt stays open and the page opens by itself when',
+        'they allow it — call this again later to see the outcome, rather than retrying.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            url: { type: 'string', description: 'An http or https URL.' },
+        },
+        required: ['url'],
+    },
+};
+
+async function callOpenInPreview(id, args) {
+    const url = typeof args.url === 'string' ? args.url.trim() : '';
+    if (!url) return toolError(id, 'Pass the url to open.');
+    const r = await api('POST', '/api/preview/open', { url, sessionId: SESSION_ID });
+    if (r.error) return toolError(id, r.error);
+    const b = r.body || {};
+    if (r.ok && b.ok) {
+        return say(id, `Opened ${b.url || url} in the user's preview. Drive it with the preview server's `
+            + 'browser_* tools — take a browser_snapshot first. The user sees every click.');
+    }
+    // Still being asked is not a failure, and must not read like one: an agent
+    // told "error" retries, and retrying is exactly what the answer says not to do.
+    if (b.outcome === 'waiting') return say(id, b.error || 'Waiting for the user to answer.');
+    return toolError(id, msgOf(r));
+}
+
 const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WORKER, ANSWER_WORKER,
     READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY, MOVE_SESSION];
 
 const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
     INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
-    ...(ROLE === 'worker' ? [REPORT] : [])];
+    ...(ROLE === 'worker' ? [REPORT] : []),
+    ...(PREVIEW ? [OPEN_IN_PREVIEW] : [])];
 
 // What comes back to the model after a suggestion. It says the offer was made
 // and, more usefully, says not to go and do it — an agent told only "ok"
@@ -1618,6 +1669,7 @@ async function handle(msg) {
         if (name === 'schedule_session') return callSchedule(id, args);
         if (name === 'install_on_phone') return callInstallOnPhone(id, args);
         if (name === 'phone_install_status') return callPhoneInstallStatus(id, args);
+        if (name === 'open_in_preview' && PREVIEW) return callOpenInPreview(id, args);
         const roleCall = ROLE && ROLE_CALLS[ROLE] && ROLE_CALLS[ROLE][name];
         if (roleCall) return roleCall(id, args);
         return toolError(id, `unknown tool: ${name}`);

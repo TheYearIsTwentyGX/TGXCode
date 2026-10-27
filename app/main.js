@@ -20,12 +20,14 @@
 // port-reclaim logic, the window, the single-instance lock — is the same on
 // both and does not know which it is on.
 
-const { app, BrowserWindow, shell, Menu, screen, ipcMain, clipboard, webContents } = require('electron');
+const { app, BrowserWindow, shell, Menu, screen, ipcMain, clipboard, webContents, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 const titlebar = require('./titlebar');
+const { PreviewCdp } = require('./preview-cdp');
+const { PreviewGrants, originOf } = require('./preview-grants');
 
 // ── the rename ───────────────────────────────────────────────────────────
 //
@@ -666,27 +668,82 @@ ipcMain.on('reveal-window', (event) => {
 const PREVIEW_PARTITION = 'persist:preview';
 const MAX_COPY_TEXT = 8 * 1024;
 
-function isLoopbackUrl(url) {
-    try {
-        const u = new URL(url);
-        return (u.protocol === 'http:' || u.protocol === 'https:')
-            && (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]');
-    } catch {
-        return false;
-    }
-}
-
-// Sites the shell's page has opened in the preview from a chat link
-// (web/link-policy.js decides which). Held for the life of the process: an
-// origin granted once may be navigated within, and a link from it to anywhere
-// else still goes to the browser. Capped so a page gone wrong cannot grow it.
-const previewOrigins = new Set();
-const MAX_PREVIEW_ORIGINS = 200;
+// What a guest may show beyond loopback: origins a chat link opened (web/link-policy.js
+// decides which), origins the user allowed an agent to open — once, or always —
+// and what the user said no to. See app/preview-grants.js. An origin granted once
+// may be navigated within for the life of the process, and a link from it to
+// anywhere else still goes to the browser.
+const grants = new PreviewGrants();
 
 function isPreviewable(url) {
-    if (isLoopbackUrl(url)) return true;
-    try { return previewOrigins.has(new URL(url).origin); } catch { return false; }
+    return grants.isGranted(url);
 }
+
+// ---------------------------------------------------------------------------
+// An agent driving the preview
+// ---------------------------------------------------------------------------
+// `preview.agentControl`. The endpoint is app/preview-cdp.js, which says why it
+// is built on each guest's own debugger rather than on --remote-debugging-port;
+// the window starts and stops it (preview-agent-set) because the window is what
+// reads the setting, and registers the URL with the bridge, where a session's
+// Playwright finds it (bridge/preview-mcp.js).
+
+let previewCdp = null;
+let activeGuestId = null;   // the guest on screen, listed first so Playwright picks it
+
+function previewGuests() {
+    const part = session.fromPartition(PREVIEW_PARTITION);
+    const all = webContents.getAllWebContents()
+        .filter(wc => !wc.isDestroyed() && wc.getType() === 'webview' && wc.session === part);
+    all.sort((a, b) => (b.id === activeGuestId) - (a.id === activeGuestId));
+    return all;
+}
+
+function sendToShell(channel, payload) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
+function agentState() {
+    const s = previewCdp ? previewCdp.state() : { connected: false, active: false, pages: [] };
+    return { ...s, enabled: Boolean(previewCdp && previewCdp.endpoint), asks: grants.list() };
+}
+
+grants.on('changed', () => sendToShell('preview-agent-state', agentState()));
+grants.on('notify', (ask) => sendToShell('preview-agent-notify', ask));
+
+function ensurePreviewCdp() {
+    if (previewCdp) return previewCdp;
+    previewCdp = new PreviewCdp({
+        guests: previewGuests,
+        navigationRefusal: (url) => grants.navigationRefusal(url, 'cdp'),
+        focusGuest,
+        product: `Chrome/${process.versions.chrome}`,
+        userAgent: app.userAgentFallback,
+    });
+    previewCdp.on('state', () => sendToShell('preview-agent-state', agentState()));
+    // A prompt a refused navigation raised was for whoever was connected; once
+    // nobody is, nobody is waiting on it.
+    previewCdp.on('disconnect', () => grants.dropRequester('cdp'));
+    return previewCdp;
+}
+
+/**
+ * Give a guest the keyboard, by focusing its `<webview>` in this window. See
+ * KEYBOARD in app/preview-cdp.js for why nothing less works. Asked before each
+ * keystroke an agent sends, and a no-op when it already has the focus.
+ */
+function focusGuest(wc) {
+    if (!mainWindow || mainWindow.isDestroyed() || !Number.isInteger(wc.id)) return Promise.resolve();
+    return mainWindow.webContents.executeJavaScript(`(() => {
+        const v = [...document.querySelectorAll('webview')].find((el) => {
+            try { return el.getWebContentsId() === ${wc.id}; } catch { return false; }
+        });
+        if (v && document.activeElement !== v) v.focus();
+    })()`).catch(() => {});
+}
+
+/** Whether an agent is attached to this guest — which changes what its links do. */
+const agentDriven = (contents) => Boolean(previewCdp && previewCdp.isControlled(contents));
 
 app.on('web-contents-created', (_event, contents) => {
     if (contents.getType() !== 'webview') return;
@@ -694,15 +751,38 @@ app.on('web-contents-created', (_event, contents) => {
     // A link that leaves loopback, or the site a chat link opened, is somewhere
     // else on the internet, and that belongs in the real browser, exactly as it
     // does for the shell itself.
+    //
+    // **Not while an agent is driving it.** A link an agent clicked opening the
+    // user's own browser would be the agent leaving the preview by the side door,
+    // to a site nobody approved. So on an agent-driven page a link to an approved
+    // site loads here, and one to anywhere else is stopped and asks the user —
+    // the same ask a refused Page.navigate raises. Only the page's own top-level
+    // navigations are gated; what it loads into frames and requests is its own.
     contents.setWindowOpenHandler(({ url }) => {
-        if (/^https?:/.test(url)) shell.openExternal(url);
+        const d = grants.popupDecision(url, agentDriven(contents));
+        if (d === 'load') contents.loadURL(url).catch(() => { /* reported by the page */ });
+        else if (d === 'external') shell.openExternal(url);
         return { action: 'deny' };
     });
     contents.on('will-navigate', (event, url) => {
-        if (isPreviewable(url)) return;
+        const d = grants.linkDecision(url, agentDriven(contents));
+        if (d === 'allow') return;
         event.preventDefault();
-        if (/^https?:/.test(url)) shell.openExternal(url);
+        if (d === 'external') shell.openExternal(url);
     });
+    // A server redirect is not a will-navigate. Left alone with nobody driving,
+    // as it always was; stopped with somebody driving, for the reason above.
+    contents.on('will-redirect', (event, url, _inPlace, isMainFrame) => {
+        const main = typeof event.isMainFrame === 'boolean' ? event.isMainFrame : isMainFrame;
+        if (grants.redirectDecision(url, agentDriven(contents), main) === 'blocked') event.preventDefault();
+    });
+
+    // Tell the endpoint, so an agent with auto-attach on sees a page appear,
+    // change and go — as it would in a browser.
+    const changed = () => { if (previewCdp) previewCdp.guestChanged(contents); };
+    contents.on('dom-ready', changed);
+    contents.on('did-navigate', changed);
+    contents.once('destroyed', () => { if (previewCdp) previewCdp.guestGone(contents); });
 
     // F12 / Ctrl+Shift+I inspect the page being previewed, not the app around
     // it. The shell's own F12 is handled on its webContents above and does not
@@ -747,10 +827,65 @@ ipcMain.handle('preview-allow-origin', (event, origin) => {
     if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.origin !== origin) {
         return { ok: false, error: 'refused' };
     }
-    if (!previewOrigins.has(origin)) {
-        if (previewOrigins.size >= MAX_PREVIEW_ORIGINS) return { ok: false, error: 'full' };
-        previewOrigins.add(origin);
+    return grants.grantSession(origin) ? { ok: true } : { ok: false, error: 'full' };
+});
+
+// The window turns agent control on or off, and hands over the sites the user
+// always allows (`preview.agentOrigins`). On answers with the endpoint the
+// window registers with the bridge. Asked again after a reload, it is the same
+// endpoint: the token lives as long as the process or until it is turned off.
+ipcMain.handle('preview-agent-set', async (event, opts) => {
+    if (!fromShell(event) || !opts || typeof opts !== 'object') return { ok: false, error: 'refused' };
+    grants.setAlways(opts.origins);
+    if (opts.on !== true) {
+        if (previewCdp) await previewCdp.stop();
+        sendToShell('preview-agent-state', agentState());
+        return { ok: true, endpoint: null };
     }
+    try {
+        const endpoint = await ensurePreviewCdp().start();
+        sendToShell('preview-agent-state', agentState());
+        return { ok: true, endpoint };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
+ipcMain.handle('preview-agent-state', (event) => (fromShell(event) ? agentState() : null));
+
+ipcMain.handle('preview-agent-stop', (event) => {
+    if (!fromShell(event)) return { ok: false, error: 'refused' };
+    return { ok: true, stopped: previewCdp ? previewCdp.kick() : false };
+});
+
+ipcMain.handle('preview-agent-active', (event, id) => {
+    if (!fromShell(event)) return { ok: false };
+    activeGuestId = Number.isInteger(id) ? id : null;
+    return { ok: true };
+});
+
+// open_in_preview, by way of the window: may this URL open, and if it has to be
+// asked about, ask. See app/preview-grants.js for why an ask has no deadline.
+ipcMain.handle('preview-agent-request', (event, req) => {
+    if (!fromShell(event) || !req || typeof req.url !== 'string') return { state: 'refused' };
+    if (!originOf(req.url)) return { state: 'refused' };
+    const sid = typeof req.sessionId === 'string' && req.sessionId ? req.sessionId : 'unknown';
+    return grants.ask(req.url, { requester: `session:${sid}`, open: req.url });
+});
+
+ipcMain.handle('preview-agent-wait', (event, req) => {
+    if (!fromShell(event) || !req || typeof req.origin !== 'string') return 'gone';
+    return grants.wait(req.origin, Math.max(0, Math.min(Number(req.ms) || 0, 120_000)));
+});
+
+ipcMain.handle('preview-agent-answer', (event, req) => {
+    if (!fromShell(event) || !req || typeof req.origin !== 'string') return { ok: false };
+    return grants.answer(req.origin, req.decision);
+});
+
+ipcMain.handle('preview-agent-session-gone', (event, sessionId) => {
+    if (!fromShell(event) || typeof sessionId !== 'string') return { ok: false };
+    grants.dropRequester(`session:${sessionId}`);
     return { ok: true };
 });
 

@@ -28,6 +28,7 @@ import { noteHome, shortPath } from '../format.js';
 import * as keys from '../keys.js';
 import { state } from '../state.js';
 import { termPane } from '../term-pane.js';
+import { syncPreviewAgent } from '../preview-agent.js';
 import {
     applyClock, closeOtherPanels, liveVisible, loadPairing, paintBackdropTint, paintDevBrowserPresence,
     paintPanels, paintRailSort, rememberView, renderLive, renderRail, saveDraft, syncBoardWatch,
@@ -280,6 +281,8 @@ function applyPrefsLive(prefs, section) {
     if (liveVisible()) renderLive();
     if (section === 'keyboard') paintComposerHint();
     if (section === 'projects') { renderRail(); paintRailSort(); }
+    // Starts or stops the shell's endpoint, and hands it the sites always allowed.
+    if (section === 'preview') syncPreviewAgent();
     // The pill, its poll, and every chip's tooltip say which browser a click
     // means, and all of them were drawn under the old answer.
     if (section === 'devbrowser') { paintDevBrowserPresence(); renderChannels(); }

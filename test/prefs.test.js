@@ -315,7 +315,8 @@ write(userFile, { version: VERSION });
 prefs.cache.clear();
 got = prefs.forCwd();
 assert.deepStrictEqual(got.preview,
-    { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [] });
+    { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [],
+        agentControl: false, agentOrigins: [] });
 assert.deepStrictEqual(got.devbrowser, { show: true, openIn: 'devbrowser', whenClosed: 'launch' });
 clear();
 write(userFile, { version: VERSION,
@@ -335,6 +336,32 @@ assert.strictEqual(kept.prefs.preview.keepAliveMinutes, 0, '0 is "recycle at onc
 assert.strictEqual(kept.prefs.devbrowser.openIn, 'inline');
 assert.strictEqual(kept.prefs.devbrowser.whenClosed, 'nothing');
 ok('the preview keys default to the old behaviour and take only their closed sets');
+
+// Agent control of the preview, and the sites "Always allow" put on its list
+// (app/preview-grants.js). Off by default; the list holds origins exactly, and a
+// bad entry is dropped on its own rather than taking the list with it.
+clear();
+write(userFile, { version: VERSION, preview: { agentControl: 'yes',
+    agentOrigins: ['https://pcpartpicker.com', 'https://amazon.com/', 'ftp://x.example', 'https://a.example/path', 42,
+        'https://pcpartpicker.com'] } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.preview.agentControl, false, 'a string is not a yes');
+assert.deepStrictEqual(got.preview.agentOrigins, ['https://pcpartpicker.com', 'https://amazon.com'],
+    'origins kept, a trailing slash forgiven, paths, other schemes and duplicates dropped');
+const allowed = prefs.save({ scope: 'user',
+    patch: { preview: { agentControl: true, agentOrigins: ['https://pcpartpicker.com', 'http://localhost:3000'] } } });
+assert.strictEqual(allowed.prefs.preview.agentControl, true);
+assert.deepStrictEqual(allowed.prefs.preview.agentOrigins, ['https://pcpartpicker.com', 'http://localhost:3000']);
+for (const bad of [['https://x.example/path'], ['javascript:alert(1)'], 'https://x.example',
+    Array.from({ length: 101 }, (_, i) => `https://s${i}.example`)]) {
+    assert.throws(() => prefs.save({ scope: 'user', patch: { preview: { agentOrigins: bad } } }),
+        (e) => e.code === 'value', `${JSON.stringify(bad).slice(0, 60)} was saved`);
+}
+const removed = prefs.save({ scope: 'user', patch: { preview: { agentOrigins: null } } });
+assert.deepStrictEqual(removed.prefs.preview.agentOrigins, [], 'cleared back to none');
+clear();
+ok('preview.agentControl is off by default, and agentOrigins holds only http(s) origins, at most 100');
 
 // The stall threshold: whole minutes, 0 for off, and read per workspace — a
 // project with slow silent builds is exactly the one that wants a longer one.

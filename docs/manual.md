@@ -1625,6 +1625,54 @@ an older shell or a plain browser tab those links go to the browser as before.
 Once a site is open you can browse around it; a link from it to another site
 still leaves for the browser, and so does a sign-in that hops through one.
 
+#### Letting an agent drive it
+
+*Let agents drive the preview* (Settings → Browser preview, off by default) lets
+an agent click, type and take screenshots in the page you see here, while you
+watch. It is for when you ask for it — "show me the checkout flow in the
+preview", "click through the form so I can see it" — and agents are told so: for
+their own testing they keep using a browser of their own.
+
+To try it:
+
+1. **Rebuild the desktop app** (`install.ps1`) — the shell holds the page, and an
+   older shell has nothing for an agent to connect to. Settings says so if yours is
+   too old.
+2. Tick *Let agents drive the preview*.
+3. **Start or restart the session** you want to use it from. A session gets the
+   tools when it starts, so one that was already running has not got them.
+
+Then ask. The agent opens the page with `open_in_preview` and drives it with the
+`preview` tools (Playwright's — `browser_snapshot`, `browser_click`,
+`browser_type`, …). While it is connected, a blue bar under the toolbar says
+*Agent is controlling this page* with the site it is on, and **Stop** disconnects
+it; the page stays as it is. Typing takes the keyboard to the page, the same as
+clicking into it would.
+
+**Sites other than local pages ask you first.** `localhost` and `127.0.0.1` need
+no asking. For anything else a yellow bar appears in the preview — *Agent wants
+to open pcpartpicker.com* — with **Allow once** (until the app quits), **Always
+allow**, and **Deny**. If the window is in the background you get a notification
+too, and one reminder ten minutes later if it is still waiting. The bar waits for
+you however long that takes: the agent is told you have not answered yet, and if
+you allow it later the page opens by itself. Two requests for the same site are
+one bar. A Deny is not asked again for ten minutes.
+
+The same check covers where the page goes on its own while an agent drives it: a
+link it clicks, a form, a popup or a redirect to a site you have not approved is
+stopped and asks, rather than loading — or escaping to your browser. With no
+agent connected, the preview behaves exactly as before.
+
+*Sites agents may open*, under the checkbox, lists every *Always allow*, each with
+**Remove**.
+
+What an agent cannot do: open or close preview pages of its own (it asks with
+`open_in_preview`), reach anything in the window but the preview's pages, or
+connect without the token the window minted — the endpoint is on `127.0.0.1` on
+the machine the window runs on, refuses web pages, and changes every time the
+setting is switched on or the app starts. One agent at a time: a second one
+connecting takes over from the first.
+
 ### What the dashboard counts
 
 A finished conversation is not finished work. The rail is full of sessions that

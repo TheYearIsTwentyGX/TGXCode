@@ -23,6 +23,12 @@
 // puts the system frame back is stored by the shell, because on Windows the
 // bridge's settings file is across WSL from it.
 //
+// And agent control of the preview (app/preview-cdp.js, app/preview-grants.js):
+// turning the endpoint on and off, Stop, which page is on screen, and the
+// per-site asks — raising one for open_in_preview, waiting on it, answering it.
+// Two of these are pushed rather than asked for: the endpoint's state, for the
+// toolbar's banner, and a new ask, for the notification.
+
 // A preload is a hole in the wall between the page and the shell, and each door
 // here is sized to the single thing on the other side of it. Anything the page
 // can already do, it keeps doing itself. The main process checks every call
@@ -54,6 +60,24 @@ contextBridge.exposeInMainWorld('claudeShell', {
         },
         getSetting: () => ipcRenderer.invoke('titlebar-get'),
         setSystem: (on) => ipcRenderer.invoke('titlebar-set-system', on === true),
+    },
+    previewAgent: {
+        set: (on, origins) => ipcRenderer.invoke('preview-agent-set', {
+            on: on === true,
+            origins: Array.isArray(origins) ? origins.map(String) : [],
+        }),
+        state: () => ipcRenderer.invoke('preview-agent-state'),
+        stop: () => ipcRenderer.invoke('preview-agent-stop'),
+        setActive: (webContentsId) => ipcRenderer.invoke('preview-agent-active',
+            Number.isInteger(webContentsId) ? webContentsId : null),
+        request: (url, sessionId) => ipcRenderer.invoke('preview-agent-request',
+            { url: String(url), sessionId: sessionId ? String(sessionId) : null }),
+        wait: (origin, ms) => ipcRenderer.invoke('preview-agent-wait', { origin: String(origin), ms: Number(ms) }),
+        answer: (origin, decision) => ipcRenderer.invoke('preview-agent-answer',
+            { origin: String(origin), decision: String(decision) }),
+        sessionGone: (sessionId) => ipcRenderer.invoke('preview-agent-session-gone', String(sessionId)),
+        onState: (fn) => { ipcRenderer.on('preview-agent-state', (_e, s) => fn(s)); },
+        onNotify: (fn) => { ipcRenderer.on('preview-agent-notify', (_e, a) => fn(a)); },
     },
 });
 

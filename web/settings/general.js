@@ -45,6 +45,12 @@ import { renderKeymap } from './shortcuts.js';
 import { renderConvToolbarSettings, renderToolbarSettings } from './toolbar.js';
 import { windowCard, windowSettingsAvailable } from './window.js';
 
+// Whether this window can be driven by an agent (web/preview-agent.js): the
+// desktop shell, new enough. Read here rather than imported from that module,
+// which imports notifications.js, which reaches back here before this file has
+// run — and SETTINGS below is built while this file loads.
+const canDrivePreview = Boolean(window.claudeShell && window.claudeShell.previewAgent);
+
 // Here rather than beside paintRailSort() in app.js, which draws the rail head's
 // menu from it, because SETTINGS below reads it while this module evaluates —
 // and that is before app.js's body has run, so a `const` there is not yet set.
@@ -398,6 +404,23 @@ export const SETTINGS = [
                     + '*.example.com subdomains only, and anything with a / is a URL '
                     + 'prefix. Lines starting with # are ignored. Saved when you '
                     + 'leave the box.' },
+            { key: 'agentControl', type: 'bool',
+                label: 'Let agents drive the preview',
+                note: 'When you ask an agent to use the preview, it can click, type and take '
+                    + 'screenshots in the page you see here, through Playwright, while you watch. '
+                    + 'Local pages need no asking; any other site asks you first, in the preview. '
+                    + 'A bar over the page says when an agent is connected, with Stop. Applies to '
+                    + 'sessions started from now on.'
+                    + (canDrivePreview ? ''
+                        : window.claudeShell
+                            ? ' This app was packaged before that was possible: rebuild it (install.ps1).'
+                            : ' Needs the desktop app — a page in a browser cannot be driven.') },
+            { key: 'agentOrigins', type: 'origins', wide: true,
+                when: (p) => p.preview && p.preview.agentControl === true,
+                label: 'Sites agents may open',
+                empty: 'None yet. When an agent asks to open a site, “Always allow” puts it here.',
+                note: 'Sites you answered “Always allow” for. Remove one and an agent has to ask '
+                    + 'again. Local pages are always allowed and are not listed.' },
         ],
     },
     {
@@ -844,6 +867,22 @@ function settingControl(row, value, disabled, save, saveKey) {
                 const lines = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
                 save(lines.length ? lines : null);
             }}></textarea>`;
+    }
+    if (row.type === 'origins') {
+        // A list nobody types into: entries arrive from an answer in the preview,
+        // and the only edit is taking one back. An empty list is the default.
+        const list = Array.isArray(value) ? value : [];
+        if (!list.length) return html`<p class="settings-origins-empty">${row.empty || 'None.'}</p>`;
+        return html`<ul class="settings-origins">
+            ${list.map(origin => html`<li key=${origin}>
+                <code>${origin}</code>
+                <button class="linkish" type="button" disabled=${disabled}
+                    onClick=${() => {
+                        const next = list.filter(o => o !== origin);
+                        save(next.length ? next : null);
+                    }}>Remove</button>
+            </li>`)}
+        </ul>`;
     }
     if (row.type === 'text') {
         // Free text over several lines, committed on blur like a list. Kept as

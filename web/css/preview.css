@@ -261,3 +261,72 @@
 .app[data-preview-max="1"] .rail,
 .app[data-preview-max="1"] #live { display: none; }
 .app[data-preview-max="1"] .main { border-radius: 0; }
+
+/* ── an agent driving the preview ─────────────────────────────────────────
+   web/preview-agent.js. Under the toolbar and above the page, so whatever the
+   agent does to the page cannot cover it: one bar per site an agent is asking
+   to open, then the banner that says one is connected, with Stop. */
+
+.pv-agent {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid var(--outline-soft);
+}
+.pv-agent[hidden] { display: none; }
+
+.pv-ask,
+.pv-driving {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    min-height: 40px;
+    padding: var(--sp-2) var(--sp-6);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
+    color: var(--text);
+}
+.pv-ask { background: var(--yellow-cont); }
+.pv-ask + .pv-ask { border-top: 1px solid var(--outline-soft); }
+.pv-driving { background: var(--blue-cont); }
+.pv-ask-text,
+.pv-driving-text { flex: none; }
+/* The full URL gives where the host alone would not; it is the part that gives. */
+.pv-ask-url {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 400 var(--fs-sm)/var(--lh-none) var(--mono);
+    color: var(--text-3);
+}
+.pv-driving-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pv-ask-btn {
+    flex: none;
+    height: 28px;
+    padding: 0 var(--sp-5);
+    border: 1px solid var(--outline);
+    border-radius: var(--r-xs);
+    background: var(--s1);
+    color: var(--text);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
+    cursor: pointer;
+}
+.pv-ask-btn:hover { background: var(--s4); }
+.pv-ask-btn.deny { color: var(--red); }
+
+.pv-driving-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+}
+/* Lit while commands are arriving, so "connected" and "doing something now"
+   read differently. */
+.pv-driving.active .pv-driving-dot { animation: pv-driving-pulse 1s ease-in-out infinite; }
+@keyframes pv-driving-pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+    .pv-driving.active .pv-driving-dot { animation: none; }
+}
