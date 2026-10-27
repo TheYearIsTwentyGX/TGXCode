@@ -267,7 +267,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/commands-config*`;
-`/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
+`/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`; `/api/preview/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
 `POST /api/worktrees/remove`;
@@ -2014,7 +2014,7 @@ User file only. In a file a bad entry is dropped alone with one `problems` line;
 `PUT` it refuses the whole call, as every value does. The array is one key, so a
 `PUT` naming it replaces the list whole — send all of it, and `null` to empty it.
 
-`preview` is the desktop page's in-window browser preview, and is five keys:
+`preview` is the desktop page's in-window browser preview, and is seven keys:
 
 | Key | Type | |
 |---|---|---|
@@ -2023,6 +2023,8 @@ User file only. In a file a bad entry is dropped alone with one `problems` line;
 | `links` | **bool**, default `false` | a link clicked in rendered markdown (a message, a plan, a review) opens in the preview rather than the system browser, subject to `listMode` and `list`. |
 | `listMode` | **`"block"` or `"allow"`**, default `"block"` | what `list` is: `"block"` previews every link except those matching it, `"allow"` only those matching it. An empty allowlist previews nothing. |
 | `list` | **array of strings**, default `[]`, at most 200, each 1–200 characters with no line break | domain and URL patterns. `example.com` matches that host and its subdomains, `*.example.com` subdomains only, and an entry containing `/` is a URL prefix with an optional scheme. `#` entries are comments. Entries are trimmed and repeats dropped silently; in a file a bad entry is dropped alone with one `problems` line, in a `PUT` it refuses the whole call. The array is one key: a `PUT` replaces it whole, and `null` empties it. Matching is the client's (`web/link-policy.js`); the bridge only checks shape. |
+| `agentControl` | **bool**, default `false` | whether agents may drive the preview with Playwright (§*An agent driving the preview*). **Applied by the bridge when it spawns `claude`**, like `agentBrowser`: on, each session started from then on gets the `preview` MCP server and the `open_in_preview` tool, both auto-approved. A session already running keeps what it was started with. The desktop window also reads it, to start or stop the shell's endpoint. |
+| `agentOrigins` | **array of strings**, default `[]`, at most 100, each an http(s) **origin exactly** (`"https://example.com"` — no path, no trailing slash) | the sites the user answered *Always allow* for when an agent asked to open one in the preview. Loopback never needs to be here. In a file a bad entry is dropped alone with one `problems` line (a trailing `/` is forgiven there); in a `PUT` it refuses the whole call. One key: a `PUT` replaces it whole, and `null` empties it. Written by the desktop window when the user answers *Always allow*; removing an entry is how an Always is taken back. |
 
 `devbrowser` is whether DevBrowser is part of the app, and where a "show me this
 port" click goes. Three keys:
@@ -2218,7 +2220,7 @@ reason: it is the settings, read.
 | `role` | string or null | as understood |
 | `main` | object `{edited: bool, source: string, parts: [{text, on: bool, why?: string}]}` | `source` is the template in force (the shipped one unless edited); `parts` is it rendered, in order, with `on: false` for what a condition left out and `why` naming the condition (`"devbrowser"`, `"!headless"`, `"else of phone"`). Joining the `on` parts gives `text` before whitespace is tidied. |
 | `sections` | array of objects | one per section, in listing order: `{id, title, summary: string, requires: [string], enabled: bool, edited: bool, missing: [string], available: bool, source: string, text: string, parts: […]}`. `available` is `enabled && every requires is on && brief.enabled`; `missing` names the `requires` features that are off. `text` is rendered whether or not it is available. |
-| `features` | object `{devbrowser, headless, projectCommands, worker, orchestrator}`, each bool | what the conditions test: `devbrowser.show`; `agentBrowser.mode === "headless"`; the project declares at least one command; and the role. |
+| `features` | object `{devbrowser, headless, previewControl, projectCommands, worker, orchestrator}`, each bool | what the conditions test: `devbrowser.show`; `agentBrowser.mode === "headless"`; `preview.agentControl`; the project declares at least one command; and the role. The `preview` section requires `previewControl`. |
 | `featureNames` | object, feature → string | a one-line description of each feature, for a UI |
 | `problems` | [string] | template problems, prefixed with the text they are in (`"Main brief: …"`, `"Scheduling: …"`): an unclosed `{{#if}}`, a stray `{{/if}}` or `{{else}}` (each kept as literal text), an unknown condition name (treated as off), an unknown `{{variable}}` (kept as text) |
 
@@ -3872,6 +3874,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
 | `notifications-cleared` | `{at}` — the log was emptied, by this window or another |
+| `preview-open` | `{id: string, url: string, sessionId: string or null}` — an agent called `open_in_preview` (§*An agent driving the preview*). **Only a window that can host an agent-driven page answers it**, with `POST /api/preview/open/:id`; every other client — a phone, a browser tab — ignores it and must not answer. Ungated: every stream gets it |
 | `runner-status` | see below |
 | `runner-stalled` | `{sessionId: string, stalled: boolean, lastActivityAt: number\|null, busySince: number\|null, stalledAfterMs: number}` — a busy turn crossed into or out of *stalled* (rule under §*`runner-status`*). Times are epoch ms; `stalledAfterMs` is the threshold in force for that session's directory. Sent once per crossing, never repeated while it stays stalled. `stalled: false` comes from the next line on the stream **or** from the turn ending any way at all — stopped, finished, died — so a client may treat it as "take the badge and the toast down". A `runner-status` carrying the same `stalled` follows (or, on a turn ending, is the same broadcast's next message), so a client that only reads `runner-status` still draws it right; this event exists for the notification. A `stalled: true` also files a loud `stalled` notification row |
 | `permission-request` | `{sessionId, ...ask}` |
@@ -6482,6 +6485,92 @@ calling session. It says where the install got to in the same words
 `install_on_phone` uses, plus progress, `stalled`, `attempts` and how long ago it
 was filed and last updated. An error result when there is no such id, or the
 session has filed nothing in the newest 20.
+
+## An agent driving the preview
+
+When `preview.agentControl` is on, an agent can drive the browser preview in the
+desktop window with Playwright while the user watches. Three pieces, of which only
+the last two are the bridge's:
+
+- **The endpoint is the desktop shell's** (`app/preview-cdp.js`), on loopback on the
+  machine the window runs on: a Chrome DevTools Protocol endpoint built on each
+  preview guest's own debugger, which lists the preview's pages and nothing else. Its
+  URL is `http://127.0.0.1:<port>/<token>`, with a fresh random token each time it
+  starts; it refuses any request with an `Origin` header or a non-loopback `Host`.
+- **The window registers that URL** with `POST /api/preview/agent`, and the bridge
+  keeps it in `preview-agent-<bridge port>.json` in its state directory, mode `0600`.
+- **Each session's `preview` MCP server** (`bridge/preview-mcp.js`) is Playwright MCP
+  (`npx -y @playwright/mcp@latest`) pointed at a relay of its own, which reads that
+  file on every connection. Its tools are Playwright MCP's (`browser_snapshot`,
+  `browser_click`, `browser_type`, `browser_navigate`, `browser_take_screenshot`, …),
+  named `mcp__preview__*`.
+
+Every route below is **local-only** (403 to a remote caller). A phone has nothing to
+do here: it neither hosts the preview nor answers `preview-open`.
+
+**Which sites.** Local pages (`localhost`, `127.0.0.1`, `[::1]`) are always allowed.
+Any other origin needs the user's yes, asked in the preview: *Allow once* (until the
+app quits), *Always allow* (saved to `preview.agentOrigins`) or *Deny* (refused
+without asking again for 10 minutes). An ask never times out; it ends on an answer,
+or when every session that asked has stopped. Two requests for one origin are one
+ask. A top-level `Page.navigate` (`browser_navigate`), or a link click, form, popup
+or server redirect on a page an agent is driving, to an origin not yet approved is
+refused at once and raises the ask. The refusals an agent reads, exactly:
+
+- `Navigation to <url> blocked: <host> is not approved for agent control in the TGXCode preview. The user has been asked to approve it, and the prompt stays open until they answer — wait for their answer and retry, or call open_in_preview with the URL, which waits for the decision.`
+- `Navigation to <url> blocked: the user denied <host> for agent control.`
+
+With no agent connected, a guest behaves as it always has: a link off an approved
+site goes to the system browser, and a redirect is left alone.
+
+### `GET /api/preview/agent`
+
+`200 {enabled: bool, registered: bool, at: number or null}` — `enabled` is
+`preview.agentControl`; `registered` whether a window's endpoint is on file, and `at`
+when it was written (epoch ms). The endpoint itself is never returned.
+
+### `POST /api/preview/agent`
+
+The window's registration: `{endpoint: string}`, exactly
+`http://127.0.0.1:<port>/<32–128 hex>` (or `localhost`). `200 {ok: true}`;
+`400 {ok: false, error}` for anything else. Accepted whatever the setting says.
+
+### `DELETE /api/preview/agent`
+
+The window withdrew it (the setting went off). `200 {ok: true}`, also when there was
+nothing to delete.
+
+### `POST /api/preview/open`
+
+`open_in_preview`. Body `{url: string, sessionId?: string}`. The URL must be http(s)
+without credentials (`400 {error}` otherwise). `409 {error}` while
+`preview.agentControl` is off. Otherwise the bridge broadcasts `preview-open` and
+waits for a window's answer — about 8 seconds for one to say anything, and about 75
+seconds once one has said it is asking the user. The answer is
+`{ok: bool, outcome, url, error?: string}`, with the status following `outcome`:
+
+| `outcome` | Status | Meaning |
+|---|---|---|
+| `opened` | 200 | the page is in the preview |
+| `waiting` | 202 | the user has not answered within a minute. The ask stays open and the page opens by itself if they allow it; `error` is the sentence the agent reads. Calling again from the same session returns this at once rather than waiting another minute. Also the answer when the window that was asking goes quiet (reloaded, say): the ask is the shell's and outlives the page |
+| `denied` | 403 | the user denied that site (`error`: `Not opened: the user denied <host> for agent control.`) |
+| `no-window` | 503 | no window answered: none is open, or none can host an agent-driven page |
+| `failed` | 409 | the window refused the URL or could not show it |
+
+### `POST /api/preview/open/:id`
+
+A window's answer to `preview-open` with that `id`: first `{pending: true}` if it is
+asking the user, then `{ok: bool, outcome: string, url?: string, error?: string}`.
+`200 {ok: true}`; `404 {error}` when nobody is waiting on that id (answered already,
+or timed out).
+
+### The `open_in_preview` MCP tool
+
+Listed by the `tgxcode` server only for a session started with
+`preview.agentControl` on, and auto-approved: `{url: string}`. It posts
+`POST /api/preview/open` with the session's id and reads back the outcome: `opened`
+as a plain result, `waiting` as a plain result too (it is not an error, and the text
+says not to retry), anything else as an error result with the bridge's sentence.
 
 ## Publishing to GitHub
 

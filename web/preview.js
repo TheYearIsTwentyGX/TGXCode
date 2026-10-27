@@ -83,6 +83,8 @@ export class PreviewPane {
      * @param {(entry: object) => void} [o.onOutput]      show a task's terminal
      * @param {(entry: object) => void} [o.onDevBrowser]  hand the page to DevBrowser
      * @param {(on: boolean) => void} [o.onMaximize]
+     * @param {(webContentsId: number|null) => void} [o.onActive]  the page on screen
+     *   changed — web/preview-agent.js tells the shell, which lists it first to an agent
      */
     constructor(o) {
         this.o = o;
@@ -286,6 +288,18 @@ export class PreviewPane {
         entry.node.classList.add('active');
         if (this.visible) this.hold(entry);
         this.paintToolbar();
+        this.tellActive();
+    }
+
+    /** The guest on screen's webContents id, or null — only a ready <webview> has one. */
+    activeWebContentsId() {
+        const a = this.active;
+        if (!(HAS_WEBVIEW && a && a.ready)) return null;
+        try { return a.node.getWebContentsId(); } catch { return null; }
+    }
+
+    tellActive() {
+        if (this.o.onActive) this.o.onActive(this.activeWebContentsId());
     }
 
     /** It is being looked at: stop its clock. */
@@ -339,6 +353,7 @@ export class PreviewPane {
         if (entry === this.active) {
             if (this.picking) this.setPicking(0);
             this.paintToolbar();
+            this.tellActive();
         }
     }
 

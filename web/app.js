@@ -6,6 +6,10 @@
 
 import { configurePaths } from './markdown.js';
 import { PreviewPane, canPreviewUrls } from './preview.js';
+import {
+    paintPreviewAgent, previewAgentActive, previewAgentOpen, previewAgentReconnected, previewAgentRunner,
+    syncPreviewAgent, wirePreviewAgent,
+} from './preview-agent.js';
 import { opensInPreview } from './link-policy.js';
 import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { liveOverDock, liveOverFixed } from './live-over.js';
@@ -234,6 +238,17 @@ export const previewPane = new PreviewPane({
     onDevBrowser: (entry) => handToDevBrowser({ port: entry.port, title: entry.title }),
     showDevBrowser: () => devBrowserShown(),
     onMaximize: (on) => { state.preview.max = on; paintPanels(); },
+    onActive: (id) => { previewAgentActive(id); paintPreviewAgent(); },
+});
+
+// An agent driving the preview: the asks, the banner and Stop under its toolbar,
+// and open_in_preview. Off until `preview.agentControl` is on. web/preview-agent.js.
+wirePreviewAgent({
+    root: dom.preview.querySelector('[data-pv="agent"]'),
+    pane: previewPane,
+    showPreview: (on) => showPreview(on),
+    previewOpen: () => state.preview.open,
+    toast: (text, kind) => toast(text, kind),
 });
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -2616,6 +2631,9 @@ function connect() {
 
     es.addEventListener('hello', (e) => {
         state.clientId = JSON.parse(e.data).clientId;
+        // A bridge that restarted may be a different checkout's; tell it where
+        // the preview's endpoint is again. Nothing happens with agent control off.
+        previewAgentReconnected();
         // A new client id knows nothing about what this window was following, so
         // the boards have to be asked for again — including when no session is
         // open, which is the ordinary case for a window left on one of them.
@@ -2823,6 +2841,7 @@ function connect() {
         paintShortcutHints();
         paintComposerHint();
         paintToolbar();
+        syncPreviewAgent();
         // `live.over*` may have changed whether the board is up over this panel.
         paintPanels();
         if (liveVisible()) renderLive();
@@ -2933,8 +2952,12 @@ function connect() {
         }
     });
 
+    // open_in_preview, from an agent. See web/preview-agent.js.
+    es.addEventListener('preview-open', (e) => previewAgentOpen(JSON.parse(e.data)));
+
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
+        previewAgentRunner(s);
         noteRunner(s);   // when this turn started, for the notification rules
         digestOnRunner(s);
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);

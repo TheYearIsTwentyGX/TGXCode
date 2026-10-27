@@ -417,6 +417,11 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/devservers/stop') {
         return 'dev servers can only be stopped from the machine they run on';
     }
+    // The endpoint registered here drives a page on this desktop, and the page
+    // asked for opens in a window somebody is sitting at. See bridge/preview-agent.js.
+    if (pathname.startsWith('/api/preview/')) {
+        return 'the browser preview is only reachable from the machine it runs on';
+    }
     if (pathname.startsWith('/api/devbrowser')) {
         return 'DevBrowser is only reachable from the machine it runs on';
     }
@@ -696,6 +701,7 @@ const ROUTES = [
     require('./routes/machine'),
     require('./routes/files'),
     require('./routes/phone-installs'),
+    require('./routes/preview'),
 ];
 
 // Builds the full-text index in the background, a few milliseconds at a time.
@@ -871,6 +877,11 @@ pool.stallAfter = (cwd) => {
 // reaches the next session started; one already running keeps its browser.
 pool.agentBrowser = () => {
     try { return prefs.forCwd().agentBrowser.mode; } catch { return 'visible'; }
+};
+// Whether a session gets the `preview` MCP server and open_in_preview — see
+// bridge/preview-mcp.js. Read at spawn for the same reason.
+pool.previewControl = () => {
+    try { return prefs.forCwd().preview.agentControl === true; } catch { return false; }
 };
 // The agent brief — what TGXCode is and offers, appended to every session's
 // system prompt at each spawn, new or resumed. See bridge/brief.js. Composed from

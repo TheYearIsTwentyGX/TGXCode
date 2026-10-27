@@ -38,9 +38,10 @@ function BriefGroup() {
     const [error, setError] = useState(null);
     const [struck, setStruck] = useState(true);
     // What the composition depends on that a save can move: the brief's own
-    // keys, and the two browser settings that are features.
+    // keys, and the three browser settings that are features.
     const d = s.data || {};
-    const deps = JSON.stringify([d.brief, d.devbrowser, d.agentBrowser]);
+    const deps = JSON.stringify([d.brief, d.devbrowser, d.agentBrowser,
+        d.preview && d.preview.agentControl]);
 
     useEffect(() => {
         let gone = false;

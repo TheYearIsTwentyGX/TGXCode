@@ -429,6 +429,16 @@ const DEFAULTS = {
         // pattern syntax.
         listMode: 'block',
         list: [],
+        // Whether an agent may drive the preview with Playwright, so you watch it
+        // click and type in this window. Off is what a session has always had: its
+        // own test browser and nothing of yours. Read at spawn, like agentBrowser —
+        // a session started before it was turned on has no preview tools. See
+        // app/preview-cdp.js and bridge/preview-mcp.js.
+        agentControl: false,
+        // Sites the user answered "Always allow" for when an agent asked to open
+        // one, as origins. Loopback never needs to be here. Removing one here is
+        // how an Always is taken back. See app/preview-grants.js.
+        agentOrigins: [],
     },
     devbrowser: {
         // Whether the app mentions DevBrowser at all: the status pill, "open in
@@ -681,6 +691,8 @@ const SHAPE = {
         overLive: (v) => typeof v === 'boolean',
         links: (v) => typeof v === 'boolean',
         listMode: (v) => v === 'block' || v === 'allow',
+        agentControl: (v) => typeof v === 'boolean',
+        agentOrigins: (v) => Array.isArray(v) && v.length <= MAX_AGENT_ORIGINS && v.every(isAgentOrigin),
         list: (v) => Array.isArray(v) && v.length <= MAX_LINK_PATTERNS
             && v.every((s) => typeof s === 'string' && s.length > 0 && s.length <= 200),
     },
@@ -983,6 +995,36 @@ function cleanLinkList(value, note) {
     return out;
 }
 
+// `preview.agentOrigins`: sites the user answered "Always allow" for when an agent
+// asked to open one in the preview (app/preview-grants.js). Each is an origin
+// exactly — `https://example.com`, no path, no trailing slash — because that is
+// what is compared against, and a near miss would be a grant that never matches.
+const MAX_AGENT_ORIGINS = 100;
+
+function isAgentOrigin(s) {
+    if (typeof s !== 'string' || !s || s.length > 300) return false;
+    try {
+        const u = new URL(s);
+        return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === s;
+    } catch { return false; }
+}
+
+function cleanAgentOrigins(value, note) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    for (const raw of value) {
+        const s = typeof raw === 'string' ? raw.trim().replace(/\/+$/, '') : raw;
+        if (!isAgentOrigin(s)) { note(`${JSON.stringify(raw)} is not an http(s) origin`); continue; }
+        if (out.includes(s)) continue;
+        if (out.length >= MAX_AGENT_ORIGINS) {
+            note(`more than ${MAX_AGENT_ORIGINS} sites agents may open — the rest dropped`);
+            break;
+        }
+        out.push(s);
+    }
+    return out;
+}
+
 // `reviews.types`. Colours are names rather than hex so that a type wears the
 // palette's own hue in both themes — web/css/reviews.css maps each to a token.
 const REVIEW_TYPES_MAX = 20;
@@ -1049,7 +1091,7 @@ const SANITIZE = {
     projects: { colors: cleanColors, order: cleanOrder },
     toolbar: { items: cleanToolbar, conversation: cleanConvToolbar },
     wispr: { transforms: wispr.cleanTransforms },
-    preview: { list: cleanLinkList },
+    preview: { list: cleanLinkList, agentOrigins: cleanAgentOrigins },
     reviews: { types: cleanReviewTypes },
 };
 
@@ -1234,7 +1276,8 @@ class Prefs {
             toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items],
                 conversation: [...DEFAULTS.toolbar.conversation] },
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
-            preview: { ...DEFAULTS.preview, list: [...DEFAULTS.preview.list] },
+            preview: { ...DEFAULTS.preview, list: [...DEFAULTS.preview.list],
+                agentOrigins: [...DEFAULTS.preview.agentOrigins] },
             devbrowser: { ...DEFAULTS.devbrowser },
             standing: { ...DEFAULTS.standing },
             startup: { ...DEFAULTS.startup },

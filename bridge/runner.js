@@ -198,25 +198,46 @@ const ROLE_TOOLS = {
 // the very inbox it was trying to write to.
 const ALWAYS_ALLOW = new Set(['mcp__tgxcode__report_to_orchestrator']);
 
-function mcpConfig(sessionId, role = null) {
-    return JSON.stringify({
-        mcpServers: {
-            tgxcode: {
-                command: process.execPath,
-                args: [
-                    path.join(__dirname, 'mcp.js'),
-                    '--port', String(cfg.PORT),
-                    '--session', sessionId,
-                    // Which tools to list. Fixed at spawn, like everything on this
-                    // line: the CLI reads the tool list once, so a session whose
-                    // role changes has to be restarted to see it — see
-                    // RunnerPool#recycle.
-                    ...(role ? ['--role', role] : []),
-                ],
-            },
+// The `--mcp-config` string itself; see the note above AGENT_TOOLS for its shape.
+//
+// **`preview` is the second server, and only when `preview.agentControl` is on.**
+// It is Playwright MCP pointed at the browser preview in the user's window rather
+// than at a browser of its own; bridge/preview-mcp.js says how. Named `preview`
+// so its tools (`mcp__preview__browser_click`, …) cannot be mistaken for the
+// user's own Playwright server's, which stays exactly as it was. With it,
+// tgxcode lists open_in_preview, which is how an agent gets a page there to drive.
+function mcpConfig(sessionId, role = null, { preview = false } = {}) {
+    const servers = {
+        tgxcode: {
+            command: process.execPath,
+            args: [
+                path.join(__dirname, 'mcp.js'),
+                '--port', String(cfg.PORT),
+                '--session', sessionId,
+                // Which tools to list. Fixed at spawn, like everything on this
+                // line: the CLI reads the tool list once, so a session whose
+                // role changes has to be restarted to see it — see
+                // RunnerPool#recycle.
+                ...(role ? ['--role', role] : []),
+                ...(preview ? ['--preview'] : []),
+            ],
         },
-    });
+    };
+    if (preview) {
+        servers.preview = {
+            command: process.execPath,
+            args: [path.join(__dirname, 'preview-mcp.js'), '--port', String(cfg.PORT)],
+        };
+    }
+    return JSON.stringify({ mcpServers: servers });
 }
+
+// Answered without a card when the preview server is there. Turning the setting
+// on is the consent: what these reach is the page in the preview pane and
+// nothing else (app/preview-cdp.js), the user is watching it happen, and a card
+// per click would make watching an agent use the page impossible. `mcp__preview`
+// with no tool name is every tool that server lists.
+const PREVIEW_TOOLS = ['mcp__preview', 'mcp__tgxcode__open_in_preview'];
 
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
@@ -396,6 +417,9 @@ class Runner extends EventEmitter {
         // Whether the browser an agent tests with gets a window. Supplied by the
         // pool from `agentBrowser.mode`; see sessionEnv().
         this.agentBrowser = opts.agentBrowser || (() => 'visible');
+        // Whether this session may drive the browser preview — `preview.agentControl`,
+        // supplied by the pool and read at each spawn. See mcpConfig().
+        this.previewControl = opts.previewControl || (() => false);
         // The agent brief for this session, or null — see bridge/brief.js.
         // Supplied by the pool and asked at each spawn, so a settings change
         // reaches the next process, resumed ones included.
@@ -569,8 +593,11 @@ class Runner extends EventEmitter {
         // has to ask before it schedules or starts anything.
         const role = this.roleOf(this.sessionId);
         this.role = role ? role.role : null;
-        args.push('--mcp-config', mcpConfig(this.sessionId, this.role));
+        let preview = false;
+        try { preview = this.previewControl(this.cwd) === true; } catch { /* off */ }
+        args.push('--mcp-config', mcpConfig(this.sessionId, this.role, { preview }));
         for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
+        if (preview) for (const tool of PREVIEW_TOOLS) args.push('--allowedTools', tool);
         for (const tool of (this.role && ROLE_TOOLS[this.role]) || []) args.push('--allowedTools', tool);
         // What TGXCode is and offers (bridge/brief.js), then what an orchestrator
         // or a worker is for, with the user's own addendum. Appended rather than
@@ -2453,6 +2480,9 @@ class RunnerPool extends EventEmitter {
         // And whether an agent's test browser draws a window. `visible` is what
         // every session did before there was a setting.
         this.agentBrowser = () => 'visible';
+        // And whether a session gets the preview's tools. Off is what every
+        // session had before there was a setting.
+        this.previewControl = () => false;
         // And the agent brief, replaced by the server with bridge/brief.js.
         // None is what a session got before there was one.
         this.agentBrief = () => null;
@@ -2565,6 +2595,7 @@ class RunnerPool extends EventEmitter {
             rerollAfter: (dir) => this.rerollAfter(dir),
             stallAfter: (dir) => this.stallAfter(dir),
             agentBrowser: (dir) => this.agentBrowser(dir),
+            previewControl: (dir) => this.previewControl(dir),
             agentBrief: (dir, role) => this.agentBrief(dir, role) });
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
@@ -2918,4 +2949,4 @@ class RunnerPool extends EventEmitter {
     }
 }
 
-module.exports = { RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, sessionEnv };
+module.exports = { RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, sessionEnv, mcpConfig, PREVIEW_TOOLS };

@@ -377,6 +377,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/commands.js` | A project's commands, their runs, and the editor's view of the files that declare them |
 | `bridge/routes/terminals.js` | A terminal pane's stream, input, size and close — all refused remotely |
 | `bridge/routes/machine.js` | Dev servers, DevBrowser and Wispr Flow — the machine outside the app |
+| `bridge/routes/preview.js` | `/api/preview/*` (local only): a window registers the shell's CDP endpoint, and `open_in_preview` waits for a window to open the page or ask the user |
 | `bridge/routes/phone-installs.js` | `/api/phone-installs*`: filing an APK (local only), the list, the download with `Range`, the phone's status reports and progress heartbeats, cancel, retry |
 | `bridge/routes/files.js` | `/api/fs`, `mkdir`, `open`, `/api/attachments`, and the attachment helpers the session routes share |
 | `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
@@ -454,7 +455,9 @@ Two rules worth knowing before you send a patch:
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
 | `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
 | `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
-| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session, install an APK on the phone, read the agent brief's sections |
+| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session, install an APK on the phone, read the agent brief's sections, open a page in the preview |
+| `bridge/preview-agent.js` | An agent driving the preview, the bridge's half: the endpoint a window registered (a 0600 file per port) and the `preview-open` handshake |
+| `bridge/preview-mcp.js` | The `preview` MCP server: Playwright MCP, run against a relay that finds the window's current endpoint on every connection |
 | `bridge/phone-installs.js` | APKs filed for the phone: the copy and its sha256, the state the phone reports, the first-`downloading` claim, progress heartbeats, `stalled` and the 3-minute release of a claim gone quiet, retry, and the 24h retention |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
@@ -576,6 +579,8 @@ Two rules worth knowing before you send a patch:
 | `web/titlebar-drag.js` | Click or window drag? The 4px press state machine behind drag-through, pure so a test can drive it |
 | `web/startup.js` | What a new window opens to — turns Settings › On startup into the address a launch restores, and stays out of the way on a refresh. Pure, so a test can import it |
 | `web/live-over.js` | Whether the live board stays up over a whole-screen panel and how it docks there, from Settings › Live board visibility — `side`/`stacked` are layouts, `always` follows the dock toggle. Pure, so a test can import it |
+| `web/preview-agent.js` | An agent driving the preview, the window's half: starting the shell's endpoint, `open_in_preview`, the Allow once / Always / Deny bar and the "Agent is controlling this page — Stop" banner |
+| `web/preview-open.js` | What the window does with `open_in_preview` — open, ask, wait a minute, answer — pure, and tested by `test/preview-open.test.js` |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/orchestrator.js` | An orchestrator's plumbing: loading its payload, the header's role toggle, the one line above the composer (the plain conversation's strip back to the page, or a worker's line up to its orchestrator), and the inbox list and settings form the page reuses |
@@ -611,8 +616,10 @@ Two rules worth knowing before you send a patch:
 | `web/css/palette.css` | The command palette |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
-| `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes, and the titlebar's colours, drag and frame setting |
+| `app/preload.js` | The page's only doors into the shell: raise the window, the preview's two clipboard writes, the titlebar's colours, drag and frame setting, and agent control of the preview |
 | `app/titlebar.js` | The top bar as the window's titlebar: native caption-button overlay (traffic lights on macOS) coloured from the page's theme and resized with the zoom, the window drag a bar button carries, dragging out of maximised, and the *Use system titlebar* way back (`shell-prefs.json` in the shell's profile) |
+| `app/preview-cdp.js` | The CDP endpoint an agent's Playwright drives the preview through — a pretend browser over each preview guest's own debugger, with nothing else in it |
+| `app/preview-grants.js` | Which sites a preview guest may show and an agent may open: loopback, Allow once, Always, Deny, and the asks that wait for the user |
 | `app/make-icon.js` | Generates the packaged shell's icon |
 
 `launch.sh` exists because the shell starts the bridge with `bash -lc` — a

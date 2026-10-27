@@ -40,7 +40,7 @@ export const PREFS_FALLBACK = {
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
     toolbar: { items: [], conversation: [] },
     wispr: { transforms: [] },
-    preview: { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [] },
+    preview: { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [], agentControl: false, agentOrigins: [] },
     devbrowser: { show: true, openIn: 'devbrowser', whenClosed: 'launch' },
     standing: { mode: 'model' },
     startup: { view: 'conversation', live: false },

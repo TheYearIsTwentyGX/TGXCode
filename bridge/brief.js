@@ -58,6 +58,7 @@ const MAX_TEXT = 8000;
 const FEATURES = {
     devbrowser: 'DevBrowser is shown (Settings → DevBrowser)',
     headless: 'the agent test browser runs headless (Settings → Agent test browser)',
+    previewControl: 'agents may drive the browser preview (Settings → Browser preview)',
     projectCommands: 'the project declares commands in .tgxcode/commands.json',
     worker: 'the session is a worker started by an orchestrator',
     orchestrator: 'the session is an orchestrator',
@@ -80,6 +81,9 @@ Its \`tgxcode\` MCP tools give you:
 {{/if}}
 {{#if phone}}
 - install_on_phone: put an APK you built on the user's phone, without adb.
+{{/if}}
+{{#if previewControl}}
+- open_in_preview: put a page in the user's preview pane, to drive with the \`preview\` server's browser tools — only when they ask you to use the preview.
 {{/if}}
 {{#if worker}}
 - report_to_orchestrator: questions, progress and "done" go to your orchestrator.
@@ -183,6 +187,19 @@ In a command, \`\${port}\` becomes a free port from the command's range when it 
 When you test a page with a browser tool (Playwright MCP, if the user has it), {{#if headless}}it runs headless: nothing is drawn on the user's screen, and screenshots and clicks still work. Take a screenshot when you need to see the page.{{else}}a real window opens on the user's desktop and can take the keyboard from whatever they are typing. Keep runs short and close the browser when you are done.{{/if}}
 
 Test against a dev server of your own, not an app the user is running, and never sign in to a real account or submit a form that does anything outside your test.`,
+    },
+    {
+        id: 'preview',
+        title: 'The user\'s preview',
+        summary: 'driving the browser preview in the user\'s window, when they ask',
+        requires: ['previewControl'],
+        text: `## The user's preview
+
+The user lets agents drive the browser preview in their TGXCode window. Use it only when they ask you to use the preview, or for an interactive check they want to watch; it is their screen, not your test browser.
+
+- Call open_in_preview({url}) to put the page there, then use the \`preview\` server's browser_* tools on it: browser_snapshot first, then browser_click, browser_type, browser_take_screenshot and the rest. They act on the page the user is looking at, and cannot open or close pages.
+- Local pages (localhost, 127.0.0.1) need no approval. Any other site needs the user's yes, per site, asked in the preview. open_in_preview waits up to a minute for it; if they have not answered, the prompt stays open and the page opens by itself when they allow it, so check back later rather than retrying. A browser_navigate, link or redirect to a site they have not approved is refused and raises the same prompt.
+- A bar over the page tells the user you are connected. If they press Stop you are disconnected: do not reconnect unless they ask.`,
     },
     {
         id: 'orchestration',
@@ -382,6 +399,7 @@ function featuresFor({ prefs, role = null, commands = null }) {
     return {
         devbrowser: !p.devbrowser || p.devbrowser.show !== false,
         headless: !!(p.agentBrowser && p.agentBrowser.mode === 'headless'),
+        previewControl: !!(p.preview && p.preview.agentControl === true),
         projectCommands: Array.isArray(commands) && commands.length > 0,
         worker: role === 'worker',
         orchestrator: role === 'orchestrator',
