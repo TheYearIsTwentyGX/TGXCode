@@ -820,6 +820,28 @@ const SET_SUMMARY = {
     },
 };
 
+const MOVE_SESSION = {
+    name: 'move_session',
+    title: 'Move yourself to another directory',
+    description: [
+        'Move this orchestrator session to another working directory. Use it when the user',
+        'asks you to change your working directory, or when you notice you are stuck in a',
+        'worktree you only `cd`-ed into: a `cd` does not outlast the call, and TGXCode',
+        'otherwise keeps starting you wherever your transcript last recorded you.',
+        'The move happens when this turn ends: your process is replaced by one resumed in',
+        '`cwd`, with this conversation intact, and anything sent to you meanwhile is',
+        'delivered there. Calling it again replaces the pending move. Nothing is copied or',
+        'deleted, and the directory you leave is left as it is.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            cwd: { type: 'string', description: 'Absolute path of the directory to move to (`~` allowed).' },
+        },
+        required: ['cwd'],
+    },
+};
+
 const REPORT = {
     name: 'report_to_orchestrator',
     title: 'Report to your orchestrator',
@@ -843,7 +865,7 @@ const REPORT = {
 };
 
 const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WORKER, ANSWER_WORKER,
-    READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY];
+    READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY, MOVE_SESSION];
 
 const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
     INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
@@ -1525,6 +1547,15 @@ async function callSetSummary(id, args) {
     return say(id, 'Summary updated.');
 }
 
+async function callMoveSession(id, args) {
+    if (typeof args.cwd !== 'string' || !args.cwd.trim()) return toolError(id, '`cwd` must be a directory path');
+    const { failed, body } = await orchCall(id, 'POST', 'move', { cwd: args.cwd.trim() });
+    if (failed) return failed;
+    if (body.queued) return say(id, `Will move to ${body.queued.cwd} when this turn ends.`);
+    if (body.cancelled) return say(id, `You already run in ${args.cwd.trim()}; the pending move was cancelled.`);
+    return say(id, `Moved to ${body.moved && body.moved.to}. Your next turn runs there.`);
+}
+
 async function callReport(id, args) {
     if (!SESSION_ID) return toolError(id, 'this session does not know its own id');
     const r = await api('POST', `/api/sessions/${encodeURIComponent(SESSION_ID)}/report`,
@@ -1541,7 +1572,7 @@ const ROLE_CALLS = {
         spawn_worker: callSpawnWorker, list_workers: callListWorkers, next_message: callNextMessage,
         send_to_worker: callSendToWorker, answer_worker: callAnswerWorker, read_worker: callReadWorker,
         stop_worker: callStopWorker, close_worker: callCloseWorker, get_usage: callGetUsage,
-        set_auto_resume: callSetAutoResume, set_summary: callSetSummary,
+        set_auto_resume: callSetAutoResume, set_summary: callSetSummary, move_session: callMoveSession,
     },
     worker: { report_to_orchestrator: callReport },
 };

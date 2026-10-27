@@ -97,6 +97,12 @@ function init(deps) {
     if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
     pool.roleOf = roleOf;
     pool.delegateFor = (id) => store.roleOf(id) === 'worker';
+    // A queue waits only for a move that will be made when the turn ends — not
+    // for one that is itself waiting on background work, which can take hours.
+    pool.holdFor = (id, r) => {
+        const mv = store.pendingMove(id);
+        return !!mv && (mv.force || !r.hasBackground);
+    };
 }
 
 function userPrefs() {
@@ -153,6 +159,9 @@ function orchestratorBrief(id) {
         '  set_auto_resume switches that for you alone, when the user asks you to carry',
         '  on (or not) by yourself; they see that you did, and why.',
         '- close_worker when a worker is finished with, so it stops counting.',
+        '- move_session moves you to another working directory when this turn ends:',
+        '  when the user asks, or when you find you are stuck in a worker\'s worktree. A',
+        '  `cd` there is what strands you, so read a worker\'s files by absolute path.',
         '- Items of kind task are work the user handed you, from a draft or the Start',
         '  dialog: a prompt plus the settings they chose. Fit it into your plan, brief and',
         '  merge order. Start it with spawn_worker passing task: <itemId> — its directory,',
@@ -286,11 +295,12 @@ function payload(id) {
 }
 
 /**
- * Where the orchestrator is: `{cwd, projectCwd, inWorktree, override}`, or null
+ * Where the orchestrator is: `{cwd, projectCwd, inWorktree, override, pending}`, or null
  * for a session the index has not seen yet. `cwd` is the live process's
  * directory when there is one and otherwise where the next message would start
  * it — the two differ only for a process started before a move, which the move
- * itself replaces. `override` is the move still in force, `{cwd, from, at}`.
+ * itself replaces. `override` is the move still in force, `{cwd, from, at}`;
+ * `pending` the one waiting for the turn to end, `{cwd, from, force, at}`.
  */
 function location(id) {
     const s = index.summary(id);
@@ -304,6 +314,7 @@ function location(id) {
         projectCwd: home,
         inWorktree: inWorktreeOf(cwd, home),
         override: store.cwdOverride(id, rec && rec.meta),
+        pending: store.pendingMove(id),
     };
 }
 
@@ -488,6 +499,7 @@ function onTurnComplete(res) {
 /** The orchestrator going idle by any route — a stop, an answered ask — is a chance to nudge. */
 function onStatus(s) {
     if (!s || !s.sessionId) return;
+    if (store.pendingMove(s.sessionId)) scheduleSettle(s.sessionId);
     if (store.get(s.sessionId) && s.state === 'idle') scheduleNudge(s.sessionId);
     else noteWorkerStatus(s);
 }
@@ -1048,49 +1060,183 @@ function resume(orchId) {
 }
 
 // ---------------------------------------------------------------------------
-// Moving it home
+// Moving it
 // ---------------------------------------------------------------------------
 
+/** Mid-turn, or waiting on a card: never a moment to replace the process at. */
+const turnRunning = (r) => !!r && (r.state === 'busy' || r.state === 'starting' || !!r.pendingPermission);
+
+function backgroundRefusal(r) {
+    const n = r.background.size;
+    const err = refuse(409, `${n} background task${n === 1 ? ' is' : 's are'} still running in it, `
+        + 'and moving it ends its process, which stops them. Send force to move it anyway.');
+    err.extra = { background: n };
+    return err;
+}
+
 /**
- * Move an orchestrator out of a worktree and back to its project's main
- * checkout. For a session that got into one without EnterWorktree — a `cd`
- * the bridge then took as where it lives — and so cannot leave: the transcript
- * keeps voting for the worktree, ExitWorktree has nothing to exit, and a `cd`
- * does not outlive the call. The answer is kept in the store (setCwdOverride)
- * rather than written into the transcript, which is Claude Code's file.
+ * Whether `claude --resume <id>` would find this session's transcript, which
+ * is the whole of what a move needs from Claude Code. Measured rather than
+ * assumed, on 2.1.304: `--resume` looks for `<id>.jsonl` in every directory
+ * under ~/.claude/projects, not only the one named after the cwd it starts in.
+ * From the same directory, a subdirectory, a worktree of the same repository,
+ * the parent, a sibling and an unrelated repository, it resumed the one
+ * conversation with its history, and appended every turn to the original file
+ * — no second copy. An unknown id is "No conversation found with session ID".
  *
- * Refused for anything but an orchestrator, for one already home, and while a
- * turn is running. Background work refuses too unless `force`, because ending
- * the process ends it. The worktree itself is left exactly as it is.
+ * So where a session is moved to does not decide this; where its transcript is
+ * does. The same search the CLI makes, then: one directory deep under
+ * PROJECTS_DIR. A transcript the bridge indexes from anywhere else is one the
+ * CLI would not find, and the move is refused rather than leave a session that
+ * fails on its next message.
  */
-function moveToCheckout(orchId, { force = false } = {}) {
+function resumeFinds(id) {
+    const name = `${id}.jsonl`;
+    let dirs;
+    try { dirs = fs.readdirSync(cfg.PROJECTS_DIR, { withFileTypes: true }); } catch { return false; }
+    return dirs.some(d => d.isDirectory() && fs.existsSync(path.join(cfg.PROJECTS_DIR, d.name, name)));
+}
+
+/**
+ * Where a move goes. No `cwd` is the project's main checkout — Move to main
+ * checkout, the case this began as. Otherwise an absolute path (`~` allowed)
+ * that exists, is a directory and is inside the allowed roots: what
+ * `resolveWorkdir` asks of any session's directory, since the next message
+ * starts one there.
+ */
+function moveTarget(s, cwd) {
+    if (cwd == null || cwd === '') {
+        const home = s.projectCwd;
+        if (!home || !fs.existsSync(home)) {
+            throw refuse(409, 'its main checkout is not on disk any more, so there is nowhere to move it');
+        }
+        return home;
+    }
+    if (typeof cwd !== 'string') throw refuse(400, '`cwd` must be a path');
+    const dir = cfg.expandHome(cwd.trim());
+    if (!path.isAbsolute(dir)) throw refuse(400, `give the directory as an absolute path, not ${cwd}`);
+    try {
+        return path.resolve(resolveWorkdir(path.resolve(dir)));
+    } catch (err) {
+        throw refuse(400, err.message);
+    }
+}
+
+/**
+ * Move an orchestrator to another directory: its main checkout when no `cwd`
+ * is given, or anywhere a session could be started. For one that got into a
+ * worktree without EnterWorktree — a `cd` the bridge then took as where it
+ * lives — and so cannot leave: the transcript keeps voting for the worktree,
+ * ExitWorktree has nothing to exit, and a `cd` does not outlive the call. The
+ * answer is kept in the store (setCwdOverride) rather than written into the
+ * transcript, which is Claude Code's file.
+ *
+ * Idle, it moves now. Mid-turn — which is always the case when it asks for the
+ * move itself, through `move_session` — it is queued as `pendingMove` and made
+ * the moment the turn ends (settleMove), with anything sent meanwhile held back
+ * and carried across. A second request replaces a queued one; asking for where
+ * it already is cancels it. Background work refuses unless `force`, because
+ * ending the process ends it. Whatever it leaves is left exactly as it is.
+ */
+function moveTo(orchId, { cwd = null, force = false } = {}) {
     if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
     const s = index.summary(orchId);
     if (!s) throw refuse(404, 'session not found');
-    const home = s.projectCwd;
-    if (!home || !fs.existsSync(home)) {
-        throw refuse(409, 'its main checkout is not on disk any more, so there is nowhere to move it');
+    const target = moveTarget(s, cwd);
+    if (!resumeFinds(orchId)) {
+        throw refuse(409, `its transcript is not under ${cfg.PROJECTS_DIR}, where claude --resume looks, `
+            + 'so it could not be started again anywhere. Nothing was changed.');
     }
     const r = pool.get(orchId);
     const here = location(orchId);
-    if (!here.inWorktree && sessionCwd(s) === home && (!r || r.cwd === home)) {
-        throw refuse(409, 'it already runs in its main checkout');
+    const pending = store.pendingMove(orchId);
+    if (sessionCwd(s) === target && (!r || r.cwd === target)) {
+        if (pending) return { ...cancelMove(orchId), cancelled: pending };
+        throw refuse(409, target === s.projectCwd && !cwd ? 'it already runs in its main checkout'
+            : `it already runs in ${target}`);
     }
-    if (r && (r.state === 'busy' || r.state === 'starting')) {
-        throw refuse(409, 'it is in the middle of a turn — wait for it to finish, or stop it, then move it');
+    if (r && r.hasBackground && !force) throw backgroundRefusal(r);
+    if (turnRunning(r)) {
+        store.setPendingMove(orchId, { cwd: target, from: here.cwd, force });
+        emit(orchId);
+        return { ...payload(orchId), queued: store.pendingMove(orchId) };
     }
-    if (r && r.hasBackground && !force) {
-        const n = r.background.size;
-        const err = refuse(409, `${n} background task${n === 1 ? ' is' : 's are'} still running in it, `
-            + 'and moving it ends its process, which stops them. Send force to move it anyway.');
-        err.extra = { background: n };
-        throw err;
-    }
-    const from = here.cwd;
-    store.setCwdOverride(orchId, { cwd: home, from });
-    const restarted = pool.relocate(orchId, home);
+    if (pending) store.setPendingMove(orchId, null);
+    const moved = applyMove(orchId, target, here.cwd);
+    return { ...payload(orchId), moved };
+}
+
+/** Kept for `move-to-checkout`, which is `moveTo` with no directory. */
+function moveToCheckout(orchId, { force = false } = {}) {
+    return moveTo(orchId, { force });
+}
+
+function applyMove(orchId, to, from) {
+    store.setCwdOverride(orchId, { cwd: to, from });
+    const restarted = pool.relocate(orchId, to);
     emit(orchId);
-    return { ...payload(orchId), moved: { from, to: home, restarted } };
+    return { from, to, restarted };
+}
+
+/** Drop a queued move, and let anything it was holding back go. */
+function cancelMove(orchId) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    const was = store.pendingMove(orchId);
+    if (was) {
+        store.setPendingMove(orchId, null);
+        pool.release(orchId);
+        emit(orchId);
+    }
+    return { ...payload(orchId), cancelled: was };
+}
+
+/**
+ * Make a queued move, if now is the moment: no turn running, no card waiting,
+ * and no background work unless the move was forced. Asked on every status
+ * change of an orchestrator with a move queued (onStatus) — the turn ending is
+ * one, background work draining is another — and once at startup, for a move
+ * queued before a restart. The directory is checked again here, since a turn
+ * is long enough for it to go away; if it has, the move is dropped, the queue
+ * let go, and the session told why.
+ */
+function settleMove(orchId) {
+    const mv = store.pendingMove(orchId);
+    if (!mv) return null;
+    const r = pool.get(orchId);
+    if (turnRunning(r)) return null;
+    if (r && r.hasBackground && !mv.force) return null;
+    store.setPendingMove(orchId, null);
+    let to;
+    try {
+        to = path.resolve(resolveWorkdir(mv.cwd));
+    } catch (err) {
+        pool.release(orchId);
+        emit(orchId);
+        pool.emit('notice', { sessionId: orchId, level: 'warn', kind: 'move_failed',
+            text: `It was not moved to ${mv.cwd}: ${err.message}` });
+        return null;
+    }
+    const moved = applyMove(orchId, to, (r && r.cwd) || mv.from);
+    pool.emit('notice', { sessionId: orchId, level: 'info', kind: 'session_moved',
+        text: `Moved to ${to}. Its next turn runs there.` });
+    return moved;
+}
+
+// One settle per orchestrator in flight: a turn ending emits several statuses.
+const settling = new Set();
+
+/**
+ * After the event that asked, never inside it: a status is emitted from inside
+ * the runner's own handlers, and replacing the runner there would leave the
+ * rest of that handler running on one that has been retired.
+ */
+function scheduleSettle(orchId) {
+    if (settling.has(orchId)) return;
+    settling.add(orchId);
+    setImmediate(() => {
+        settling.delete(orchId);
+        settleMove(orchId);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,6 +1471,6 @@ function onPrsChanged() {
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
     fileTask, withdrawTask, list,
-    report, noteAutoResume, resume, moveToCheckout, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, noteAutoResume, resume, moveTo, moveToCheckout, cancelMove, settleMove, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

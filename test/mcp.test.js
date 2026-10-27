@@ -131,6 +131,42 @@ const TASK = {
         }
         ok('tgxcode_guide asks the bridge with its cwd, role and topic, and a refusal is a tool error');
 
+        // move_session: an orchestrator's alone. Listed to nobody else, and a call
+        // from anybody else is an unknown tool before the bridge is asked.
+        const roles = { none: mcp, worker: startMcp(port, ['--role', 'worker']),
+            orchestrator: startMcp(port, ['--role', 'orchestrator']) };
+        try {
+            for (const [role, m] of Object.entries(roles)) {
+                const has = (await m.rpc('tools/list', {})).result.tools.some(t => t.name === 'move_session');
+                assert.strictEqual(has, role === 'orchestrator', `listed to ${role}: ${has}`);
+                if (role === 'orchestrator') continue;
+                const r = await m.call('move_session', { cwd: '/x' });
+                assert.strictEqual(r.isError, true);
+                assert.match(r.text, /unknown tool: move_session/);
+                assert.strictEqual(seen.length, 0, `${role}: the bridge is not asked`);
+            }
+            const orch = roles.orchestrator;
+            answers.set('POST /api/sessions/me/orchestrator/move', { status: 200,
+                body: { queued: { cwd: '/home/u/Combined', from: '/home/u/wt', force: false, at: 1 } } });
+            let r = await orch.call('move_session', { cwd: ' /home/u/Combined ' });
+            assert.strictEqual(r.isError, false);
+            assert.deepStrictEqual(seen[0].body, { cwd: '/home/u/Combined' }, 'the calling session, never forced');
+            assert.strictEqual(seen[0].route, '/api/sessions/me/orchestrator/move');
+            assert.strictEqual(r.text, 'Will move to /home/u/Combined when this turn ends.');
+            answers.set('POST /api/sessions/me/orchestrator/move', { status: 400,
+                body: { error: 'Working directory is outside the allowed roots: /etc' } });
+            r = await orch.call('move_session', { cwd: '/etc' });
+            assert.strictEqual(r.isError, true);
+            assert.match(r.text, /outside the allowed roots/, 'the refusal, as the bridge gave it');
+            r = await orch.call('move_session', {});
+            assert.strictEqual(r.isError, true);
+            assert.strictEqual(seen.length, 0, 'no cwd: refused before the bridge is asked');
+        } finally {
+            roles.worker.child.kill();
+            roles.orchestrator.child.kill();
+        }
+        ok('move_session is an orchestrator\'s alone, moves the calling session, and says when or why not');
+
         // find_tasks: the query string, the headers, and oldest first.
         answers.set('GET /api/suggestions', { status: 200, body: {
             ready: true,

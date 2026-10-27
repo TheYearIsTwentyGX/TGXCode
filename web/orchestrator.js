@@ -20,7 +20,7 @@
 import { html, render } from './vendor/preact.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { get, post, put } from './api.js';
+import { del, get, post, put } from './api.js';
 import { ago, clip } from './format.js';
 import { grow, isUp, morph } from './motion.js';
 import { orchPageUp, paintOrchPage, setOrchPageMode } from './orchestrator-page.js';
@@ -321,41 +321,95 @@ export function settings(p) {
 }
 
 /**
- * Only for an orchestrator running in a worktree: which one, and the way back
- * to the main checkout. It is there for one that got into a worker's worktree
- * without EnterWorktree and so cannot leave by itself — see
- * orchestration.moveToCheckout on the bridge.
+ * Where it runs, and the ways to move it — see orchestration.moveTo on the
+ * bridge. Move to main checkout only for one running in a worktree, which is
+ * the one that cannot leave by itself; Move to… for anywhere else, with the
+ * recent project directories offered. A move asked for mid-turn waits for the
+ * turn to end, and says so here with a Cancel until it is made.
  */
 function whereItRuns(p) {
     const at = p.location;
-    if (!at || !at.inWorktree) return null;
+    if (!at) return null;
     const name = at.cwd.split('/').filter(Boolean).pop();
+    const form = moveForm.orchId === p.orchestratorId;
     return html`<div class="orch-move">
-        <div class="orch-note">Running in the worktree <span class="orch-path" title=${at.cwd}>${name}</span>,
-            not the project's main checkout.</div>
-        <button type="button" onClick=${() => moveToCheckout(p)}>Move to main checkout</button>
+        ${at.inWorktree
+            ? html`<div class="orch-note">Running in the worktree <span class="orch-path" title=${at.cwd}>${name}</span>,
+                not the project's main checkout.</div>`
+            : html`<div class="orch-note">Running in <span class="orch-path" title=${at.cwd}>${clip(at.cwd, 48)}</span>.</div>`}
+        ${at.pending ? html`<div class="orch-move-pending">
+            <span class="orch-note">Moves to <span class="orch-path" title=${at.pending.cwd}>${clip(at.pending.cwd, 40)}</span>
+                when its turn ends.</span>
+            <button type="button" onClick=${() => cancelMove(p)}>Cancel</button>
+        </div>` : null}
+        <div class="orch-move-row">
+            ${at.inWorktree ? html`<button type="button" onClick=${() => moveTo(p, null)}>Move to main checkout</button>` : null}
+            ${form ? null : html`<button type="button" onClick=${() => openMoveForm(p)}>Move to…</button>`}
+        </div>
+        ${form ? html`<form class="orch-move-form" onSubmit=${(e) => {
+            e.preventDefault();
+            const cwd = e.target.elements.cwd.value.trim();
+            if (cwd) moveTo(p, cwd);
+        }}>
+            <input name="cwd" type="text" list="orch-move-dirs" spellcheck="false" autocomplete="off"
+                placeholder="/absolute/path" aria-label="Directory to move it to" defaultValue=${at.cwd} />
+            <datalist id="orch-move-dirs">${moveForm.dirs.map(d => html`<option key=${d} value=${d} />`)}</datalist>
+            <button type="submit">Move</button>
+            <button type="button" onClick=${() => { moveForm = { orchId: null, dirs: [] }; paintOrchestrator(); }}>Close</button>
+        </form>` : null}
     </div>`;
 }
 
-async function moveToCheckout(p, force = false) {
-    const at = p.location;
-    if (!force && !window.confirm('Move this orchestrator back to its main checkout?\n\n'
-        + `Its next message starts it in ${at.projectCwd} instead of ${at.cwd}. If it has a process `
-        + 'running, that process is ended first. The worktree itself is left as it is.')) return;
+// The Move to… box: which orchestrator it is open on, and the recent project
+// directories offered in it — fetched when it opens, as the New menu fetches its own.
+let moveForm = { orchId: null, dirs: [] };
+
+async function openMoveForm(p) {
+    moveForm = { orchId: p.orchestratorId, dirs: [] };
+    paintOrchestrator();
     try {
-        const next = await post(`/api/sessions/${p.orchestratorId}/orchestrator/move-to-checkout`,
-            force ? { force: true } : {});
+        const { projects = [] } = await get('/api/projects');
+        if (moveForm.orchId !== p.orchestratorId) return;
+        moveForm = { ...moveForm, dirs: projects.slice(0, 20).map(x => x.cwd) };
+        paintOrchestrator();
+    } catch { /* the box works without suggestions */ }
+}
+
+/** `cwd` null is the main checkout. */
+async function moveTo(p, cwd, force = false) {
+    const at = p.location;
+    const where = cwd || at.projectCwd;
+    if (!force && !window.confirm(`Move this orchestrator to ${where}?\n\n`
+        + `Its next message starts it there instead of ${at.cwd}. If it is in the middle of a turn, `
+        + 'the move waits for the turn to end; then its process is replaced by one resumed there, '
+        + 'with the conversation intact. The directory it leaves is left as it is.')) return;
+    try {
+        const body = { ...(cwd ? { cwd } : {}), ...(force ? { force: true } : {}) };
+        const next = await post(`/api/sessions/${p.orchestratorId}/orchestrator/move`, body);
         if (stillShowing(p.orchestratorId)) state.orch = next;
-        toast(next.moved && next.moved.restarted
-            ? 'Moved to the main checkout. Its process was ended; the next message starts it there.'
-            : 'Moved to the main checkout. The next message starts it there.', 'ok');
+        moveForm = { orchId: null, dirs: [] };
+        toast(next.queued ? `It moves to ${next.queued.cwd} when its turn ends.`
+            : next.cancelled ? 'It already runs there; the waiting move was cancelled.'
+                : next.moved && next.moved.restarted
+                    ? `Moved to ${next.moved.to}. Its process was ended; the next message starts it there.`
+                    : `Moved to ${next.moved.to}. The next message starts it there.`, 'ok');
     } catch (err) {
         const n = err.data && err.data.background;
         if (err.status === 409 && n && window.confirm(`${n} background task${n === 1 ? ' is' : 's are'} `
             + 'still running in it, and moving it stops them. Move it anyway?')) {
-            return moveToCheckout(p, true);
+            return moveTo(p, cwd, true);
         }
         toast(`Could not move it: ${err.message}`, 'error');
+    }
+    paintOrchestrator();
+}
+
+async function cancelMove(p) {
+    try {
+        const next = await del(`/api/sessions/${p.orchestratorId}/orchestrator/move`);
+        if (stillShowing(p.orchestratorId)) state.orch = next;
+    } catch (err) {
+        toast(`Could not cancel the move: ${err.message}`, 'error');
     }
     paintOrchestrator();
 }

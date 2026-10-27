@@ -1474,6 +1474,8 @@ takeBackHeld().catch((err) => {
     }, BEACON_TICK_MS).unref();
     // A pause set before this bridge started still has its wake time on disk.
     for (const id of orchestrators.byId.keys()) orchestration.armWake(id);
+    // And a move queued for the end of a turn that ended while no bridge was up.
+    for (const id of orchestrators.byId.keys()) orchestration.settleMove(id);
 
     // Warm the version check so the first window to open has an answer, then
     // ask the registry hourly. Read-only on every bridge, dev included.

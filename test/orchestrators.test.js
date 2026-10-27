@@ -27,6 +27,8 @@ process.env.XDG_DATA_HOME = home;
 // The cap case makes real worktrees, which have to be inside the allowed roots,
 // and commits, which need somebody to have made them.
 process.env.TGXCODE_ROOTS = home;
+// Where a move looks for the transcript `claude --resume` would find.
+process.env.TGXCODE_PROJECTS_DIR = path.join(home, 'projects');
 Object.assign(process.env, {
     GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
     GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
@@ -290,6 +292,10 @@ function harness(name) {
             return { sessionId };
         },
         recycle: () => true,
+        released: [],
+        release: (id) => pool.released.push(id),
+        notices: [],
+        emit: (ev, x) => pool.notices.push([ev, x]),
     };
     const flagRows = new Map();
     const store = new Orchestrators({ file: fileOf(name) });
@@ -1182,20 +1188,28 @@ function harness(name) {
         };
         orchestration.init({ ...h.deps, index, sessionCwd: (s) => s.cwd });
         const status = (fn) => { try { fn(); } catch (e) { return [e.status, e.message, e.extra]; } return 'ok'; };
+        // Each one has a transcript where `claude --resume` looks, or it is refused.
+        fs.mkdirSync(path.join(home, 'projects', '-zelda'), { recursive: true });
+        for (const id of ['M', 'N', 'H']) fs.writeFileSync(path.join(home, 'projects', '-zelda', `${id}.jsonl`), '');
 
         assert.strictEqual(status(() => orchestration.moveToCheckout('PLAIN'))[0], 404, 'not an orchestrator');
         orchestration.enable('M', null);
         assert.deepStrictEqual(orchestration.payload('M').location,
-            { cwd: wt, projectCwd: proj, inWorktree: true, override: null });
+            { cwd: wt, projectCwd: proj, inWorktree: true, override: null, pending: null });
 
         const r = new FakeRunner('M');
         r.cwd = wt;
         r.background = new Map();
         h.runners.set('M', r);
+        // Mid-turn it is queued for the end of the turn rather than refused —
+        // see test/move-session.test.js for the turn actually ending.
         r.state = 'busy';
-        assert.strictEqual(status(() => orchestration.moveToCheckout('M'))[0], 409, 'not mid-turn');
+        assert.strictEqual(orchestration.moveToCheckout('M').queued.cwd, proj, 'queued mid-turn');
+        assert.strictEqual(h.store.get('M').cwdOverride, null, 'not moved yet');
         r.state = 'starting';
-        assert.strictEqual(status(() => orchestration.moveToCheckout('M'))[0], 409);
+        assert.strictEqual(orchestration.payload('M').location.pending.cwd, proj);
+        assert.strictEqual(orchestration.cancelMove('M').cancelled.cwd, proj);
+        assert.deepStrictEqual(h.pool.released, ['M'], 'a cancel lets the held queue go');
         r.state = 'idle';
         r.background.set('t1', {});
         r.hasBackground = true;
@@ -1226,7 +1240,7 @@ function harness(name) {
         orchestration.enable('H', null);
         assert.strictEqual(status(() => orchestration.moveToCheckout('H'))[0], 409);
         assert.strictEqual(h.store.get('H').cwdOverride, null);
-        ok('move-to-checkout refuses non-orchestrators, a busy turn, background work and one already home');
+        ok('move-to-checkout refuses non-orchestrators, background work and one already home, and queues mid-turn');
     }
 
     {

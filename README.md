@@ -360,7 +360,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
-| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume, Move to main checkout and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
+| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume, moving it (Move to main checkout, Move to…, a move queued for the end of its turn) and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |

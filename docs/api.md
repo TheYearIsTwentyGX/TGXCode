@@ -275,7 +275,8 @@ the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
 settings, dismissing an item, recording the answer to a decision —
 `POST …/orchestrator/decisions/:decisionId/answered` — Resume, Move to main checkout
-(`POST …/orchestrator/move-to-checkout`), `GET /api/orchestrators`
+and Move to… (`POST …/orchestrator/move-to-checkout`, `POST`/`DELETE …/orchestrator/move`),
+`GET /api/orchestrators`
 and handing one a task — `POST …/orchestrator/tasks` and `…/tasks/:itemId/withdraw` —
 stay open, with a task's mode and worktree refused as starting a session refuses them;
 so does `POST /api/sessions/:id/restart`, for any session);
@@ -555,12 +556,16 @@ beats an older `EnterWorktree`, and a *prompt* given back in the main checkout r
 having left (a tool call that merely visits the checkout mid-turn does not). A session
 that has left keeps `worktree` as the record of where it was, and `cwd` then equals
 `projectCwd` — so `cwd === worktree.path` is the test for "in it now", not the presence
-of `worktree`. **An orchestrator moved back with `POST …/orchestrator/move-to-checkout`
-has `cwd` equal to `projectCwd` whatever its trail says**, until a later EnterWorktree
-(§*Orchestrators*), and `worktree` is `null` and `gitBranch` the main checkout's
-branch (read from its `HEAD`; null if unreadable) — the same on `/api/sessions`, the
-dashboard, the task board and the `session` of a `/api/suggestions` row. The worktree it
-was moved out of is `location.override.from` in the orchestrator payload. `worktree.branch` is read from the worktree's `HEAD` on disk when the
+of `worktree`. **An orchestrator moved with `POST …/orchestrator/move` (or
+`…/move-to-checkout`) has `cwd` equal to where it was moved, whatever its trail says**,
+until a later EnterWorktree (§*Orchestrators*). The other fields are read off that
+directory rather than the trail: `projectCwd` is the checkout owning the worktree it was
+moved into, or else the directory itself (so `/api/sessions?project=` and
+`/api/projects` file it there too); `worktree` is `null` unless the directory is inside a
+worktree, and then that worktree; `gitBranch` is that worktree's or checkout's branch
+(read from its `HEAD`; `null` for a plain directory or an unreadable one) — the same on
+`/api/sessions`, the dashboard, the task board and the `session` of a `/api/suggestions`
+row. Where it was moved from is `location.override.from` in the orchestrator payload. `worktree.branch` is read from the worktree's `HEAD` on disk when the
 worktree still exists.
 
 **`gitBranch` is the latest branch recorded, not the first.** Claude Code refreshes that
@@ -3871,7 +3876,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `runner-stalled` | `{sessionId: string, stalled: boolean, lastActivityAt: number\|null, busySince: number\|null, stalledAfterMs: number}` — a busy turn crossed into or out of *stalled* (rule under §*`runner-status`*). Times are epoch ms; `stalledAfterMs` is the threshold in force for that session's directory. Sent once per crossing, never repeated while it stays stalled. `stalled: false` comes from the next line on the stream **or** from the turn ending any way at all — stopped, finished, died — so a client may treat it as "take the badge and the toast down". A `runner-status` carrying the same `stalled` follows (or, on a turn ending, is the same broadcast's next message), so a client that only reads `runner-status` still draws it right; this event exists for the notification. A `stalled: true` also files a loud `stalled` notification row |
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
-| `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
+| `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred` and `session_moved`, which are `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `session_moved` and `move_failed` (a move queued for the end of an orchestrator's turn was made, or dropped because its directory had gone — see `POST …/orchestrator/move`), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, a worker's PR changing status in the bridge's PR cache, settings, the summary or a decision answered, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
@@ -5766,12 +5771,15 @@ any other caller — so the page's own toggle always replaces the agent's — wi
 still the value the orchestrator started with. A client should say so when `by` is
 `"agent"`; the orchestrator's change is also filed as a `note` inbox item (already
 `read`, so it does not wake the orchestrator).
-**`location`** is where the orchestrator runs: `cwd` is the live process's directory when
+**`location`** `{cwd, projectCwd, inWorktree, override, pending}` is where the
+orchestrator runs: `cwd` is the live process's directory when
 it has one, and otherwise where its next message would start it. `inWorktree` is true
 when `cwd` is under `<projectCwd>/.claude/worktrees/` — the condition for offering
-*Move to main checkout* (`POST …/orchestrator/move-to-checkout`, below). `override` is
-that move while it is still in force — `from` is where it was moved from, `at` epoch ms
-— and `null` otherwise. `location` is `null` only for a session the index has not seen
+*Move to main checkout* (`POST …/orchestrator/move-to-checkout`, below). `override`
+`{cwd, from, at}` is the last move while it is still in force — `from` is where it was
+moved from, `at` epoch ms — and `null` otherwise. `pending` `{cwd, from, force, at}` is a
+move waiting for the current turn to end, `null` when none is (`DELETE
+…/orchestrator/move` cancels it). `location` is `null` only for a session the index has not seen
 yet. It is computed whenever the payload is, but nothing *fires* the `orchestrator`
 event because the session's directory changed, so a client that has had the page open
 a while should refetch before acting on it.
@@ -6053,35 +6061,70 @@ nudges the orchestrator if anything is waiting. **`409 {error}` while usage is s
 over the cutoff** — the error names the window and the reading. Raise or turn off
 the cutoff with `PUT …/orchestrator` first, or wait for the window to reset.
 
-#### `POST /api/sessions/:id/orchestrator/move-to-checkout`
+#### `POST /api/sessions/:id/orchestrator/move` · `DELETE …/orchestrator/move` · `POST …/orchestrator/move-to-checkout`
 
-`{force?: boolean}` → the payload, plus `moved: {from: string, to: string, restarted:
-boolean}`. Moves an orchestrator that is running in a worktree back to its project's
-main checkout (`projectCwd`), for one that cannot get out by itself. That happens
-when the session got into a worktree **without** EnterWorktree — a `cd` in Bash that
-the transcript then recorded as where it works (§*Sessions*, `worktree`). After that
-every line it writes is recorded in the worktree, so the transcript always says the
-worktree. ExitWorktree refuses because there is no EnterWorktree to undo, and a `cd`
-does not outlast the tool call.
+`POST …/move {cwd?: string, force?: boolean}` → the payload plus **exactly one of**:
 
+- `moved: {from: string, to: string, restarted: boolean}` — it was idle and has moved;
+- `queued: {cwd: string, from: string|null, force: boolean, at: number}` — a turn is
+  running, and the move is made when it ends (the same object is `location.pending`);
+- `cancelled: {cwd, from, force, at}` — `cwd` is where it already runs and a move was
+  queued, so the queued move was dropped instead.
+
+`POST …/move-to-checkout {force?}` is the same with no `cwd`: the target is the project's
+main checkout (`projectCwd`). `DELETE …/move` drops a queued move → the payload plus
+`cancelled` (the dropped move, or `null` when none was queued); it is never refused for
+an orchestrator.
+
+Moves an orchestrator to another working directory. It began as the way out of a worktree
+for one that cannot get out by itself: one that got there **without** EnterWorktree — a
+`cd` in Bash that the transcript then recorded as where it works (§*Sessions*,
+`worktree`). After that every line it writes is recorded in the worktree, so the
+transcript always says the worktree. ExitWorktree refuses because there is no
+EnterWorktree to undo, and a `cd` does not outlast the tool call. The orchestrator itself
+asks for it with its `move_session` MCP tool, which posts here with its own id.
+
+- **The target.** No `cwd` (or `null`, or `""`) is `projectCwd`. Otherwise an absolute
+  path (`~` expanded) that exists, is a directory, and is inside the allowed roots — the
+  test any session's directory passes. A trailing slash is dropped. `400 {error}`
+  otherwise, with the reason (`give the directory as an absolute path…`,
+  `Working directory does not exist…`, `Not a directory…`, `…outside the allowed roots…`).
+- **Resumability.** `claude --resume <id>` (measured on Claude Code 2.1.304) looks for
+  `<id>.jsonl` in **every** directory under `~/.claude/projects/`, not only the one named
+  after the cwd it starts in: from the same directory, a subdirectory, a git worktree of
+  the same repository, the parent, a sibling and an unrelated repository it resumed the
+  conversation with its history, and appended every later turn to the original file.
+  So the target does not decide whether it can resume; where the transcript is does. The
+  bridge makes the same search, one directory deep under its projects directory, and
+  refuses with `409 {error}` naming that directory when the transcript is not there.
+  Nothing is copied or edited.
 - **It is bridge state, not a transcript edit.** The orchestrator record keeps
-  `location.override`, and from then on the session summary's `cwd` is the main
-  checkout. So is every route that resumes the session: send, handoff, a nudge,
-  later-delivery. `claude --resume` finds the conversation from there because the
-  transcript sits in the main checkout's project directory.
-- **The process is replaced.** If the session has a live process, it is ended, and
-  the next message starts a fresh one in the main checkout (`restarted: true`).
-  Messages still waiting in its queue move to the new runner and start it there, as
-  they do across a model change, so nothing is dropped. With no process, nothing
-  starts (`restarted: false`), and the next message starts it in the right place.
-- **The worktree is not touched.** Its files and branch, and the workers using it,
-  are left as they are.
-- `404` when the session is not an orchestrator, or is unknown. `409 {error}` when it
-  already runs in its main checkout, when the main checkout is no longer on disk, and
-  while a turn is running (`busy` or `starting`): wait for the turn to end, or stop it.
-  It is also a `409 {error, background: number}` while the process still has background
-  tasks (a `run_in_background` command, a subagent), because ending the process stops
-  them. Send `force: true` to move it anyway. A refusal changes nothing.
+  `location.override` `{cwd, from, at}`, and from then on the session summary's `cwd` is
+  the target, and so is every route that resumes the session: send, handoff, a nudge,
+  later-delivery, Restart process.
+- **Idle: moved now.** If the session has a live process it is ended, and the next
+  message starts a fresh one in the target (`restarted: true`). Messages still waiting in
+  its queue move to the new runner and start it there, so nothing is dropped. With no
+  process, nothing starts (`restarted: false`).
+- **Mid-turn (`busy`, `starting`, or a permission card waiting): queued.** The record
+  keeps `pendingMove`, shown as `location.pending`, and the bridge makes the move the
+  moment the turn ends — the process is replaced as above. **Messages sent meanwhile are
+  held back rather than written to the old process**, and become the new process's first
+  turn in the target. A `notice` event follows: `kind: "session_moved"` (`level: "info"`)
+  when it was made, or `kind: "move_failed"` (`level: "warn"`) when the target had gone
+  by then — the move is dropped and the held messages go to the process that is there. A
+  second `POST` replaces a queued move; a `POST` naming where it already runs cancels it.
+  A queued move is kept on disk and survives a bridge restart.
+- **Background work.** `409 {error, background: number}` while the process has background
+  tasks (a `run_in_background` command, a subagent), idle or mid-turn, because ending the
+  process stops them; `force: true` moves it anyway. Background work started *after* a
+  move was queued without `force` delays the move until that work finishes (or a later
+  turn ends with none running), and messages are not held back during that wait.
+- **What it leaves is not touched.** A worktree's files and branch, and the workers using
+  it, are left as they are.
+- **Other refusals.** `404` when the session is not an orchestrator, or is unknown. `409
+  {error}` when it already runs in the target (with no move queued), and for
+  `move-to-checkout` when the main checkout is no longer on disk. A refusal changes nothing.
 - **When the override stops applying:** a `worktree-state` entry written after the
   move ends it, meaning the session really entered or left a worktree with
   EnterWorktree/ExitWorktree since. That is a decision of its own, and an old move
@@ -6090,8 +6133,8 @@ does not outlast the tool call.
   Nothing else clears it. A `cd` into a worktree after the move, the thing that
   caused the problem, no longer moves where the session resumes. A second move
   replaces the first.
-- **Open to a paired remote device**, as Resume is: it starts nothing, and the
-  worktree is left alone.
+- **Open to a paired remote device**, as Resume is: it starts nothing, and what it
+  leaves is left alone.
 
 #### `GET /api/sessions/:id/orchestrator/workers` · `GET …/orchestrator/usage`
 
@@ -6185,7 +6228,7 @@ invisible to a session that was already running until its process is replaced.
 
 - **`200 {ok: true, restarted: true, status}`** — the process was replaced. The new one
   runs in the directory the session resumes from (the summary's `cwd`, so an
-  orchestrator moved with `move-to-checkout` restarts in its main checkout) with the
+  orchestrator moved with `…/orchestrator/move` restarts where it was moved) with the
   same `model`, `effort` and `permissionMode`; a model/effort change that was held for
   background work (`pendingSettings`) is applied instead. Messages still in the queue
   move across and are sent first. **The new process is spawned before the response
