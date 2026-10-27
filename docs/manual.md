@@ -1581,7 +1581,35 @@ nothing a browser can show, and the chip says so:
 Home keeps the page loaded. Come back inside *Minutes to keep a page you left*
 (Settings → Browser preview, default 10) and it is as you left it — scroll, form
 state, the dev server's live reload still connected; after that it loads fresh.
-A task that stops takes its kept page with it.
+A task that stops takes its kept page with it. A page an agent is connected to,
+or whose site is waiting on your Allow or Deny, is kept however long that takes;
+its clock starts again, from the beginning, once the agent lets go.
+
+**The address bar** shows the page's real address and follows it — its own
+links, a single-page app's route changes, an agent driving it. The scheme is
+left off where it is the expected one: `pcpartpicker.com/list` is
+`https://pcpartpicker.com/list`, and a local dev server reads
+`localhost:5173/admin`. Plain `http://` on any other site is shown, because that
+one is worth noticing. Click into the bar and you get the whole URL to edit.
+What you can type:
+
+- `:5173` or `5173/admin` — a local port's page, the same one its chip opens;
+- `/admin`, or `admin/users` — a path on the page you are on;
+- `localhost:3000/x` — a local address, over http;
+- `example.com/docs` — a site, over https unless you type `http://`.
+
+A site you type is your own navigation, the same as clicking a link to it in
+chat: it opens in a page of its own (the page you were on stays), with no asking.
+Typing the site you are already on navigates that page. In a window that cannot
+show other sites (see below) it goes to your browser.
+
+**Getting back to a page.** The **Pages** button, left of the address bar, lists
+every page the preview holds — local ports and sites — with its title, address,
+which session opened it, and an *Agent* tag on the one an agent is controlling
+(*Asking* while its site waits on you). Click one to put it on screen. The same
+list is the **Preview · n pages** chip at the front of the dev-server chips above
+any conversation, and *Show preview pages* in the palette (`Ctrl+K`), which also
+lists each page as *Show preview: …*.
 
 Where a click goes is Settings → DevBrowser. *Show DevBrowser in this app* off
 takes the pill, the button and the command editor's DevBrowser field away and
@@ -1649,11 +1677,19 @@ Then ask. The agent opens the page with `open_in_preview` and drives it with the
 it; the page stays as it is. Typing takes the keyboard to the page, the same as
 clicking into it would.
 
+Leaving the preview does not lose the page. While an agent is on a page you are
+not looking at, the conversation that opened it — or every conversation, when
+nobody is known to have — leads its dev-server chips with a blue *Agent is
+using the preview: pcpartpicker.com* chip, and **Show** brings the page back.
+The Pages list has it too, tagged *Agent*.
+
 **Sites other than local pages ask you first.** `localhost` and `127.0.0.1` need
 no asking. For anything else a yellow bar appears in the preview — *Agent wants
 to open pcpartpicker.com* — with **Allow once** (until the app quits), **Always
 allow**, and **Deny**. If the window is in the background you get a notification
-too, and one reminder ten minutes later if it is still waiting. The bar waits for
+too, and one reminder ten minutes later if it is still waiting; clicking it brings
+the window forward with the preview on screen — on that site's page if one is
+open, else the page the agent is on. The bar waits for
 you however long that takes: the agent is told you have not answered yet, and if
 you allow it later the page opens by itself. Two requests for the same site are
 one bar. A Deny is not asked again for ten minutes.

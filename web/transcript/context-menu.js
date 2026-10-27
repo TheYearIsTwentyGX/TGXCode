@@ -40,11 +40,16 @@ export const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip, #cv-pi
  *                danger?: boolean, sep?: boolean}>} items
  *   `disabled` carries the *reason* rather than a boolean, and it becomes the
  *   row's tooltip. Greying a row and not saying why is worse than omitting it.
+ *   A `label` may be a node, for a row with more in it than a word.
+ * @param {{kind?: string}} [opts]  `kind` lands on the menu as data-kind, for a
+ *   list that wants its own row styles (web/preview-menu.js's pages).
  */
-export function openContextMenu(ev, items) {
+export function openContextMenu(ev, items, { kind = '' } = {}) {
     const menu = dom.ctxMenu;
     closeContextMenu({ focus: false });
     state.ctx.from = document.activeElement;
+    if (kind) menu.dataset.kind = kind;
+    else delete menu.dataset.kind;
 
     const rows = [];
     menu.replaceChildren(...items.map((it) => {

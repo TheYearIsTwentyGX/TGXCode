@@ -572,7 +572,7 @@ Two rules worth knowing before you send a patch:
 | `web/pr-review.js` | The nightly review's verdict chip beside a PR, its findings, and the Fix this / Fix all buttons — on the board and under the conversation header |
 | `web/highlight.js` | The syntax highlighter behind it |
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
-| `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
+| `web/preview.js` | The browser preview — a dev server's or a site's page in the window, with DevBrowser's toolbar, the real address, and keep-alive |
 | `web/link-policy.js` | Which chat links open in the browser preview — the `preview.list` pattern matcher, pure so a test can import it |
 | `web/bar-fit.js` | What the top bar gives up in a narrow window — labels, then buttons from the end, never the quota pill — with a band of slack so it does not flicker at the edge and a `reserve` it never gives to a button (the titlebar's drag strip) — and `resolveLayout()`, where a button the saved `toolbar.items` never mentioned lands. Pure, so a test can import it; `fitBar()` measures and moves |
 | `web/titlebar.js` | The page's half of the custom titlebar: leaves room for the window controls from the Window Controls Overlay rect, sends the overlay its colours from the theme tokens, dims the bar when the window is in the background, and turns a press that travels on a bar button into a window drag |
@@ -582,6 +582,8 @@ Two rules worth knowing before you send a patch:
 | `web/preview-agent.js` | An agent driving the preview, the window's half: starting the shell's endpoint, `open_in_preview`, the Allow once / Always / Deny bar and the "Agent is controlling this page — Stop" banner |
 | `web/preview-open.js` | What the window does with `open_in_preview` — open, ask, wait a minute, answer — pure, and tested by `test/preview-open.test.js` |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
+| `web/preview-pages.js` | The preview's pages as words and lists — what the address bar shows and what typing in it means, the list of pages, and which pages the keep-alive must leave alone while an agent needs them. Pure, tested by `test/preview-pages.test.js` |
+| `web/preview-menu.js` | The way back to a preview page: the Pages menu, and the chips a conversation's port strip leads with — the list, and "Agent is using the preview: … Show" |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/orchestrator.js` | An orchestrator's plumbing: loading its payload, the header's role toggle, the one line above the composer (the plain conversation's strip back to the page, or a worker's line up to its orchestrator), and the inbox list and settings form the page reuses |
 | `web/palette.js` | The command palette (Ctrl+K), in Preact on web/rail.js's pattern: sessions, views and actions in one fuzzy-matched list, keyboard first. Answers Escape itself, from a capture listener, so the panel behind it stays up |

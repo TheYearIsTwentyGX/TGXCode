@@ -1,6 +1,6 @@
 // The dev-server channel strip: a chip for each port the open session started
 // or mentioned, which opens it in DevBrowser or, armed and pressed again, stops
-// it. Moved out of app.js as it was; the bridge side is bridge/devservers.js.
+// it — led by the preview's own chips (web/preview-menu.js). Moved out of app.js as it was; the bridge side is bridge/devservers.js.
 //
 // This imports the preview opener and `icon` from app.js, which imports this — safe because
 // nothing here reads an app.js binding at module top level, only when a
@@ -12,6 +12,7 @@ import { dom, el, toast } from './dom.js';
 import { icon } from './icons.js';
 import { openPreview, openTitle } from './app.js';
 import { fill } from './motion.js';
+import { previewChips } from './preview-menu.js';
 
 // ── dev-server channel strip ─────────────────────────────────────────────
 
@@ -30,7 +31,10 @@ export async function loadChannels() {
 }
 
 export function renderChannels() {
-    const chips = state.channels.map(channelChip);
+    // The preview's pages first — the agent's, when it is off screen, and the
+    // list — because a site has no port chip to get back to it by.
+    // web/preview-menu.js.
+    const chips = [...previewChips(), ...state.channels.map(channelChip)];
     // Say when ports were left out, rather than leaving the strip looking like
     // nothing is running. These are servers held by another worktree — the
     // reason chips used to bleed across sessions — and naming the count is what

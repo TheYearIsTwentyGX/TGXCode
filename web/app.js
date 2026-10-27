@@ -11,6 +11,7 @@ import {
     syncPreviewAgent, wirePreviewAgent,
 } from './preview-agent.js';
 import { opensInPreview } from './link-policy.js';
+import { openPagesMenu } from './preview-menu.js';
 import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { liveOverDock, liveOverFixed } from './live-over.js';
 import { startupQuery } from './startup.js';
@@ -48,7 +49,7 @@ import { PREFS_FALLBACK, BOOT_PREFS, BOOT_HOST, pairToken } from './boot.js';
 import { DEFAULT_PERM, state } from './state.js';
 import { dom, closeModal, closeOnClickOutside, el, modalUp, openModal, toast } from './dom.js';
 import { ago, clip, dur, noteHome, setClock, shortPath } from './format.js';
-import { loadChannels } from './channels.js';
+import { loadChannels, renderChannels } from './channels.js';
 import { PR_ICON, icon } from './icons.js';
 import { pullAndRestart, closeRestart, startFixSession } from './restart.js';
 import {
@@ -239,6 +240,13 @@ export const previewPane = new PreviewPane({
     showDevBrowser: () => devBrowserShown(),
     onMaximize: (on) => { state.preview.max = on; paintPanels(); },
     onActive: (id) => { previewAgentActive(id); paintPreviewAgent(); },
+    // The list of pages moved: the conversation's port strip leads with it.
+    onPages: () => { if (state.current) renderChannels(); },
+    onPagesMenu: (anchor) => openPagesMenu(anchor),
+    sessionName: (id) => {
+        const row = state.sessions.find(s => s.sessionId === id);
+        return (row && row.title) || null;
+    },
 });
 
 // An agent driving the preview: the asks, the banner and Stop under its toolbar,
@@ -248,6 +256,7 @@ wirePreviewAgent({
     pane: previewPane,
     showPreview: (on) => showPreview(on),
     previewOpen: () => state.preview.open,
+    showPage: (key) => showPreviewPage(key),
     toast: (text, kind) => toast(text, kind),
 });
 
@@ -957,8 +966,32 @@ function showPortInline(o) {
         toast(`:${o.port} is listening but does not answer HTTP, so there is nothing to preview.`, 'info');
         return;
     }
-    previewPane.open({ port: o.port, title: o.title || null, path: o.path || null, runId: o.runId || null });
+    previewPane.open({
+        port: o.port, title: o.title || null, path: o.path || null, runId: o.runId || null,
+        sessionId: state.current ? state.current.sessionId : null,
+    });
     showPreview(true, { from: o.from || 'session' });
+}
+
+/**
+ * A page the preview already holds, back on screen — from the list of pages,
+ * the agent's chip in a conversation, the palette, or a notification.
+ */
+export function showPreviewPage(key) {
+    if (!previewPane.show(key)) {
+        toast('That page is no longer open in the preview.', 'info');
+        return false;
+    }
+    showPreview(true);
+    return true;
+}
+
+/** The list of pages, under the preview's Pages button, from wherever asked. */
+export function openPreviewPages() {
+    if (!previewPane.rows().length) { toast('No pages are open in the preview.', 'info'); return; }
+    if (!state.preview.open) showPreview(true);
+    // After the paint that puts the toolbar on screen, or the button has no box.
+    requestAnimationFrame(() => openPagesMenu(previewPane.el.pages));
 }
 
 /**
@@ -967,7 +1000,8 @@ function showPortInline(o) {
  * is where it would have gone without the setting.
  */
 async function openLinkInPreview(href) {
-    const shown = previewAvailable() && await previewPane.openUrl(href);
+    const shown = previewAvailable()
+        && await previewPane.openUrl(href, { sessionId: state.current ? state.current.sessionId : null });
     if (shown) showPreview(true);
     else {
         window.open(href, '_blank', 'noreferrer');

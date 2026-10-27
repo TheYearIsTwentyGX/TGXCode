@@ -1103,12 +1103,17 @@
           </button>
         </div>
 
+        <!-- Every page the preview holds, port or site — the way back to one you
+             left. web/preview-pages.js. -->
+        <button class="pv-btn pv-pages" data-pv="pages" type="button" hidden aria-haspopup="menu" title="Preview pages">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 5H1v16c0 1.1.9 2 2 2h16v-2H3V5zm18-4H7c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 16H7V3h14v14z"/></svg>
+          <span class="pv-page-count" data-pv="page-count" hidden></span>
+        </button>
+
         <label class="pv-address">
           <span class="pv-title" data-pv="title" hidden></span>
-          <span class="pv-proto">http://</span>
-          <span class="pv-host" data-pv="host"></span>
-          <input class="pv-path" data-pv="path" type="text" placeholder="path/to/page"
-                 autocomplete="off" spellcheck="false" aria-label="Path">
+          <input class="pv-path" data-pv="address" type="text" placeholder="localhost:5173, :5173, /path or example.com"
+                 autocomplete="off" spellcheck="false" aria-label="Address">
         </label>
 
         <div class="pv-sizes">

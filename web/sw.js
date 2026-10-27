@@ -107,7 +107,9 @@ async function stopTurn(data) {
 async function reveal(data) {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of windows) {
-        client.postMessage({ type: 'reveal-session', sessionId: data.sessionId || null });
+        // `preview` is an origin, from a preview ask (web/preview-agent.js): the
+        // page puts that site's page on screen rather than a conversation.
+        client.postMessage({ type: 'reveal-session', sessionId: data.sessionId || null, preview: data.preview || null });
         try { await client.focus(); } catch { /* focus is best effort */ }
         return;
     }
