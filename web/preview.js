@@ -34,8 +34,15 @@
 // told the origin is wanted (allowPreviewOrigin): app/main.js refuses any guest
 // that is neither loopback nor granted. Without both, canPreviewUrls is false
 // and the link goes to the browser as it always did.
+//
+// The address bar shows the page's real URL, scheme and all where the scheme
+// matters, and follows the page wherever it goes — its own links, an in-page
+// route change, an agent driving it. web/preview-pages.js has the rule, the
+// meaning of what you type, the list of pages (the way back to one you left)
+// and why a page an agent is on outlives its keep-alive.
 
 import { PICKER_SOURCE } from './preview-picker.js';
+import { displayAddress, originOf, pageRows, parseAddress, pinnedPage } from './preview-pages.js';
 
 // The webview path needs the tag *and* the shell's clipboard doors: an old shell
 // with neither gets the iframe rather than buttons that throw.
@@ -85,6 +92,9 @@ export class PreviewPane {
      * @param {(on: boolean) => void} [o.onMaximize]
      * @param {(webContentsId: number|null) => void} [o.onActive]  the page on screen
      *   changed — web/preview-agent.js tells the shell, which lists it first to an agent
+     * @param {() => void} [o.onPages]  the list of pages, or something it shows, changed
+     * @param {(anchor: HTMLElement) => void} [o.onPagesMenu]  the toolbar's Pages button
+     * @param {(id: string) => string|null} [o.sessionName]
      */
     constructor(o) {
         this.o = o;
@@ -98,8 +108,9 @@ export class PreviewPane {
             shot: q('[data-pv="shot"]'),
             pick: q('[data-pv="pick"]'),
             title: q('[data-pv="title"]'),
-            host: q('[data-pv="host"]'),
-            path: q('[data-pv="path"]'),
+            path: q('[data-pv="address"]'),
+            pages: q('[data-pv="pages"]'),
+            pageCount: q('[data-pv="page-count"]'),
             viewports: [...o.root.querySelectorAll('[data-pv-device]')],
             orient: q('[data-pv="orient"]'),
             output: q('[data-pv="output"]'),
@@ -118,6 +129,8 @@ export class PreviewPane {
         this.landscape = false;
         this.maximized = false;
         this.picking = 0;           // pick session number while armed, else 0
+        this.agent = null;          // the shell's agent state, for pinning and the list
+        this.pagesSig = '';
 
         const e = this.el;
         e.home.onclick = () => o.onHome();
@@ -127,6 +140,13 @@ export class PreviewPane {
         e.reload.onclick = () => this.reload();
         e.shot.onclick = () => this.screenshot();
         e.pick.onclick = () => (this.picking ? this.cancelPick() : this.pick());
+        e.pages.onclick = () => o.onPagesMenu && o.onPagesMenu(e.pages);
+        // Editing shows the whole URL, scheme included; see web/preview-pages.js.
+        e.path.addEventListener('focus', () => {
+            if (this.active) e.path.value = this.active.url || '';
+            e.path.select();
+        });
+        e.path.addEventListener('blur', () => this.paintAddress());
         e.path.addEventListener('keydown', (ev) => {
             if (ev.key === 'Enter') { ev.preventDefault(); this.go(e.path.value); e.path.blur(); }
             // Escape here means "never mind this address", not "close the
@@ -163,7 +183,7 @@ export class PreviewPane {
      * Show a port. Creates the page the first time and finds the kept one after
      * that; a `path` on an existing page navigates it, no path leaves it alone.
      */
-    open({ port, title = null, path = null, runId = null }) {
+    open({ port, title = null, path = null, runId = null, sessionId = null }) {
         port = Number(port);
         let entry = this.entries.get(port);
         if (!entry) {
@@ -174,6 +194,7 @@ export class PreviewPane {
         }
         if (title) entry.title = title;
         if (runId) entry.runId = runId;
+        if (sessionId) entry.sessionId = sessionId;
         this.select(entry);
         return entry;
     }
@@ -183,15 +204,18 @@ export class PreviewPane {
      * a running dev server finds the page its chip opened. Anything else is a
      * page of its own, keyed by origin, once the shell has agreed to it.
      *
+     * `sessionId` is who asked — the conversation a link was clicked in, or the
+     * session whose agent called open_in_preview — for the list of pages.
+     *
      * @returns {Promise<boolean>} false when it could not be shown here, and
      *   the caller should send it to the browser instead.
      */
-    async openUrl(url) {
+    async openUrl(url, { sessionId = null } = {}) {
         let u;
         try { u = new URL(url); } catch { return false; }
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
         if (u.protocol === 'http:' && u.port && LOOPBACK.has(u.hostname)) {
-            this.open({ port: Number(u.port), path: u.pathname + u.search + u.hash });
+            this.open({ port: Number(u.port), path: u.pathname + u.search + u.hash, sessionId });
             return true;
         }
         if (!canPreviewUrls) return false;
@@ -204,8 +228,69 @@ export class PreviewPane {
         } else {
             this.load(entry, u.href);
         }
+        if (sessionId) entry.sessionId = sessionId;
         this.select(entry);
         return true;
+    }
+
+    /** Put a page the pane holds back on screen, by its key. */
+    show(key) {
+        const entry = this.entries.get(key);
+        if (!entry) return false;
+        this.select(entry);
+        return true;
+    }
+
+    /** Every page the pane holds, as web/preview-pages.js lists them. */
+    rows() {
+        return pageRows(this.entries.values(), {
+            agent: this.agent,
+            activeKey: this.active ? this.active.key : null,
+            sessionName: this.o.sessionName,
+        });
+    }
+
+    /** The page actually in front of the user, or null. */
+    onScreenKey() {
+        return this.visible && this.active ? this.active.key : null;
+    }
+
+    /**
+     * Tell whoever draws the list, but only when something it shows changed:
+     * the agent's state comes round once a second while commands flow.
+     */
+    changed() {
+        const rows = this.rows();
+        const sig = JSON.stringify([this.onScreenKey(), rows]);
+        this.paintPages(rows);
+        if (sig === this.pagesSig) return;
+        this.pagesSig = sig;
+        if (this.o.onPages) this.o.onPages();
+    }
+
+    /**
+     * The shell's agent state: which guests an agent is attached to, and which
+     * sites are waiting on the user. A page in either is pinned — its clock
+     * stopped — and one that stops being either gets a fresh clock, as though
+     * it had just been left.
+     */
+    setAgentState(st) {
+        this.agent = st || null;
+        for (const entry of this.entries.values()) {
+            if (this.visible && entry === this.active) continue;
+            if (this.isPinned(entry)) {
+                clearTimeout(entry.timer);
+                entry.timer = null;
+                entry.parked = true;
+            } else if (entry.parked) {
+                this.release(entry);
+            }
+        }
+        this.changed();
+    }
+
+    isPinned(entry) {
+        return pinnedPage(entry, this.agent);
     }
 
     /** Drop a page now, whatever its keep-alive says — its server has gone. */
@@ -216,6 +301,7 @@ export class PreviewPane {
         entry.node.remove();
         this.entries.delete(entry.key);
         if (this.active === entry) { this.active = null; this.paintToolbar(); }
+        this.changed();
     }
 
     /**
@@ -225,9 +311,11 @@ export class PreviewPane {
     setVisible(on) {
         if (on === this.visible) return;
         this.visible = on;
-        if (!this.active) return;
-        if (on) this.hold(this.active);
-        else { this.cancelPick(); this.release(this.active); }
+        if (this.active) {
+            if (on) this.hold(this.active);
+            else { this.cancelPick(); this.release(this.active); }
+        }
+        this.changed();
     }
 
     setMaximized(on) {
@@ -242,7 +330,10 @@ export class PreviewPane {
 
     /** `port` for a dev server's page, `base` (an origin) for a site's. */
     create({ key, port = null, base = null, url }) {
-        const entry = { key, port, base, title: null, runId: null, url, timer: null, node: null, ready: false };
+        const entry = {
+            key, port, base, title: null, runId: null, url, timer: null, node: null, ready: false,
+            sessionId: null, pageTitle: null, wcId: null, parked: false,
+        };
         if (HAS_WEBVIEW) {
             const v = document.createElement('webview');
             // The partition is enforced again in app/main.js; saying it here too
@@ -251,7 +342,14 @@ export class PreviewPane {
             v.setAttribute('src', url);
             v.className = 'pv-frame';
             const moved = () => { entry.ready = true; this.onNavigate(entry); };
-            v.addEventListener('dom-ready', moved);
+            v.addEventListener('dom-ready', () => {
+                try { entry.wcId = v.getWebContentsId(); } catch { /* going away */ }
+                moved();
+            });
+            v.addEventListener('page-title-updated', (ev) => {
+                entry.pageTitle = ev.title || null;
+                this.changed();
+            });
             v.addEventListener('did-navigate', moved);
             v.addEventListener('did-navigate-in-page', moved);
             v.addEventListener('did-fail-load', (ev) => {
@@ -289,6 +387,7 @@ export class PreviewPane {
         if (this.visible) this.hold(entry);
         this.paintToolbar();
         this.tellActive();
+        this.changed();
     }
 
     /** The guest on screen's webContents id, or null — only a ready <webview> has one. */
@@ -306,14 +405,29 @@ export class PreviewPane {
     hold(entry) {
         clearTimeout(entry.timer);
         entry.timer = null;
+        entry.parked = false;
     }
 
-    /** Nobody is looking at it: start the clock, or drop it at once for 0. */
+    /**
+     * Nobody is looking at it: start the clock, or drop it at once for 0 —
+     * unless an agent needs it, in which case it waits with no clock at all
+     * until setAgentState says the agent is done with it.
+     */
     release(entry) {
         clearTimeout(entry.timer);
+        entry.timer = null;
+        entry.parked = this.isPinned(entry);
+        if (entry.parked) return;
         const minutes = Number(this.o.keepAliveMinutes()) || 0;
         if (minutes <= 0) { this.discard(entry.key); return; }
-        entry.timer = setTimeout(() => this.discard(entry.key), minutes * 60_000);
+        entry.timer = setTimeout(() => this.expire(entry), minutes * 60_000);
+    }
+
+    /** The clock ran out. Checked again: an agent may have arrived meanwhile. */
+    expire(entry) {
+        entry.timer = null;
+        if (this.isPinned(entry)) { entry.parked = true; return; }
+        this.discard(entry.key);
     }
 
     load(entry, url) {
@@ -324,12 +438,36 @@ export class PreviewPane {
         if (entry === this.active) this.paintAddress();
     }
 
-    go(path) {
-        if (!this.active) return;
+    /**
+     * Whatever was typed in the bar; web/preview-pages.js says what it means.
+     * A local port finds its page; the site on screen is navigated, as a
+     * browser's bar would; another site is the user's own navigation, which is
+     * the same as clicking a link to it in chat — granted for the session, and
+     * a page of its own. Where no site can be shown, it goes to the browser.
+     */
+    async go(text) {
         const a = this.active;
-        this.load(a, a.base
-            ? `${a.base}/${String(path || '').replace(/^\/+/, '')}`
-            : previewUrl(a.port, path));
+        const target = parseAddress(text, a ? a.url : null, PREVIEW_HOST);
+        if (!target) {
+            if (String(text || '').trim()) this.o.toast(`Not an address this preview can open: ${String(text).trim()}`, 'error');
+            this.paintAddress();
+            return;
+        }
+        if (target.port) {
+            const u = new URL(target.url);
+            this.open({ port: target.port, path: u.pathname + u.search + u.hash });
+            return;
+        }
+        const origin = originOf(target.url);
+        if (a && originOf(a.url) === origin) {
+            const local = LOOPBACK.has(new URL(target.url).hostname);
+            const r = local || !canPreviewUrls ? { ok: true }
+                : await window.claudeShell.allowPreviewOrigin(origin).catch(() => null);
+            if (r && r.ok) { this.load(a, target.url); return; }
+        }
+        if (await this.openUrl(target.url, { sessionId: a ? a.sessionId : null })) return;
+        window.open(target.url, '_blank', 'noreferrer');
+        this.o.toast('This window cannot preview other sites, so it opened in your browser.', 'info');
     }
 
     reload() {
@@ -355,6 +493,7 @@ export class PreviewPane {
             this.paintToolbar();
             this.tellActive();
         }
+        this.changed();
     }
 
     // ── toolbar ───────────────────────────────────────────────────────────
@@ -385,16 +524,19 @@ export class PreviewPane {
         const a = this.active;
         e.title.hidden = !(a && a.title);
         e.title.textContent = a && a.title ? a.title : '';
-        e.host.textContent = !a ? '' : a.base ? `${a.base}/` : `${PREVIEW_HOST}:${a.port}/`;
+        e.path.title = a ? a.url : '';
         if (document.activeElement === e.path) return;   // do not type over the user
-        let path = '';
-        if (a) {
-            try {
-                const u = new URL(a.url);
-                path = (u.pathname + u.search + u.hash).replace(/^\//, '');
-            } catch { /* leave it empty */ }
-        }
-        e.path.value = path;
+        e.path.value = a ? displayAddress(a.url) : '';
+    }
+
+    /** The Pages button: there once there is a page, counting them past one. */
+    paintPages(rows = this.rows()) {
+        const e = this.el;
+        e.pages.hidden = !rows.length;
+        e.pageCount.hidden = rows.length < 2;
+        e.pageCount.textContent = String(rows.length);
+        e.pages.classList.toggle('agent', rows.some(r => r.agent));
+        e.pages.title = `Preview pages — ${rows.length} open${rows.some(r => r.agent) ? ', an agent is using one' : ''}`;
     }
 
     setDevice(name) {

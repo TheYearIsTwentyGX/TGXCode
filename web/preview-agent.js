@@ -25,14 +25,19 @@
 import { html, render } from './vendor/preact.js';
 import { del, post, put } from './api.js';
 import { BOOT_PREFS } from './boot.js';
-import { announce } from './notifications.js';
+import { announce, onPreviewReveal } from './notifications.js';
 import { hostOf, openForAgent } from './preview-open.js';
+import { originOf } from './preview-pages.js';
 
 const shell = window.claudeShell && window.claudeShell.previewAgent;
 
 let o = null;          // {root, pane, showPreview, previewOpen, toast}
 let st = { enabled: false, connected: false, active: false, pages: [], asks: [] };
 let registered = null; // the endpoint this bridge was last told
+// origin -> the session whose open_in_preview asked for it, so the page a later
+// yes opens says who it is for in the list of pages. The shell's asks do not
+// carry it: their requesters are its own business.
+const askSessions = new Map();
 
 /** Whether this window can be driven at all: the desktop shell, new enough. */
 export const canDrivePreview = Boolean(shell);
@@ -43,11 +48,13 @@ export const canDrivePreview = Boolean(shell);
  * @param {object} opts.pane              the PreviewPane
  * @param {(on: boolean) => void} opts.showPreview
  * @param {() => boolean} opts.previewOpen
+ * @param {(key: *) => boolean} opts.showPage   a page the pane holds, on screen
  * @param {(text: string, kind?: string) => void} opts.toast
  */
 export function wirePreviewAgent(opts) {
     o = opts;
     if (!shell) return;
+    onPreviewReveal(revealFor);
     shell.onState((s) => { if (s) { st = s; paint(); } });
     shell.onNotify((ask) => announceAsk(ask));
     shell.state().then((s) => { if (s) { st = s; paint(); } }).catch(() => {});
@@ -94,19 +101,31 @@ export function previewAgentRunner(s) {
     if (shell && s && s.state === 'stopped' && s.sessionId) shell.sessionGone(s.sessionId).catch(() => {});
 }
 
-/** Show a URL in the preview pane. */
-async function show(url) {
+/** Show a URL in the preview pane, for the session that asked, if known. */
+async function show(url, sessionId = null) {
     o.showPreview(true);
-    return o.pane.openUrl(url);
+    return o.pane.openUrl(url, { sessionId: sessionId || askSessions.get(originOf(url)) || null });
+}
+
+/**
+ * A preview notification was clicked: the page for that site if there is one,
+ * else the page an agent is on, else just the preview — where the ask is.
+ */
+function revealFor(origin) {
+    const rows = o.pane.rows();
+    const row = rows.find(r => r.key === origin || originOf(r.url) === origin) || rows.find(r => r.agent);
+    if (!(row && o.showPage(row.key))) o.showPreview(true);
 }
 
 /** The bridge's `preview-open`: open_in_preview, from an agent. See web/preview-open.js. */
 export async function previewAgentOpen(req) {
     if (!shell || !req || !req.id || BOOT_PREFS.preview.agentControl !== true) return;
+    const origin = originOf(req.url);
+    if (origin && req.sessionId) askSessions.set(origin, req.sessionId);
     await openForAgent(req, {
         shell,
         answer: (body) => post(`/api/preview/open/${encodeURIComponent(req.id)}`, body).catch(() => {}),
-        show,
+        show: (url) => show(url, req.sessionId),
         reveal: () => { if (!o.previewOpen()) o.showPreview(true); },
     });
 }
@@ -138,7 +157,8 @@ function announceAsk(ask) {
     if (!o.previewOpen()) o.showPreview(true);
     if (document.hasFocus()) return;
     announce(`An agent wants to open ${ask.host}`,
-        'It is asking to drive that site in the TGXCode preview. Allow or deny it there.', 'ask', null);
+        'It is asking to drive that site in the TGXCode preview. Allow or deny it there.', 'ask', null,
+        { preview: ask.origin });
 }
 
 // ── drawing ──────────────────────────────────────────────────────────────
@@ -172,6 +192,9 @@ function Banner() {
 
 function paint() {
     if (!o) return;
+    // Which pages an agent is on and which sites wait on an answer: the pane
+    // keeps those alive and marks them in its list of pages.
+    o.pane.setAgentState(st);
     const asks = st.asks || [];
     o.root.hidden = !(st.connected || asks.length);
     render(html`${asks.map(a => html`<${AskBar} key=${a.origin} ask=${a} />`)}

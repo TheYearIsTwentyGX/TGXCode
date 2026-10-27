@@ -296,20 +296,21 @@ export function clearStall(sessionId) {
  * The plain kind stays as the fallback for a browser with no worker, where losing
  * the click after a reload is better than losing the notification.
  */
-export function announce(title, body, tone, sessionId) {
+export function announce(title, body, tone, sessionId, { preview = null } = {}) {
     chime(tone, sessionId);
     if (!notify.desktop || notifyPermission() !== 'granted') return;
     const opts = {
         body,
         // A second one for the same session replaces the first rather than
         // piling up behind it.
-        tag: sessionId ? `claude-session:${sessionId}` : 'claude-session',
+        tag: preview ? `preview:${preview}`
+            : sessionId ? `claude-session:${sessionId}` : 'claude-session',
         // chime() is the only thing here allowed to make a noise, so that
         // the sound checkbox means what it says.
         silent: true,
     };
     if (notify.sw) {
-        notify.sw.showNotification(title, { ...opts, data: { sessionId } }).catch(() => {});
+        notify.sw.showNotification(title, { ...opts, data: { sessionId, preview } }).catch(() => {});
         return;
     }
     let n;
@@ -324,10 +325,19 @@ export function announce(title, body, tone, sessionId) {
         // a user gesture.
         if (window.claudeShell) window.claudeShell.revealWindow();
         else window.focus();
-        if (sessionId) openSession(sessionId);
+        if (preview && previewReveal) previewReveal(preview);
+        else if (sessionId) openSession(sessionId);
         n.close();
     };
 }
+
+/**
+ * What a click on a preview notification does — announce()'s `preview`, an
+ * origin. web/preview-agent.js sets it: the page for that site, or the page an
+ * agent is on, back on screen with the ask above it.
+ */
+let previewReveal = null;
+export function onPreviewReveal(fn) { previewReveal = fn; }
 
 /**
  * Three sounds, because they mean three different things and the whole point
@@ -436,7 +446,8 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
     }
     if (msg.type !== 'reveal-session') return;
     if (window.claudeShell) window.claudeShell.revealWindow();
-    if (msg.sessionId) openSession(msg.sessionId);
+    if (msg.preview && previewReveal) previewReveal(msg.preview);
+    else if (msg.sessionId) openSession(msg.sessionId);
 });
 
 /**

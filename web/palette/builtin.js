@@ -17,7 +17,7 @@
 
 import { state } from '../state.js';
 import { dom, toast } from '../dom.js';
-import { setDockSide, setFocus, showView, startRename } from '../app.js';
+import { openPreviewPages, previewPane, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
 import { openComposerFind } from '../composer/find.js';
@@ -171,6 +171,23 @@ export function registerBuiltins() {
             keywords: 'dev server preview port browser',
             run: () => openInDevBrowser(p),
         })));
+
+    // ── the preview's pages ──
+    // Every page it holds, port or site, with the list itself on top: a site
+    // has no port chip, so this is one of its ways back (web/preview-menu.js).
+    registerAction({
+        id: 'preview.pages', group: 'Actions', title: 'Show preview pages',
+        keywords: 'preview pages tabs browser site agent open',
+        when: () => previewPane.rows().length > 0,
+        run: () => openPreviewPages(),
+    });
+    registerSource('preview-pages', () => previewPane.rows().map(r => ({
+        id: `preview.page.${r.key}`, group: 'Actions',
+        title: `Show preview: ${r.label}`,
+        meta: [r.agent ? 'agent controlling' : null, r.address, r.session].filter(Boolean).join(' · '),
+        keywords: `preview page browser ${r.host}`,
+        run: () => showPreviewPage(r.key),
+    })));
 }
 
 // ── what lights up once other branches land ──

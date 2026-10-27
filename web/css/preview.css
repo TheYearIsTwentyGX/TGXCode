@@ -87,8 +87,33 @@
     white-space: nowrap;
 }
 .pv-title[hidden] { display: none; }
-.pv-proto { color: var(--text-4); }
-.pv-host { color: var(--text-2); white-space: nowrap; }
+/* The Pages button carries a count once there is more than one page, and a dot
+   while an agent is on one of them. */
+.pv-pages { position: relative; flex: none; }
+.pv-page-count {
+    position: absolute;
+    top: 1px;
+    right: 0;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: var(--pill);
+    background: var(--s5);
+    color: var(--text);
+    font: 600 10px/14px var(--sans);
+    text-align: center;
+}
+.pv-page-count[hidden] { display: none; }
+.pv-pages.agent::after {
+    content: '';
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--blue);
+}
 .pv-path {
     flex: 1;
     min-width: 40px;
@@ -329,4 +354,51 @@
 @keyframes pv-driving-pulse { 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) {
     .pv-driving.active .pv-driving-dot { animation: none; }
+}
+
+/* ── the list of pages ───────────────────────────────────────────────────
+   web/preview-menu.js, in the right-click menu's element. One row a page: a
+   mark (a port's number, a site's first letter — no favicons, see the module),
+   its title over its address and the session that opened it, and a flag for
+   an agent on it or a site waiting on you. */
+.ctx-menu[data-kind="pages"] { min-width: 300px; max-width: min(460px, calc(100vw - 16px)); }
+.pvp-row { display: flex; align-items: center; gap: var(--sp-5); min-width: 0; width: 100%; text-align: left; }
+.pvp-mark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 var(--sp-2);
+    border-radius: var(--r-xs);
+    background: var(--s5);
+    color: var(--text-2);
+    font: 600 var(--fs-sm)/1 var(--sans);
+}
+.pvp-mark.port { font: 500 var(--fs-xs)/1 var(--mono); }
+.pvp-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pvp-label, .pvp-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pvp-label { color: var(--text); font: 500 var(--fs-md)/var(--lh-snug) var(--sans); }
+.pvp-sub { color: var(--text-3); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
+.pvp-flag {
+    flex: none;
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--pill);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--sans);
+    color: var(--text-3);
+    background: var(--s4);
+}
+.pvp-flag.agent { color: var(--blue); background: var(--blue-cont); }
+.pvp-flag.ask { color: var(--text); background: var(--yellow-cont); }
+
+/* The conversation's chips for the preview: the agent's page when it is off
+   screen, and the list. In the port strip, so they borrow .channel's shape. */
+.channel.pv-pages-chip { padding-right: var(--sp-3); }
+.channel.pv-agent-chip { background: var(--blue-cont); padding-right: var(--sp-3); }
+.channel.pv-agent-chip .led { background: var(--blue); animation: pv-driving-pulse 1.4s ease-in-out infinite; }
+.channel.pv-agent-chip .name { max-width: 320px; color: var(--text-2); }
+.channel.pv-agent-chip .name strong { color: var(--text); font-weight: 500; }
+@media (prefers-reduced-motion: reduce) {
+    .channel.pv-agent-chip .led { animation: none; }
 }
