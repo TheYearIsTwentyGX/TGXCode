@@ -41,7 +41,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'overview-hosts.test.js', 'session-index.test.js', 'keepawake.test.js',
     'session-title.test.js', 'phone-installs.test.js', 'tool-name.test.js', 'images.test.js',
     'brief.test.js', 'titlebar.test.js', 'preview-cdp.test.js', 'preview-grants.test.js',
-    'preview-open.test.js', 'preview-mcp.test.js', 'preview-pages.test.js'];
+    'preview-open.test.js', 'preview-mcp.test.js', 'preview-pages.test.js', 'sudo.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

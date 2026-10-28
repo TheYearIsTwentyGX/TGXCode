@@ -217,6 +217,7 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     state.prStatus = null;      // nor are its pull requests
     state.prReviewOpen = null;  // nor the review panel one of them had open
     state.ask = null;   // approvals belong to the session that is blocked on them
+    state.sudoAsk = null;   // and so does a sudo password
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();

@@ -1,0 +1,6 @@
+#!/bin/sh
+# The SUDO_ASKPASS helper TGXCode gives each session when Settings › Sudo is on.
+# sudo runs it to get a password; it asks the bridge, which asks you. A shell
+# script only so it can find node: sudo runs it with the agent's PATH, which may
+# have none. The work is in sudo-askpass.js; bridge/sudo.js says why it exists.
+exec "${TGXCODE_SUDO_NODE:-node}" "$(dirname "$0")/sudo-askpass.js" "$@"

@@ -83,7 +83,7 @@ function buildDigest({
     // --- waiting on you: live -------------------------------------------------
     const waiting = [];
     for (const [sessionId, st] of Object.entries(statuses || {})) {
-        const ask = st && st.pendingPermission;
+        const ask = st && (st.pendingPermission || st.sudoAsk);
         if (!ask || isTest(sessionId)) continue;
         const n = named(sessionId);
         waiting.push({

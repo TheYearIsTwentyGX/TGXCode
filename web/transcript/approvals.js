@@ -83,6 +83,8 @@ const DECISION_WORD = {
 export const ASK_HEAD = {
     plan: { name: 'Plan', title: 'ready to start' },
     question: { name: 'Question', title: 'waiting on you' },
+    // Its card is web/transcript/sudo.js's; this is for the boards that name it.
+    sudo: { name: 'sudo', title: 'needs your password' },
 };
 
 /** Don't fire single-key shortcuts at somebody who is writing a sentence. */

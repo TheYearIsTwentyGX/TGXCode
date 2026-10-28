@@ -57,6 +57,10 @@ const MAX_RECENT = 12;
 // the two numbers agree. See `hostWorkers`.
 const STUCK_MS = 180_000;
 
+// What a session is blocked on: the CLI's own ask, or a `sudo -A` waiting on a
+// password (bridge/sudo.js). A board treats the two alike; the card says which.
+const askOf = (runner) => (runner && (runner.pendingPermission || runner.sudoAsk)) || null;
+
 // A worker with one of these is doing something, or blocked on somebody — the
 // reasons that would have given it a card of its own.
 const ACTIVE = new Set(['ask', 'here', 'error', 'elsewhere']);
@@ -224,7 +228,7 @@ function hostWorkers({ summaries, reasons, orchs, statuses, now = Date.now() }) 
             if (w.closedAt) continue;
             const r = reasons.get(w.id) || null;
             if (!ACTIVE.has(r)) continue;
-            active.push({ w, r, ask: (statuses[w.id] && statuses[w.id].pendingPermission) || null });
+            active.push({ w, r, ask: askOf(statuses[w.id]) });
         }
         const queued = (o.pendingSpawns || [])
             .map(p => ({ id: p.id, title: p.title || null, at: p.at || 0 }));
@@ -235,7 +239,8 @@ function hostWorkers({ summaries, reasons, orchs, statuses, now = Date.now() }) 
         for (const a of active) {
             workerOf.set(a.w.id, o.id);
             if (a.ask) {
-                const stuck = !!o.paused
+                // A sudo password is never the orchestrator's to give.
+                const stuck = !!o.paused || a.ask.kind === 'sudo'
                     || (!working && now - (a.ask.askedAt || now) >= STUCK_MS);
                 a.who = stuck ? 'you' : 'orchestrator';
                 askFor.set(a.w.id, a.who);
@@ -425,7 +430,7 @@ function activityAt(s) {
  * as running.
  */
 function why(s, runner) {
-    if (runner && runner.pendingPermission) return 'ask';
+    if (askOf(runner)) return 'ask';
     if (runner && (runner.state === 'busy' || runner.state === 'starting')) return 'here';
     if (runner && runner.state === 'error') return 'error';
     // Messages waiting behind a turn that is no longer running are work that
@@ -509,7 +514,7 @@ function card(index, s, runner, reason, crew = null, present = null) {
 
         // What it is blocked on, if anything. The whole ask, because a tool ask
         // is answered from the card and needs its request id and its input.
-        ask: (runner && runner.pendingPermission) || null,
+        ask: askOf(runner),
         // Whose that ask is: `you`, or `orchestrator` for a worker's ask its
         // orchestrator is still handling. Null with no ask. See `hostWorkers`.
         askFor: null,

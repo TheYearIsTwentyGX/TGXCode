@@ -102,6 +102,7 @@ const { describeTool } = require('./transcript');
 const { toolDisplayName } = require('./tool-name');
 const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
 const hostClient = require('./host-client');
+const sudo = require('./sudo');
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
@@ -125,8 +126,12 @@ let queueSeq = 0;
  * elsewhere. `visible` adds nothing, which leaves the bridge's own environment in
  * charge — set the variable there and it still holds. The MCP server is started
  * once per `claude`, so a change reaches the next session spawned, not one running.
+ *
+ * `sudo` is `{key, port}` when Settings › Sudo is on, and then the session gets
+ * SUDO_ASKPASS and what the helper needs to reach this bridge; null strips them.
+ * Read at spawn like the browser — see bridge/sudo.js.
  */
-function sessionEnv({ browser = 'visible' } = {}) {
+function sessionEnv({ browser = 'visible', sudo: sudoAccess = null } = {}) {
     const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'tgxcode' };
     deleteBoth(env, 'PORT');
     // terminal.js sets this on a session's own terminal pane, and devservers.js
@@ -140,6 +145,7 @@ function sessionEnv({ browser = 'visible' } = {}) {
     // keep one unless this is set. See cfg.TODO_TOOLS for the opt-out.
     if (cfg.TODO_TOOLS) env.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1';
     if (browser === 'headless') env.PLAYWRIGHT_MCP_HEADLESS = 'true';
+    sudo.applyEnv(env, sudoAccess);
     return env;
 }
 
@@ -424,6 +430,11 @@ class Runner extends EventEmitter {
         // Supplied by the pool and asked at each spawn, so a settings change
         // reaches the next process, resumed ones included.
         this.agentBrief = opts.agentBrief || (() => null);
+        // `{key, port}` for the sudo askpass helper when Settings › Sudo is on,
+        // else null; and the sudo ask this session is blocked on, if any. Both
+        // supplied by the pool — see bridge/sudo.js.
+        this.sudoAccess = opts.sudoAccess || (() => null);
+        this.sudoAskFor = opts.sudoAskFor || (() => null);
         this.lastActivityAt = null;    // the last stream line, tool or answered ask
         this.stalled = false;
         this._stallTimer = null;
@@ -644,7 +655,8 @@ class Runner extends EventEmitter {
             this.proc = hostClient.spawnClaude(CLAUDE_BIN, args, {
                 cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: sessionEnv({ browser: this.agentBrowser(this.cwd) }),
+                env: sessionEnv({ browser: this.agentBrowser(this.cwd),
+                    sudo: this.sudoAccess(this.sessionId) }),
                 // Its own process group, so a Ctrl-C aimed at the bridge is not
                 // also delivered to a turn in flight; it gets to shut down on
                 // stdin EOF instead of being interrupted mid-write.
@@ -2287,6 +2299,13 @@ class Runner extends EventEmitter {
             // A window opening onto a session that is already blocked on an ask
             // has to be able to draw the card without having seen the event.
             pendingPermission: this.pendingPermission ? publicAsk(this.pendingPermission) : null,
+            // A `sudo -A` waiting on a password, in bridge/sudo.js's public form
+            // (kind 'sudo'), or null. Separate from the permission ask: that one
+            // is the CLI's and is answered over its stdin; this one is answered
+            // to the askpass helper. They are rarely up together — a Bash call
+            // waiting on sudo has already been allowed to run — but can be, when
+            // a subagent asks meanwhile, so neither hides the other.
+            sudoAsk: this.sudoAskFor(this.sessionId),
             canPrompt: this.caps.permissionPrompt,
             // Lets the UI show how long a turn has been going, which matters
             // when the API is being retried for minutes at a time.
@@ -2486,6 +2505,10 @@ class RunnerPool extends EventEmitter {
         // And the agent brief, replaced by the server with bridge/brief.js.
         // None is what a session got before there was one.
         this.agentBrief = () => null;
+        // And sudo approval, replaced by the server with bridge/sudo.js. Off is
+        // what a session had before there was one.
+        this.sudoAccess = () => null;
+        this.sudoAskFor = () => null;
         // Orchestration, replaced by the server with bridge/orchestration.js.
         // Without one no session has a role and nobody answers for a window.
         this.roleOf = () => null;
@@ -2595,6 +2618,8 @@ class RunnerPool extends EventEmitter {
             rerollAfter: (dir) => this.rerollAfter(dir),
             stallAfter: (dir) => this.stallAfter(dir),
             agentBrowser: (dir) => this.agentBrowser(dir),
+            sudoAccess: (id) => this.sudoAccess(id),
+            sudoAskFor: (id) => this.sudoAskFor(id),
             previewControl: (dir) => this.previewControl(dir),
             agentBrief: (dir, role) => this.agentBrief(dir, role) });
         // Read through `r.sessionId` rather than closing over the id it was

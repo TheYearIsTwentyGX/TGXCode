@@ -179,6 +179,7 @@ export function announceAsk(p) {
 const ASK_TITLE = {
     plan: 'a plan to approve',
     question: 'a question for you',
+    sudo: 'sudo needs your password',
 };
 
 export function askBody(p, kind) {
@@ -189,6 +190,9 @@ export function askBody(p, kind) {
         const qs = (p.input && p.input.questions) || [];
         return clip(qs.length ? qs[0].question : 'A question is waiting.', 160);
     }
+    if (kind === 'sudo') {
+        return clip(`sudo ${p.command || ''}${p.runsShell ? ' — runs a shell' : ''}`, 160);
+    }
     return clip(toolSummary({ name: p.tool, input: p.input }) || p.description || '', 160);
 }
 
@@ -196,6 +200,8 @@ const ASK_ACTIONS = {
     tool: [{ action: 'allow', title: 'Allow' }, { action: 'deny', title: 'Deny' }],
     plan: [{ action: 'allow', title: 'Approve' }, { action: 'deny', title: 'Keep planning' }],
     question: [],
+    // A password does not fit on a toast; a click opens the card.
+    sudo: [],
 };
 
 /**

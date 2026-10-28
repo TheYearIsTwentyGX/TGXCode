@@ -45,6 +45,8 @@ const { Usage } = require('./usage');
 const { Beacon } = require('./beacon');
 const { KeepAwake } = require('./keepawake');
 const { PhoneInstalls } = require('./phone-installs');
+const { SudoAsks, sessionKey } = require('./sudo');
+const sudoRoutes = require('./routes/sudo');
 const devbrowser = require('./devbrowser');
 const prStore = require('./pr-store');
 const { TerminalPool } = require('./terminal');
@@ -165,6 +167,9 @@ const runs = new RunPool({ onChange: (e) => broadcast('run-changed', e) });
 // APKs filed for the phone to install, and what it said about each. The event
 // carries the whole record, so no client refetches — see bridge/phone-installs.js.
 const phoneInstalls = new PhoneInstalls({ onChange: (r) => broadcast('phone_install', r) });
+// The sudo asks waiting on a person — bridge/sudo.js. Wired to the event stream
+// below, beside the permission asks it mirrors.
+const sudoAsks = new SudoAsks({ allowRemote: () => sudoRoutes.settings().allowRemote });
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -242,6 +247,16 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/') && pathname !== '/api/health'
         && req.method !== 'GET' && !CLIENT_HEADERS.some(h => req.headers[h])) {
         return send(res, 403, { error: 'missing client header' });
+    }
+
+    // The sudo askpass helper. Ahead of the token on purpose: it never has the
+    // token, and authenticates with its session's key instead — which the route
+    // checks, along with /proc, before anything is shown. See bridge/sudo.js.
+    if (pathname === '/api/sudo/ask') {
+        try { return await sudoRoutes.helperAsk(req, res, who); } catch (err) {
+            console.error(`[tgxcode] sudo ask failed: ${err.message}`);
+            return send(res, 500, { error: 'sudo ask failed' });
+        }
     }
 
     // The token. /api/health stays open: app/main.js pings it to decide whether a
@@ -702,6 +717,7 @@ const ROUTES = [
     require('./routes/files'),
     require('./routes/phone-installs'),
     require('./routes/preview'),
+    sudoRoutes,
 ];
 
 // Builds the full-text index in the background, a few milliseconds at a time.
@@ -716,7 +732,7 @@ const ROUTE_DEPS = {
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent, keepAwake, evaluateKeepAwake,
-    phoneInstalls, briefFor,
+    phoneInstalls, briefFor, sudoAsks,
 };
 for (const routes of ROUTES) if (routes.init) routes.init(ROUTE_DEPS);
 
@@ -883,6 +899,13 @@ pool.agentBrowser = () => {
 pool.previewControl = () => {
     try { return prefs.forCwd().preview.agentControl === true; } catch { return false; }
 };
+// Sudo approval — bridge/sudo.js. Read at spawn like the browser: a session
+// started while it was off has no SUDO_ASKPASS, and turning it on reaches the next
+// process started. Off, the env is stripped rather than left as it was.
+pool.sudoAccess = (sessionId) => (sudoRoutes.settings().enabled && auth.current()
+    ? { key: sessionKey(auth.current(), sessionId), port: cfg.PORT } : null);
+pool.sudoAskFor = (sessionId) => sudoAsks.forSession(sessionId);
+
 // The agent brief — what TGXCode is and offers, appended to every session's
 // system prompt at each spawn, new or resumed. See bridge/brief.js. Composed from
 // the settings in force for the session's directory, the project's commands and
@@ -965,6 +988,28 @@ pool.on('permission-resolved', (p) => {
     tickBoard();
 });
 pool.on('notice', (n) => broadcast('notice', n));
+// A sudo ask goes everywhere a permission ask does — the session, Needs you, the
+// Live board, the notification log — but never to an orchestrator: it is a
+// model, and it has no password to give. The runner's status carries the ask
+// (`sudoAsk`), so the boards learn of it by a status push like any other change.
+// Nothing here ever sees a password; see SudoAsks#publicAsk.
+function sudoStatus(sessionId) {
+    const r = pool.get(sessionId);
+    if (r) broadcast('runner-status', r.status());
+    tickBoard();
+}
+sudoAsks.on('ask', (p) => {
+    broadcast('sudo-ask', p);
+    filed(notifications.ask(p));
+    sudoStatus(p.sessionId);
+});
+const SUDO_OUTCOME = { approved: 'allow', denied: 'deny', cancelled: 'cancelled' };
+sudoAsks.on('resolved', (p) => {
+    broadcast('sudo-resolved', p);
+    const row = notifications.resolve(p.requestId, SUDO_OUTCOME[p.outcome] || p.outcome);
+    if (row) broadcast('notification-resolved', { id: row.id, outcome: row.outcome, outcomeAt: row.outcomeAt });
+    sudoStatus(p.sessionId);
+});
 
 orchestration.init({
     store: orchestrators, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates,
@@ -1212,6 +1257,7 @@ function shutdown(code = 0) {
     // The lock's child would also go by itself when our end of its stdin closes;
     // this just does not make it wait for that.
     try { keepAwake.shutdown(); } catch { /* nothing to clean */ }
+    try { sudoAsks.close(); } catch { /* nothing to clean */ }
     try { standing.shutdown(); } catch { /* nothing to clean */ }
     // Drafts are written on a 400ms debounce and this process exits 200ms from
     // here, so a draft saved in the last moment before a restart would simply be

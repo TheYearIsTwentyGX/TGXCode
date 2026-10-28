@@ -1357,6 +1357,130 @@ that channel is not a documented, stable surface. If the installed `claude` turn
 out not to support it, the app says so once and falls back to permission modes
 alone; sending never breaks over a protocol difference.
 
+### Approving sudo
+
+Agents run commands through Claude Code's Bash tool, which has no terminal, so a
+plain `sudo` cannot ask for a password and fails. Turn on **Settings › Sudo ›
+Approve sudo commands from TGXCode** and an agent can type `sudo -A …` instead: a
+card appears in the session — and on Needs you, the Live board, the notification
+log and as a desktop notification — showing the command, and you approve it by
+typing your password, or deny it.
+
+```
+┌ sudo — needs your password ───────────────── runs a shell ┐
+│  sudo -A bash -c 'apt-get update'                          │
+│  As       root                                             │
+│  In       /home/you/project                                │
+│  Session  Fix the nginx config                             │
+│  This starts a shell as root: approving it approves …      │
+│  [ ••••••••••• ]                                           │
+│  [ Approve ⏎ ]  [ Deny ]                                   │
+└────────────────────────────────────────────────────────────┘
+```
+
+It is **off by default**. Turned on, it changes what an agent can do on this
+machine, and the person who should decide that is you, once, rather than an
+upgrade. It reaches **sessions as they start**: restart a running session (or send
+it a message after it has gone idle and been recycled) to give it the helper. Turned
+off, new asks are refused at once from every session, old ones included.
+
+**What to expect.**
+
+- Agents are told about it in the agent brief (`sudo -A`, a long Bash timeout,
+  and not to retry a denial). An agent that types plain `sudo` gets sudo's own
+  "a terminal is required" — on sudo-rs, the default `sudo` on recent Ubuntu,
+  the helper is only used with `-A`.
+- **One approval covers the rest of that Bash command.** sudo caches your
+  password per *parent process* when there is no terminal, and every Bash call
+  is a fresh shell — so `sudo -A apt update && sudo -A apt upgrade` asks once,
+  and the agent's next Bash call asks again. The cache lasts sudo's
+  `timestamp_timeout` (15 minutes unless your sudoers says otherwise; set it to 0
+  to be asked for every single sudo). That is why the card shows the whole Bash
+  command under the sudo one when they differ: approving the first sudo in it
+  approves the rest.
+- **A wrong password** comes back as the same card with "That password was not
+  accepted", up to sudo's three tries.
+- **There is no countdown.** sudo waits as long as the helper does, and the
+  helper waits for you. What ends it otherwise is the agent's Bash call being
+  stopped or timing out (2 minutes unless the agent asked for longer — the brief
+  tells it to ask for 10), and then the card goes by itself.
+- **From the phone**, the card is read-only — "Approve at the desktop" — and can
+  be denied. **Let the phone answer them too** lets a remote client send the
+  password; it is a separate switch because a password typed into a phone travels
+  further than one typed here, and a stolen pairing token should not be one guess
+  away from root.
+- Nobody watching (no window, no phone) means the ask is denied at once, as a
+  permission prompt is.
+
+#### Threat model
+
+What this protects, and what it does not, plainly.
+
+**The password is never stored.** It goes from the input on the card, in the body
+of one request, to the helper waiting on that ask, which prints it once on stdout
+for the sudo that started it. It is not in any event on `/api/events` (only the
+client that answered ever sends it), not in the notification log, not in a log
+line, not in settings, not on disk. The card clears the field as it sends.
+`test/sudo.test.js` asserts all of that on every run, and a live run against
+sudo-rs found it in none of the stream, the bridge log or the state directory.
+
+**Who can raise an ask.** The helper presents a per-session key from its
+environment, `<sessionId>.<HMAC(bridge token, sessionId)>`. It is not the bridge
+token and does not reveal it, it is never on a command line (environment only,
+which other users cannot read), and it is checked before anything is shown. But an
+agent can read its own environment, and any process running as you can read
+another's — so the key alone proves little, and the bridge does not rely on it.
+
+**Why the command shown can be trusted.** The helper sends one thing, its own pid.
+The bridge then reads `/proc` itself and believes only what it reads there:
+
+1. that pid is yours and its environment holds the very key the request presented
+   — so it is a process of that session, not one the caller pointed at;
+2. its parent is a process named `sudo` (or `sudo-rs`, `sudo.ws`, `sudoedit`)
+   running with **effective uid 0** — which a process of yours cannot be unless it
+   is a setuid program; and
+3. the command on the card is **that sudo's own argv**, NUL-separated, so word
+   boundaries survive. The agent's description of what it is doing is not
+   consulted at all.
+
+So an agent that calls the route with a made-up command gets a 403: its parent is
+its shell, not a root sudo. An agent that runs `sudo -A something-else` gets a card
+showing `something-else`.
+
+**`sudo -s`, `sudo -i`, `sudo bash -c …`** are shown as typed and flagged **runs a
+shell**, with a line saying that approving it approves whatever that shell goes on
+to run, which the card cannot see. The same flag goes on `sh`, `zsh`, `env … bash`
+and `su`. Deny these unless you know why the agent needs a root shell.
+
+**What it does not protect against.** A process that runs as you and *wants* your
+password can get it, from this or from anything else you type it into: it can
+trace the helper while it holds the password (it runs as you), replace `sudo` on
+the agent's `PATH`, or simply wait for the next time you use a terminal. sudo has
+never defended against code already running as the same user, and this does not
+change that. What it does is keep an honest agent — one that is merely wrong about
+what it is about to run — from getting root without you seeing exactly what it
+asked for, and keep the password out of every place the app writes things down.
+Two residual edges on step 2, for completeness: a setuid program reached through a
+symlink named `sudo` would pass the name check, but it would also have to run our
+helper as its child, which no setuid program but sudo does; and a sudo replaced on
+disk by root is out of scope by definition.
+
+**Remote.** `POST /api/sudo/ask` is refused to remote callers outright, and the
+answer route is refused to them unless you turned on the phone switch. See
+docs/remote.md.
+
+**What was verified, on Ubuntu with sudo-rs 0.2.13** (sudo.ws 1.9.17 installed
+beside it): `sudo -A` reaches the helper and plain `sudo` with no terminal does not
+(sudo.ws does use it without `-A`); the helper's parent is a root sudo whose argv
+and the helper's cwd are readable from another process of yours, while sudo's own
+exe and cwd links are not; a real agent session ran `sudo -A whoami` with a ten
+minute timeout, the card showed it, a deny reached the agent, and it did not retry;
+a wrong password came back as attempt 2; killing the command withdrew the card.
+Not verified on this machine, because nobody typed the real password: the approve
+path's last step, sudo accepting a correct password from the helper (the helper's
+stdout is exactly the password and a newline, which is what both sudos read), and
+the cache's per-parent scope, which is from sudo-rs's and sudo's documentation.
+
 ### Plans and questions
 
 Two of the things that come down that same channel are not permissions at all —

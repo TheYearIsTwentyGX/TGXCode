@@ -457,7 +457,7 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
     ['agentBrowser', 'devbrowser', 'digest', 'keyboard', 'orchestrator', 'power', 'preview', 'projects',
-        'quota', 'standing', 'startup', 'toolbar', 'wispr']);
+        'quota', 'standing', 'startup', 'sudo', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -628,6 +628,19 @@ assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { power:
 prefs.save({ scope: 'user', patch: { power: { keepAwake: null } } });
 assert.deepStrictEqual(prefs.forCwd().power, DEFAULTS.power);
 ok('power.keepAwake is off by default, saves a boolean only, is user-only, and clears');
+
+// Off until the user turns it on, and only the user can: a project file that
+// switched on a password prompt for its agents, or let a phone answer one, would
+// be a repository reaching for root.
+assert.deepStrictEqual(DEFAULTS.sudo, { enabled: false, allowRemote: false });
+prefs.save({ scope: 'user', patch: { sudo: { enabled: true } } });
+assert.deepStrictEqual(prefs.forCwd().sudo, { enabled: true, allowRemote: false });
+assert.throws(() => prefs.save({ scope: 'user', patch: { sudo: { allowRemote: 'yes' } } }),
+    (e) => e.code === 'value');
+assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { sudo: { enabled: true } } }));
+prefs.save({ scope: 'user', patch: { sudo: { enabled: null } } });
+assert.deepStrictEqual(prefs.forCwd().sudo, DEFAULTS.sudo);
+ok('sudo is off by default, saves booleans only, is user-only, and clears');
 
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.

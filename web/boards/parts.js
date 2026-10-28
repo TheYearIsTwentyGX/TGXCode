@@ -88,6 +88,7 @@ export const ASK_WORD = {
     tool: 'Waiting for permission',
     plan: 'Waiting on a plan',
     question: 'Waiting on a question',
+    sudo: 'Waiting on a sudo password',
 };
 
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);

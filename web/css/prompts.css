@@ -15,7 +15,7 @@
    outlined and warm-tinted, because unlike a tool block it is asking you
    something and the turn does not move until you answer. */
 
-.perm {
+.perm, .sudo-ask {
     /* Left-aligned with event bodies: the gutter is for timestamps, and this
        has no time of its own until the transcript records the outcome. */
     margin: var(--sp-5) 0 var(--sp-3) calc(var(--gutter) + var(--sp-7));
@@ -27,7 +27,7 @@
     animation: perm-in var(--dur-base) var(--ease-out);
 }
 .perm:focus-visible { box-shadow: 0 0 0 var(--focus-w) var(--focus-colour); }
-.perm[data-pending] { opacity: 0.55; }
+.perm[data-pending], .sudo-ask[data-pending] { opacity: 0.55; }
 
 @keyframes perm-in {
     from { opacity: 0; transform: translateY(var(--sp-2)); }
@@ -619,6 +619,44 @@
     color: var(--text-4);
     font-style: italic;
 }
+
+/* ── sudo card ───────────────────────────────────────────────────────── */
+/* web/transcript/sudo.js. The approval card's look, plus what only this one
+   has: who and where it runs as, a password field, and a red flag when the
+   command is a shell. */
+
+.sudo-flag {
+    margin-left: auto;
+    padding: 0 var(--sp-4);
+    border-radius: var(--pill);
+    background: var(--red-cont);
+    color: var(--red);
+    font: 500 var(--fs-xs)/1.6 var(--sans);
+}
+.sudo-facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--sp-1) var(--sp-5);
+    margin: var(--sp-4) 0 0;
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
+}
+.sudo-facts dt { color: var(--text-3); }
+.sudo-facts dd { margin: 0; color: var(--text-2); font-family: var(--mono); word-break: break-word; }
+.sudo-warn { color: var(--red); }
+.sudo-context { max-height: 120px; }
+.sudo-form { margin-top: var(--sp-5); }
+.sudo-form .perm-btns { margin-top: var(--sp-4); }
+.sudo-pw {
+    width: min(100%, 320px);
+    height: 32px;
+    padding: 0 var(--sp-5);
+    border: 1px solid var(--outline);
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+}
+.sudo-pw:focus { outline: none; border-color: var(--blue); }
 
 /* What happened to a card that is gone. The transcript carries the real
    record; this is only so the card does not vanish without a word. */
