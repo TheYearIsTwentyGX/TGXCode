@@ -82,6 +82,12 @@
 // bridge/keepawake.js. **User-only**: whether this machine stays awake is not a
 // repository's to decide.
 //
+// `sudo` is whether sessions get the askpass helper that lets you approve a
+// `sudo -A` from the app, and whether a phone may answer one — see bridge/sudo.js.
+// Off by default, both. **User-only**, twice over: a checked-in file that could
+// switch on a password prompt for every agent in the repository, or let a phone
+// type your password, is a repository reaching for root.
+//
 // `brief` is the agent brief — the pre-prompt every session gets and the sections
 // behind `tgxcode_guide` (bridge/brief.js). A master switch, then per text an
 // on/off and an edited copy; a text that is absent or null is the shipped one,
@@ -511,6 +517,15 @@ const DEFAULTS = {
         // takes effect without a restart. See bridge/keepawake.js.
         keepAwake: false,
     },
+    sudo: {
+        // Give sessions SUDO_ASKPASS, so `sudo -A` raises a card you answer with
+        // your password. Read at spawn: a session started before this was on
+        // has to be restarted to get it. See bridge/sudo.js.
+        enabled: false,
+        // Let a remote client (the phone) send the password. Off, it sees the
+        // card read-only and may only deny.
+        allowRemote: false,
+    },
 };
 
 for (const id of brief.SECTION_IDS) {
@@ -556,9 +571,11 @@ for (const id of brief.SECTION_IDS) {
 // `digest` is when you count as having walked away, which is about you.
 //
 // `power` is whether this machine is allowed to sleep, which is the machine's.
+//
+// `sudo` is root on this machine, which is the machine's owner's.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
     'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator',
-    'digest', 'power']);
+    'digest', 'power', 'sudo']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -724,6 +741,10 @@ const SHAPE = {
     },
     power: {
         keepAwake: (v) => typeof v === 'boolean',
+    },
+    sudo: {
+        enabled: (v) => typeof v === 'boolean',
+        allowRemote: (v) => typeof v === 'boolean',
     },
     brief: briefShape(),
 };
@@ -1284,6 +1305,7 @@ class Prefs {
             agentBrowser: { ...DEFAULTS.agentBrowser },
             digest: { ...DEFAULTS.digest },
             power: { ...DEFAULTS.power },
+            sudo: { ...DEFAULTS.sudo },
             brief: { ...DEFAULTS.brief },
             reviews: { types: DEFAULTS.reviews.types.map(t => ({ ...t })) },
             sources: [],

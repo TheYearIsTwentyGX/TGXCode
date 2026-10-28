@@ -182,6 +182,26 @@ export const SETTINGS = [
         status: () => html`<${KeepAwakeStatus} />`,
     },
     {
+        title: 'Sudo', section: 'sudo', category: 'workspace', userOnly: true,
+        note: 'Let agents run sudo with your approval. An agent types sudo -A; a card shows '
+            + 'the exact command, where and as whom it runs, and you approve it with your '
+            + 'password or deny it. The password goes to that one sudo and is never stored.',
+        rows: [
+            { key: 'enabled', type: 'bool',
+                label: 'Approve sudo commands from TGXCode',
+                note: 'Reaches sessions as they start: restart a running session to give it '
+                    + 'this. sudo remembers a password for the rest of the Bash command it was '
+                    + 'typed for — usually 15 minutes, per your sudoers timestamp_timeout — so '
+                    + 'a later sudo in that same command runs without asking. The next Bash '
+                    + 'command asks again.' },
+            { key: 'allowRemote', type: 'bool',
+                when: (p) => p.sudo && p.sudo.enabled === true,
+                label: 'Let the phone answer them too',
+                note: 'Off, a phone sees the card and can deny it, but the password can only '
+                    + 'be typed at this computer.' },
+        ],
+    },
+    {
         title: 'Live board', section: 'live', category: 'workspace',
         note: 'The board behind Live — every session running right now.',
         rows: [

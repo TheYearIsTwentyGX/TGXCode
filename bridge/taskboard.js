@@ -57,7 +57,7 @@ const tasks = require('./tasks');
  */
 function column(s, runner) {
     if (s.archived) return null;
-    if (runner && runner.pendingPermission) return 'needs';
+    if (runner && (runner.pendingPermission || runner.sudoAsk)) return 'needs';
     if (runner && runner.state === 'error') return 'needs';
     if (runner && (runner.state === 'busy' || runner.state === 'starting')) return 'working';
     // Messages waiting behind a turn that is no longer running are work that
@@ -178,7 +178,7 @@ function card(s, runner, col) {
             errorKind: runner.errorKind,
             stalled: runner.stalled,
         } : null,
-        ask: (runner && runner.pendingPermission) || null,
+        ask: (runner && (runner.pendingPermission || runner.sudoAsk)) || null,
 
         // Only where it means something. An idle session's list is whatever it
         // was left at, which is not news, and asking would be a directory read

@@ -78,6 +78,7 @@ import {
     answerAsk, answerAskFor, ASK_HEAD, isTyping, openFeedback, refreshAsk, renderAsk,
     resolveAsk, setPlanAside,
 } from './transcript/approvals.js';
+import { refreshSudo, resolveSudo } from './transcript/sudo.js';
 import {
     closeDiff, collapseChanges, fetchDiff, jumpFromDiff, loadChanges, renderChanges,
     resetChanges, setDiffOpt, showChanges,
@@ -850,6 +851,7 @@ function clearCurrent() {
     state.orphanResults.clear();
     state.agents = [];
     state.ask = null;
+    state.sudoAsk = null;
     clearPendingSend();   // the conversation it was drawn in is gone
     leaveAgent();
     clearInterval(state.busyTimer);
@@ -3062,6 +3064,31 @@ function connect() {
         resolveAsk(p.outcome);
     });
 
+    // A `sudo -A` waiting on a password — bridge/sudo.js. Counted and announced
+    // like a permission ask, but never deferred to an orchestrator: it has no
+    // password to give. The payload never carries one either.
+    es.addEventListener('sudo-ask', (e) => {
+        const p = JSON.parse(e.data);
+        announceAsk(p);
+        state.waiting.add(p.sessionId);
+        paintLiveBadge();
+        paintTaskboardBadge();
+        if (state.current && p.sessionId === state.current.sessionId) refreshSudo(p);
+    });
+
+    es.addEventListener('sudo-resolved', (e) => {
+        const p = JSON.parse(e.data);
+        clearAsk(p.sessionId);
+        digestOnResolved(p);
+        // Unless the CLI is also waiting on this session for something.
+        if (!(state.ask && state.current && state.current.sessionId === p.sessionId)) {
+            state.waiting.delete(p.sessionId);
+        }
+        paintLiveBadge();
+        paintTaskboardBadge();
+        resolveSudo(p);
+    });
+
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
         // Rate limits belong to the pill. `rate_limit_event` arrives on every
@@ -3287,6 +3314,8 @@ export function applyRunner(s) {
     // that is already blocked draws the card without having seen the event.
     const ask = (s && s.pendingPermission) || null;
     refreshAsk(ask);
+    // And a `sudo -A` waiting on a password, which has a card of its own.
+    refreshSudo((s && s.sudoAsk) || null);
 
     // Approving a plan changes the mode out from under the selector, so a change
     // the bridge reports outranks a mode picked here and not yet sent: what the

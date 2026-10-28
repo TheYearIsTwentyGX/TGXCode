@@ -64,7 +64,8 @@ const SAVE_DEBOUNCE_MS = 250;
 // almost certainly still sitting in front of it.
 const MIN_TURN_MS = 30_000;
 
-const TYPE_BY_KIND = { tool: 'permission', plan: 'plan', question: 'question' };
+// `sudo` is bridge/sudo.js's ask: a permission in all but who answers it.
+const TYPE_BY_KIND = { tool: 'permission', plan: 'plan', question: 'question', sudo: 'permission' };
 
 const clip = (s, n) => {
     const t = String(s || '').replace(/\s+/g, ' ').trim();
@@ -261,7 +262,7 @@ class NotificationLog {
         return started ? Date.now() - started : (fallbackMs || 0);
     }
 
-    /** A blocked turn: a tool permission, a plan to approve, or a question. */
+    /** A blocked turn: a tool permission, a plan to approve, a question, or a sudo password. */
     ask(p) {
         const kind = p.kind || 'tool';
         return this.record({
@@ -621,6 +622,8 @@ class ReadState {
 }
 
 function askSummary(p, kind) {
+    // The command, never anything typed in answer: this row is written to disk.
+    if (kind === 'sudo') return clip(`sudo ${p.command || ''}`, 200);
     if (kind === 'plan') {
         return firstLine((p.input && p.input.plan) || p.description || 'A plan is ready.', 200);
     }
@@ -632,6 +635,10 @@ function askSummary(p, kind) {
 }
 
 function askDetail(p, kind) {
+    if (kind === 'sudo') {
+        return [`as ${p.user || 'root'}`, p.cwd ? `in ${p.cwd}` : null,
+            p.runsShell ? 'runs a shell' : null].filter(Boolean).join(' · ');
+    }
     if (kind === 'plan') return (p.input && p.input.plan) || null;
     if (kind === 'question') {
         const qs = (p.input && p.input.questions) || [];

@@ -185,7 +185,8 @@ function when(at) {
     return `${Math.floor(s / 86400)}d ago`;
 }
 
-const ASK_WORDS = { tool: 'wants to use', plan: 'has a plan to approve', question: 'has a question' };
+const ASK_WORDS = { tool: 'wants to use', plan: 'has a plan to approve', question: 'has a question',
+    sudo: 'wants a sudo password' };
 const FAIL_WORDS = {
     failed: 'Failed', stalled: 'Stalled', 'schedule-failed': 'Schedule failed',
     'schedule-missed': 'Schedule missed', 'later-failed': 'Send failed', 'later-missed': 'Send missed',

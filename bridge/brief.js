@@ -62,6 +62,7 @@ const FEATURES = {
     projectCommands: 'the project declares commands in .tgxcode/commands.json',
     worker: 'the session is a worker started by an orchestrator',
     orchestrator: 'the session is an orchestrator',
+    sudo: 'the user approves sudo commands from the app (Settings → Sudo)',
 };
 
 const DEFAULT_MAIN = `# TGXCode
@@ -90,6 +91,9 @@ Its \`tgxcode\` MCP tools give you:
 {{/if}}
 
 Attached files arrive as paths under attached_assets/. Scratch files belong in your session scratchpad, which the user can see in the app.
+{{#if sudo}}
+To run something as root, use \`sudo -A …\` (plain sudo cannot prompt here) and give the Bash call a long timeout (up to 600000 ms): the user approves each command in the app, with their password. If it fails saying it was not approved, do not retry; tell the user what needed root.
+{{/if}}
 {{#if servers}}
 Servers you start are detected by port and offered to the user to open.
 {{/if}}
@@ -403,6 +407,7 @@ function featuresFor({ prefs, role = null, commands = null }) {
         projectCommands: Array.isArray(commands) && commands.length > 0,
         worker: role === 'worker',
         orchestrator: role === 'orchestrator',
+        sudo: !!(p.sudo && p.sudo.enabled === true),
     };
 }
 

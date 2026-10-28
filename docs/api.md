@@ -263,6 +263,8 @@ for this by name, and a client should honour it: you should never be unsure whet
 the thing you are about to approve is running on a machine you are sitting at.
 
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
+`POST /api/sudo/ask` (the askpass helper's route — always); `POST /api/sudo/:id/answer`
+**unless `sudo.allowRemote` is on** (`POST /api/sudo/:id/deny` and `GET /api/sudo` stay open);
 `permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
@@ -1760,9 +1762,9 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Thirteen sections may only be set in the user's own file**: `quota`, `keyboard`,
+**Fourteen sections may only be set in the user's own file**: `quota`, `keyboard`,
 `projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup`, `agentBrowser`,
-`orchestrator`, `digest` and `power`. A project file that carries one is ignored and says so in
+`orchestrator`, `digest`, `power` and `sudo`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1781,7 +1783,7 @@ what your window opens to is not a repository's to arrange. `agentBrowser` is th
 opens on your desktop is yours. `orchestrator` caps how much of the account an
 orchestrator may spend, which is not a checked-in file's to raise. `digest` is when
 you count as having walked away, which is about you. `power` is whether this machine
-may sleep, which is the machine's.
+may sleep, which is the machine's. `sudo` is root on this machine.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -2085,6 +2087,14 @@ actually doing is `keepAwake` in `GET /api/health`:
 | Key | Type | |
 |---|---|---|
 | `keepAwake` | **boolean**, default `false` | Hold off system sleep (not display sleep) while any turn is busy or starting — this bridge's, or a terminal's that Claude Code reports busy — and for two minutes after the last one ends. Under WSL the bridge runs a `powershell.exe` that calls `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)`; on a Linux host, `systemd-inhibit --what=sleep:idle`. Takes effect without a restart. A closed laptop lid may still sleep the machine, per its power settings. |
+
+`sudo` is whether agents can ask you for a sudo password — §*Approving sudo*. **User
+file only**, and **applied by the bridge**:
+
+| Key | Type | |
+|---|---|---|
+| `enabled` | **boolean**, default `false` | Give each session `SUDO_ASKPASS`, so `sudo -A` raises a sudo ask. **Read when a session's process starts**: turning it on reaches sessions started (or restarted) afterwards; turning it off refuses new asks at once, from every session. |
+| `allowRemote` | **boolean**, default `false` | Let a remote caller send the password (`POST /api/sudo/:id/answer`). Off, a remote client may see and deny an ask but not approve it. |
 
 `reviews` is which skills count as code reviews — what `GET /api/sessions/:id/reviews`
 picks out of a transcript. **A project may set it** (a repository that ships its own
@@ -2403,7 +2413,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`prs[]`** | **array of objects** — `{number, url, repo}`, as on a session summary; empty `[]` if none, never null. Part of `sig`. **Status is not here** — colour it from `prs-changed` / `GET /api/prs`, keyed by `sessionId`, which do not move `sig`. The web board draws the glyph on `recent` and `pinned` cards only |
 | **`live`** | **object or null** — the registry entry, as on a session summary |
 | **`runner`** | **object or null — eight fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind, stalled}`. `stalled` is a bool — see §*`runner-status`*. `lastActivityAt` is deliberately not here: the card's signature would change on every line the turn streams |
-| **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
+| **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request`. **Or a sudo ask** (`runner.sudoAsk`, `kind: "sudo"`) when that is all the session is waiting on — answered with `POST /api/sudo/:id/…`, never with `/permission`. A sudo ask's `askFor` is always `"you"`: an orchestrator has no password to give |
 | **`askFor`** | **`"you"`, `"orchestrator"` or null** — null exactly when `ask` is. `"orchestrator"` only on a worker card whose orchestrator is carrying it (`orchestratorId` set) and is still handling its asks; it becomes `"you"` once the ask is *stuck* — the orchestrator paused, or not working (not `busy`/`starting`, or itself waiting on an ask) and the ask's `askedAt` at least 3 minutes old. The orchestrator page's rule (`needsYou`). It moves with the clock alone, and moves `sig` when it does. Either way the ask is answerable from the card; the first answer wins and the orchestrator is told |
 | **`orchestratorId`** | **string or null** — on a worker card, the orchestrator whose card it is drawn inside (that card's `workers.ids` lists it). Null for every other card, including a worker whose orchestrator is not on the board, archived or gone — that one is an ordinary card |
 | **`workers`** | **object or null** — on an orchestrator's card when it carries workers, null otherwise: `{ids: string[], queued: [{id, title, at}], idle: number, finished: number, own: boolean, paused: boolean, quiet: [{id, title, state, at, standing}]}`. Set on an orchestrator card in `sessions` that carries active workers or queued spawns, **and** on any orchestrator card — in `sessions` or in `recent` — that has quiet workers (below); the second kind has `ids: []`, `queued: []` and `own: true`. `ids` are the session ids of its *active* open workers — a reason of `ask`, `here`, `error` or `elsewhere` — whose cards are elsewhere in `sessions`, ordered asks that are yours first, then errors, then asks the orchestrator has, then by when each was started. `queued` are spawns waiting behind the orchestrator's `maxRunning` and have no session yet (`title` a string or null, `at` epoch ms, or 0 when the spawn recorded none). **`quiet`** is an array of objects, its *quiet* workers — open ones with no active reason, and closed ones — which have **no card of their own anywhere on the board**: `id` string (a session id), `title` string or null, `state` `"idle"` (open) or `"finished"` (closed), `at` epoch ms or null (the session's last activity, `lastTs` else file mtime), `standing` string or null (the session's `standing.text`). Idle first, then finished, newest first within each, **at most 20**. `idle` and `finished` are the uncapped counts of those same two kinds, so `idle + finished - quiet.length` is how many were left off the list. A *pinned* worker, or one whose session is missing (deleted, or a test session the bridge is not listing), is in neither the list nor the counts — see below. An archived one is listed: closing a worker archives its session by default, so most `finished` rows are archived sessions, which still open. `own` is false when the orchestrator is on the board only because of its workers — it has no reason of its own, or only `pinned`, which does not count. Part of `sig`, and so are the worker cards it lists: a change on any of them, or on a `quiet` row, moves this card's `sig`. (Until this release `quiet` did not exist, `idle` counted pinned workers too, and the quiet workers were also cards in `recent`.) |
@@ -3338,7 +3348,7 @@ sum of `counts`. All times are epoch ms unless the field says ISO.
 
 | Group | Item shape | |
 |---|---|---|
-| `waiting` | `{sessionId, title: string\|null, project: string\|null, kind: "tool"\|"plan"\|"question", tool: string\|null, requestId: string\|null, askedAt: number\|null}` | **Live, not "since"**: every ask pending *now*, whenever it was raised. An ask raised and answered while you were away is not here; one raised before you left still is. Answer it with `POST /api/sessions/:id/permission`; watch `permission-resolved` and `runner-status` to drop a row the moment it is answered elsewhere |
+| `waiting` | `{sessionId, title: string\|null, project: string\|null, kind: "tool"\|"plan"\|"question"\|"sudo", tool: string\|null, requestId: string\|null, askedAt: number\|null}` | **Live, not "since"**: every ask pending *now*, whenever it was raised. An ask raised and answered while you were away is not here; one raised before you left still is. Answer it with `POST /api/sessions/:id/permission` (a `"sudo"` row: §*Approving sudo*, and watch `sudo-resolved`); watch `permission-resolved` and `runner-status` to drop a row the moment it is answered elsewhere |
 | `failed` | `{id, sessionId: string\|null, title, project: string\|null, type, summary: string\|null, at, anchorId: string\|null}` | Notification rows of type `failed`, `stalled`, `schedule-failed`, `schedule-missed`, `later-failed`, `later-missed`. `id` and `anchorId` are the notification row's, so a client can open it exactly as it opens a History row. **`sessionId` may be null** (a schedule that never produced a session) |
 | `finished` | `{sessionId, title, project: string\|null, turns: number, lastAt: number, standing: {text, source: "model"\|"extract", at}\|null}` | `finished` notification rows grouped **one entry per session**; `turns` is how many, `lastAt` the newest. `standing` is the session's current standing line, as on `/api/sessions` rows. A finish re-emitted by a bridge adopting a turn after a restart (two within 5 s) is counted once |
 | `prs` | `{repo, number, url, title: string\|null, change: "opened"\|"merged"\|"closed", at: number, approx: boolean}` | From the PR cache, so only repositories some session has touched. `opened` is GitHub's `createdAt`. For `merged`/`closed`, `at` is GitHub's `mergedAt`/`closedAt` when the cache has it; otherwise it is **when this bridge noticed** the PR had settled, and `approx` is `true` — draw that as approximate, it can be well after the fact |
@@ -3867,7 +3877,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest, reviews, power, brief}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest, reviews, power, sudo, brief}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed'\|'script', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own, and on every successful `PUT /api/claude-config/hook-script` — with `scope: 'script'` and `file` the script's absolute path, a fifth value no settings write produces — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -3879,6 +3889,8 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `runner-stalled` | `{sessionId: string, stalled: boolean, lastActivityAt: number\|null, busySince: number\|null, stalledAfterMs: number}` — a busy turn crossed into or out of *stalled* (rule under §*`runner-status`*). Times are epoch ms; `stalledAfterMs` is the threshold in force for that session's directory. Sent once per crossing, never repeated while it stays stalled. `stalled: false` comes from the next line on the stream **or** from the turn ending any way at all — stopped, finished, died — so a client may treat it as "take the badge and the toast down". A `runner-status` carrying the same `stalled` follows (or, on a turn ending, is the same broadcast's next message), so a client that only reads `runner-status` still draws it right; this event exists for the notification. A `stalled: true` also files a loud `stalled` notification row |
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
+| `sudo-ask` | a **sudo ask**, the object in §*Approving sudo* (`kind: "sudo"`, `id` = `requestId`). Ungated: every stream gets it. **Never carries a password**, and there is no event that does. Also files a `notification` row and pushes a `runner-status` for that session, whose `sudoAsk` is this object |
+| `sudo-resolved` | `{id, requestId, sessionId, outcome, reason?}` — `outcome` is `"approved"` (a password was handed to sudo — not necessarily the right one; a wrong one comes back as a new `sudo-ask` with `attempt` one higher), `"denied"` or `"cancelled"` (sudo exited, the Bash call was stopped or timed out; `reason` says which). Take the card down. Its notification row is resolved `allow`, `deny` or `cancelled` |
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred` and `session_moved`, which are `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `session_moved` and `move_failed` (a move queued for the end of an orchestrator's turn was made, or dropped because its directory had gone — see `POST …/orchestrator/move`), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
@@ -3907,6 +3919,7 @@ down from:
 | **`queue[]`** | **array of objects** — `{id, text, at, attachments[], handed}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here. **`handed`** bool — see below |
 
 | **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
+| **`sudoAsk`** | **object or null** — a `sudo -A` waiting on a password, same shape as `sudo-ask` (§*Approving sudo*). Separate from `pendingPermission`, and both can be set at once |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
 | `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
@@ -6292,6 +6305,81 @@ one exists and no client sees the difference. `served` is
 the origin `tailscale serve` is already proxying to this port, or null. Every `url`
 is a real value a client can use directly — never a placeholder to be edited. When
 nothing can be determined, `hosts` is empty and the caller should ask.
+
+## Approving sudo
+
+An agent's Bash tool has no terminal, so `sudo` cannot prompt. With `sudo.enabled` on,
+each session the bridge starts gets `SUDO_ASKPASS` pointing at the bridge's askpass
+helper, and an agent that runs **`sudo -A …`** raises a **sudo ask**: a card showing the
+exact command, which the user answers with their password or a denial. The design,
+what was measured about sudo, and the threat model are in `docs/manual.md`
+§*Approving sudo*; this is the contract.
+
+**A client that shows asks should show these.** They arrive on the live channel as
+`sudo-ask` / `sudo-resolved`, sit on `runner.sudoAsk` of the full runner status, and on
+a board card's `ask` when nothing else is pending — so a phone polling `GET
+/api/overview` already sees them, with `ask.kind === "sudo"`. **Answer only with the
+routes below** — a sudo ask's `requestId` means nothing to `/permission`. Like a
+permission ask, one raised while no client is watching (no SSE stream, no
+`X-TGXCode-Viewer` lease) is denied at once.
+
+The ask:
+
+```json
+{ "id": "SF46dju6Stzl", "requestId": "SF46dju6Stzl", "kind": "sudo",
+  "tool": "sudo", "displayName": "sudo", "sessionId": "…",
+  "command": "ls -la '/root/a b'", "sudoLine": "sudo -A ls -la '/root/a b'",
+  "argv": ["sudo", "-A", "ls", "-la", "/root/a b"],
+  "cwd": "/home/me/project", "user": "root", "group": null, "chdir": null,
+  "mode": "run", "runsShell": false,
+  "context": "sudo -A ls -la '/root/a b' && make install",
+  "attempt": 1, "askedAt": 1793220157720, "remoteAnswer": false }
+```
+
+| Field | Type | |
+|---|---|---|
+| `id` = `requestId` | string | Use it in the routes below. |
+| `argv` | **array of strings** | The waiting sudo process's own argv, read from `/proc` by the bridge — not anything the agent said. Draw `sudoLine` (the same, shell-quoted) as the thing being approved. `command` is what sudo will run, shell-quoted; empty for `sudo -s`/`-i` with no command. |
+| `cwd` | string or null | The directory sudo was run in. `chdir` (string or null) is a `-D`/`--chdir` it will move to first. |
+| `user`, `group` | string, string or null | Who it runs as: `-u` (default `root`) and `-g`. |
+| `mode` | `"run"`, `"shell"`, `"login"`, `"edit"`, `"list"` or `"validate"` | `-s`, `-i`, `-e`/sudoedit, `-l`, `-v`. |
+| **`runsShell`** | bool | **Draw a warning.** True for `-s`/`-i`, or a command that is a shell (`bash -c …`, `sh`, `env … zsh`) or `su`: approving it approves whatever that shell runs, which this card cannot show. |
+| `context` | string or null | The whole Bash command the sudo is part of (the parent shell's `-c` script, unwrapped from Claude Code's wrapper). **Show it**: sudo caches the password for the rest of that command, so `sudo -A true && sudo rm …` is approved by approving `true`. Null when the parent is not a shell. |
+| `attempt` | number | 1, then one higher each time **the same sudo** asks again — which it does only after a wrong password. Say so on the card. |
+| `askedAt` | number | Epoch ms. **No expiry**: the ask lasts as long as sudo waits, which ends when the agent's Bash call is stopped or times out (`sudo-resolved`, `cancelled`). |
+| **`remoteAnswer`** | bool | Whether a **remote** client may send the password — `sudo.allowRemote`. When false and you are remote, draw the ask read-only with "Approve at the desktop" and offer Deny only. |
+
+### `GET /api/sudo`
+
+`{enabled: bool, allowRemote: bool, asks: [ask]}` — the two settings and every open ask.
+Open to remote callers.
+
+### `POST /api/sudo/:id/answer`
+
+`{password: string}` → `200 {ok: true}`. The password goes to the waiting helper and
+nowhere else — not into an event, the notification log, a log line or a file — and the
+bridge keeps no copy. **Send it from the client that typed it; never relay or store it.**
+`400` if `password` is not a string of one line (no `\r`, `\n` or NUL; at most 4096
+characters). `403 {remote: true}` from a remote caller unless `sudo.allowRemote` is on.
+`409` when the ask was already answered or has gone. A `200` means "handed to sudo", not
+"correct": a wrong password produces a fresh `sudo-ask` for the same command with
+`attempt` + 1, up to sudo's own limit (3 by default).
+
+### `POST /api/sudo/:id/deny`
+
+No body → `200 {ok: true}`, `409` as above. **Open to remote callers** whatever
+`allowRemote` says: refusing grants nothing. The agent's sudo fails with a message telling
+it not to retry.
+
+### `POST /api/sudo/ask` — the helper's route, not a client's
+
+Called only by `bridge/sudo-askpass`, held open until the ask is settled. Listed so a
+client author knows it is not for them. It does **not** take the bridge token: it takes
+`X-TGXCode-Sudo-Key` (the session's key, from the helper's environment) plus
+`X-TGXCode-Client`, and a body of `{pid}` — the helper's own pid, from which the bridge
+reads and verifies everything else in `/proc`. `401` without a valid key; `403` from a
+remote caller, when `sudo.enabled` is off, or when the pid is not a sudo child carrying
+that key. `200 {password}` or `200 {denied: true, reason}`.
 
 ## Phone installs
 
