@@ -179,6 +179,10 @@ async function handle(req, res, url, pathname, seg, who) {
         }
         const by = stampAutoResume(body);
         if (body.settings) store.setSettings(id, body.settings);
+        // The orchestrator's own model, changed: replaced now when it is idle,
+        // when its turn ends when not — what a composer model change does.
+        const own = body.settings && ('orchestratorModel' in body.settings || 'orchestratorEffort' in body.settings)
+            ? orchestration.applyOwnModel(id) : null;
         if (by && by.by === 'agent') orchestration.noteAutoResume(id);
         orchestration.emit(id);
         // A cutoff lowered under the current reading takes effect now, not at
@@ -192,7 +196,7 @@ async function handle(req, res, url, pathname, seg, who) {
         // nothing while paused, and checkUsage above has just paused it if the
         // new settings are over the line.
         orchestration.drainSpawns(id);
-        return send(res, 200, orchestration.payload(id));
+        return send(res, 200, { ...orchestration.payload(id), ownModelApplied: own });
     }
 
     if (sub === 'inbox' && !seg[5] && req.method === 'GET') {

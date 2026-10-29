@@ -132,6 +132,7 @@ const { isAccent } = require('./snippets');
 const brief = require('./brief');
 const { projectRootOf } = require('./transcript');
 const wispr = require('./wispr');
+const models = require('./models');
 
 const VERSION = 1;
 
@@ -343,6 +344,16 @@ const DEFAULTS = {
         // Instead of waiting for Resume, carry on by itself once the window that
         // tripped it resets.
         usageStopAutoResume: false,
+        // The orchestrator's own model and effort. '' leaves it to the composer.
+        orchestratorModel: '',
+        orchestratorEffort: '',
+        // Its workers': 'choose' lets the orchestrator pick per worker (falling
+        // back to the two defaults, '' for the CLI's own); a model or level
+        // fixes it for every worker. See resolveWorkerModel in orchestrators.js.
+        workerModel: 'choose',
+        workerEffort: 'choose',
+        workerDefaultModel: '',
+        workerDefaultEffort: '',
         // Appended to every orchestrator's system prompt, after the brief that
         // explains its tools — a CLAUDE.md for orchestrators. Read at each spawn.
         addendum: '',
@@ -656,6 +667,12 @@ const SHAPE = {
         usageStopAllFiveHour: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
         usageStopAllWeekly: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
         usageStopAutoResume: (v) => typeof v === 'boolean',
+        orchestratorModel: (v) => v === '' || models.isModel(v),
+        orchestratorEffort: (v) => v === '' || models.isEffort(v),
+        workerModel: (v) => v === 'choose' || models.isModel(v),
+        workerEffort: (v) => v === 'choose' || models.isEffort(v),
+        workerDefaultModel: (v) => v === '' || models.isModel(v),
+        workerDefaultEffort: (v) => v === '' || models.isEffort(v),
         addendum: (v) => typeof v === 'string' && v.length <= 20_000,
         workerAddendum: (v) => typeof v === 'string' && v.length <= 20_000,
     },

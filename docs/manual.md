@@ -345,6 +345,40 @@ which is a decision of its own and wins. Turning off the orchestrator role or
 deleting the session also clears it. A `cd` into a worktree afterwards no longer
 moves where it resumes.
 
+### Which models an orchestrator and its workers run on
+
+The orchestrator's settings popover (the gear on the orchestrator page) has two
+lines for this, and Settings › Orchestrators has the same six choices as the
+defaults a new orchestrator starts with.
+
+**Orchestrator runs on.** *The composer's pick* is the default: the orchestrator
+is an ordinary session here, and the model selector under its composer decides. Pick
+a model (or an effort) instead and that wins — the bridge starts the orchestrator's
+process with it whatever a message asks for, and the composer's selector shows it.
+The two are one control from then on: changing the composer's selector on that
+orchestrator saves the new choice as its setting, and choosing `inherit` there hands
+it back to the composer. A change applies the way a composer model change does: at
+once when the orchestrator is idle, when its turn ends when it is busy.
+
+**Workers run on.** *What the orchestrator chooses* is the default. Its brief and its
+`spawn_worker` tool list the models with a line on when each fits — a cheaper,
+faster one for renames, docs and small fixes, the strongest for design-heavy,
+security-sensitive or tricky debugging work — and it picks per worker. When it does
+not say, *When it does not say* decides, and leaving that on the default model means
+the CLI's own. Pick a model there instead and every worker runs on it, whatever the
+orchestrator asked for; it is told in the reply when it was overridden, so it does
+not plan around a choice that did not hold. Effort works the same way, separately.
+
+A task you hand an orchestrator (from a draft or the Start dialog) keeps the model
+and effort you picked for it under either policy; only a field you left on `inherit`
+falls to the policy. A model name nobody offers is refused with the list rather than
+starting a worker that fails.
+
+Each worker's model and effort shows on its row on the orchestrator page and in its
+peek, and in what `list_workers` and `read_worker` tell the orchestrator. The list of
+models is `bridge/models.js` — the composer, the Start dialog and the settings all
+draw from it.
+
 ### Find and replace in the message
 
 `Ctrl+H` opens a bar above the composer with *Find* and *Replace*;

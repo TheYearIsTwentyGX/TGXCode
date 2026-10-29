@@ -106,7 +106,7 @@ function gitStat(cwd) {
  * `lastResult` is the runner's last final text when it has one, which beats
  * digging the same thing out of the file.
  */
-async function digest(file, { cwd, status, lastResult } = {}) {
+async function digest(file, { cwd, status, lastResult, model = null, effort = null } = {}) {
     const entries = entriesOf(file);
     const turns = turnsOf(entries);
     const touched = new Set();
@@ -134,6 +134,8 @@ async function digest(file, { cwd, status, lastResult } = {}) {
             : status.pendingPermission.kind === 'question' ? 'an answer'
             : `permission for ${status.pendingPermission.displayName}`}`
         : ''}`);
+    // Null is inherit: started without --model / --effort, the CLI's default.
+    lines.push(`model: ${model || 'default'}, effort: ${effort || 'default'}`);
     lines.push(`turns: ${turns.length}`);
     const todo = todoProgress(file);
     if (todo) {
@@ -155,6 +157,8 @@ async function digest(file, { cwd, status, lastResult } = {}) {
         state: status ? status.state : null,
         pending: status && status.pendingPermission ? status.pendingPermission.kind : null,
         turns: turns.length,
+        model: model || null,
+        effort: effort || null,
         todo: todo ? { done: todo.done, total: todo.total, now: todo.current || null } : null,
         tools: [...tools].sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, n })),
         files: [...touched],

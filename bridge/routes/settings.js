@@ -27,6 +27,7 @@ const { broadcast } = require('../events');
 const git = require('../git');
 const { NEXT, readJson, send } = require('../http');
 const keymap = require('../keymap');
+const models = require('../models');
 const { norm: spinnerNorm } = require('../spinner');
 
 // Handed over by server.js — see the note above ROUTES there.
@@ -121,6 +122,9 @@ async function handle(req, res, url, pathname, seg, who) {
     // cannot tell a value you set from one you inherited, and a control that
     // cannot tell those apart offers to clear things that were never set and
     // appears not to work when a stronger file has taken over.
+    // The models and effort levels every picker offers — bridge/models.js.
+    if (pathname === '/api/models' && req.method === 'GET') return send(res, 200, models.payload());
+
     if (pathname === '/api/prefs' && req.method === 'GET') {
         const cwd = url.searchParams.get('cwd') || '';
         const body = prefs.forCwd(cwd);

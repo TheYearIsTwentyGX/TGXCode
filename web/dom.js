@@ -8,6 +8,7 @@
 // modal dialog shares.
 
 import { enter, exit, isUp, pose, present } from './motion.js';
+import { fillSelect } from './models.js';
 
 const $ = (id) => document.getElementById(id);
 export const dom = {};
@@ -113,6 +114,13 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'restart-fix', 'restart-go', 'preview']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
+// The model and effort pickers hold only `inherit` in the page; the rest is
+// bridge/models.js's list, so every picker and spawn_worker agree on it.
+fillSelect(dom.model, 'model');
+fillSelect(dom.effort, 'effort');
+fillSelect(dom.newModel, 'model');
+fillSelect(dom.newEffort, 'effort');
+
 // The two containers that carry layout state as data attributes rather than
 // holding content of their own, so they have classes instead of ids.
 dom.main = document.querySelector('.main');

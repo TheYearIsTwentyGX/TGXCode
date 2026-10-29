@@ -118,7 +118,9 @@ import {
     flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
-import { onOrchestratorEvent, paintOrchestrator, toggleOrchestrator } from './orchestrator.js';
+import {
+    onOrchestratorEvent, onOrchestratorPaint, paintOrchestrator, saveOwnModel, toggleOrchestrator,
+} from './orchestrator.js';
 import { applyPhoneInstall, loadPhoneInstalls, showPhoneInstalls } from './phone-installs.js';
 import { orchPageTick } from './orchestrator-page.js';
 import { STUCK_MS } from './orchestrator-model.js';
@@ -3488,6 +3490,19 @@ export function paintPerm() {
  * failure the same guard in paintPerm is there to prevent — it is also a value
  * that means something when it is sent.
  */
+/**
+ * The orchestrator's own model or effort setting, when the session on screen is
+ * an orchestrator that has one — null otherwise. Where it is set it is the one
+ * source of truth: the bridge starts the process with it whatever a send says,
+ * so the picker shows it, and changing the picker changes the setting.
+ */
+function ownOrchSetting(key) {
+    const id = state.current && state.current.sessionId;
+    const p = state.orch;
+    if (!id || !p || p.orchestratorId !== id || !p.settings) return null;
+    return p.settings[key] || null;
+}
+
 function paintModel() {
     const id = state.current && state.current.sessionId;
     // Written as a ladder rather than a `??` chain: every rung's "no answer" is
@@ -3498,6 +3513,10 @@ function paintModel() {
     if (id && state.runnerModel.has(id)) model = state.runnerModel.get(id);
     if (state.runner) model = state.runner.model || '';
     if (id && state.modelChoice.has(id)) model = state.modelChoice.get(id);
+    // Last, because the bridge enforces it: an orchestrator's own model setting
+    // starts its process whatever a send asks for.
+    const own = ownOrchSetting('orchestratorModel');
+    if (own) model = own;
 
     const known = [...dom.model.options].some(o => o.value === model);
     dom.model.value = known ? model : '';
@@ -3518,6 +3537,8 @@ function paintEffort() {
     if (id && state.runnerEffort.has(id)) effort = state.runnerEffort.get(id);
     if (state.runner) effort = state.runner.effort || '';
     if (id && state.effortChoice.has(id)) effort = state.effortChoice.get(id);
+    const own = ownOrchSetting('orchestratorEffort');
+    if (own) effort = own;
 
     const known = [...dom.effort.options].some(o => o.value === effort);
     dom.effort.value = known ? effort : '';
@@ -3860,12 +3881,20 @@ dom.perm.addEventListener('change', () => {
 
 // And the model, which until Ctrl+M existed was remembered against nothing at
 // all — see paintModel.
+// An orchestrator whose own setting decides it saves the pick as that setting
+// instead — see ownOrchSetting. `inherit` there clears the setting, and the
+// picker goes back to being an ordinary one.
 dom.model.addEventListener('change', () => {
-    if (state.current) state.modelChoice.set(state.current.sessionId, dom.model.value);
+    if (!state.current) return;
+    if (ownOrchSetting('orchestratorModel')) saveOwnModel({ orchestratorModel: dom.model.value || null });
+    state.modelChoice.set(state.current.sessionId, dom.model.value);
 });
 dom.effort.addEventListener('change', () => {
-    if (state.current) state.effortChoice.set(state.current.sessionId, dom.effort.value);
+    if (!state.current) return;
+    if (ownOrchSetting('orchestratorEffort')) saveOwnModel({ orchestratorEffort: dom.effort.value || null });
+    state.effortChoice.set(state.current.sessionId, dom.effort.value);
 });
+onOrchestratorPaint(() => { paintModel(); paintEffort(); });
 
 dom.input.addEventListener('input', autoGrow);
 dom.input.addEventListener('input', debounce(() => {

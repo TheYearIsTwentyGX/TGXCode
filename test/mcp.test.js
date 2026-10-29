@@ -390,6 +390,52 @@ const TASK = {
         }
         ok('set_summary carries the brief\'s goal, decisions and merge order, and only when given');
         ok('set_auto_resume PUTs the orchestrator\'s own setting as the agent, and get_usage says who set it');
+
+        // spawn_worker's description: the model list every picker offers, how to
+        // choose, and — read from the orchestrator's settings at tools/list —
+        // whether the user has fixed it. The reply says when a choice was overridden.
+        const { MODEL_IDS } = require('../bridge/models');
+        answers.set('GET /api/sessions/me/orchestrator', { status: 200, body: {
+            settings: { workerModel: 'haiku', workerEffort: 'choose' } } });
+        const fixed = startMcp(port, ['--role', 'orchestrator']);
+        const loose = startMcp(port, ['--role', 'orchestrator']);
+        try {
+            const sw = (await fixed.rpc('tools/list', {})).result.tools.find(t => t.name === 'spawn_worker');
+            answers.delete('GET /api/sessions/me/orchestrator');
+            for (const m of MODEL_IDS) assert.match(sw.description, new RegExp(`^- ${m}: `, 'm'), `lists ${m}`);
+            assert.match(sw.description, /cheaper, faster model for mechanical work/);
+            assert.match(sw.description, /fixed every worker's model to haiku/);
+            assert.match(sw.description, /effort is yours to choose/);
+            assert.deepStrictEqual(sw.inputSchema.properties.model.enum, MODEL_IDS);
+            const sw2 = (await loose.rpc('tools/list', {})).result.tools.find(t => t.name === 'spawn_worker');
+            for (const m of MODEL_IDS) assert.match(sw2.description, new RegExp(`^- ${m}: `, 'm'));
+            assert.doesNotMatch(sw2.description, /fixed every worker/, 'unread settings are left unsaid');
+
+            answers.set('POST /api/sessions/me/orchestrator/spawn', { status: 200, body: {
+                queued: false, sessionId: 'W1', title: 'Rename', cwd: '/x', worktree: null,
+                model: 'haiku', effort: null, modelSource: { model: 'fixed', effort: 'inherit' },
+                overridden: { model: 'opus', effort: null } } });
+            r = await fixed.call('spawn_worker', { prompt: 'rename', model: 'opus' });
+            assert.strictEqual(r.isError, false);
+            assert.strictEqual(seen[0].body.model, 'opus', 'what it asked for is what the bridge is sent');
+            assert.match(r.text, /model: haiku \(fixed by the user\), effort: default/);
+            assert.match(r.text, /you asked for model opus, but the user has fixed every worker's model to haiku/);
+            answers.set('POST /api/sessions/me/orchestrator/spawn', { status: 400, body: {
+                error: 'unknown model "gpt" — use one of: opus, sonnet, haiku, fable, or leave it out' } });
+            r = await fixed.call('spawn_worker', { prompt: 'x', model: 'gpt' });
+            assert.strictEqual(r.isError, true);
+            assert.match(r.text, /use one of: opus/);
+
+            answers.set('GET /api/sessions/me/orchestrator/workers', { status: 200, body: { maxRunning: 3,
+                workers: [{ id: 'W1', title: 'Rename', state: 'busy', cwd: '/x', model: 'sonnet', effort: 'low',
+                    modelSource: { model: 'orchestrator', effort: 'default' } }] } });
+            r = await fixed.call('list_workers', {});
+            assert.match(r.text, /model: sonnet \(yours\), effort: low \(the default setting\)/);
+        } finally {
+            fixed.child.kill();
+            loose.child.kill();
+        }
+        ok('spawn_worker lists the models and the policy, says when it was overridden, and list_workers shows each model');
     } finally {
         mcp.child.kill();
         server.close();

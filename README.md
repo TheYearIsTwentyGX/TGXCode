@@ -438,13 +438,14 @@ Two rules worth knowing before you send a patch:
 | `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
+| `bridge/models.js` | The models and effort levels every picker offers, with a line on when each fits — the one list the composer, the Start dialog, the orchestrator settings and `spawn_worker` read (`GET /api/models`, and the `tgx-models` `<meta>` tag) |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
 | `bridge/standing.js` | The one-line "where this session stands" on a rail card: written after a turn ends, by a short haiku call or from the last reply, cached per reply in `standing.json` |
-| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them, the brief each keeps for the user (goal, open decisions, merge order) and a directory override for one moved back to its main checkout — the store, and the pure rules for inbox order, nudging, the usage cutoff and how a task's settings combine with a spawn's |
+| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them, the brief each keeps for the user (goal, open decisions, merge order) and a directory override for one moved back to its main checkout — the store, and the pure rules for inbox order, nudging, the usage cutoff, how a task's settings combine with a spawn's, and which model a worker gets (`resolveWorkerModel`) |
 | `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, tasks from the user (filed, started, taken back, returned to Drafts when the orchestrator goes), moving one out of a worktree it cannot leave, and re-broadcasting one when a worker's PR moves |
 | `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest (as text, and as fields for the orchestrator page's drawer), the last few turns, or the whole thing a page at a time |
 | `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
@@ -484,6 +485,7 @@ Two rules worth knowing before you send a patch:
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
+| `web/models.js` | The model and effort lists from the `tgx-models` `<meta>` tag, and filling a `<select>` from them |
 | `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`, `pose`. Every call names a preset from `PRESETS` (`menu`, `dialog`, `toast`, `dock`…); durations and curves are read from `--dur-*`/`--ease-*` in base.css, and reduced motion keeps a short fade without the movement. See docs/plans/22-ui-overhaul.md |
 | `web/tool-name.js` | A tool's name as a person reads it — `mcp__tgxcode__set_summary` → "TGXCode: Set Summary". Display only; `bridge/tool-name.js` is the same function for strings the bridge composes |
 | `web/format.js` | Timestamps, durations, paths and model ids as short text. Pure, so the Node tests import it directly |

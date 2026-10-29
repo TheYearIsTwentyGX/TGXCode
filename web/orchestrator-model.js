@@ -42,6 +42,21 @@ export function workerStateWord(w) {
 }
 
 /**
+ * A worker's model and effort as the page says them — "haiku · low effort",
+ * "default model" for one started on inherit — or null on a row from a bridge
+ * that does not send them. `fixed` when the user's setting chose it rather than
+ * the orchestrator, which the title can say.
+ */
+export function workerModelWords(w) {
+    if (!w || !('model' in w)) return null;
+    const src = w.modelSource || {};
+    const text = [w.model || 'default model', w.effort ? `${w.effort} effort` : null].filter(Boolean).join(' · ');
+    const why = { user: 'your pick', fixed: 'fixed in settings', orchestrator: 'the orchestrator\'s choice',
+        default: 'the default in settings' }[src.model] || null;
+    return { text, title: why ? `Model: ${why}` : null };
+}
+
+/**
  * What the worker is waiting on, if anything.
  *
  * The inbox item when there is one — it carries the `requestId` an answer needs
