@@ -40,7 +40,7 @@ import { get } from './api.js';
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { ago } from './format.js';
-import { toolDisplayName } from './tool-name.js';
+import { toolNamesIn } from './tool-name.js';
 import { closeOtherPanels, openAtHit, paintPanels, projectColor, rememberView } from './app.js';
 import { paint } from './boards/parts.js';
 import { termPane } from './term-pane.js';
@@ -129,7 +129,7 @@ const KIND_LABEL = { user: 'You', assistant: 'Claude', tool: 'Tool' };
 // A tool hit's text opens with the tool's raw name, which is what the index
 // holds. Friendlier here rather than in the index, which would mean rebuilding
 // every session's; searching still matches the raw name.
-const friendly = (t) => t.replace(/\bmcp__[A-Za-z0-9_-]+/g, toolDisplayName);
+const friendly = toolNamesIn;
 
 function Segments({ segments, tool }) {
     return segments.map((s, i) => (s.hit

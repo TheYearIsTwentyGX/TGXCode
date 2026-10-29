@@ -9,6 +9,7 @@
 
 import { get } from '../api.js';
 import { dom, el } from '../dom.js';
+import { toolDisplayName } from '../tool-name.js';
 import { state } from '../state.js';
 import { AGENT_VIEW, SESSION_VIEW } from './conversation.js';
 import { inboxSummary } from './rows.js';
@@ -101,7 +102,7 @@ function searchableText(ev) {
             parts.push(ev.text);
             break;
         case 'tool':
-            parts.push(ev.name, toolSummary(ev), toolText(ev));
+            parts.push(ev.name, toolDisplayName(ev.name), toolSummary(ev), toolText(ev));
             break;
         case 'agent-done':
             parts.push(ev.summary, ev.result);

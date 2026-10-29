@@ -1355,7 +1355,7 @@ class Runner extends EventEmitter {
             });
             this.emit('notice', {
                 level: 'warn', kind: 'permission_uninteractive',
-                text: `${req.tool_name} asked for an interactive prompt this app cannot show, `
+                text: `${toolDisplayName(req.tool_name)} asked for an interactive prompt this app cannot show, `
                     + 'so it was denied. That tool needs a terminal.',
             });
             return;

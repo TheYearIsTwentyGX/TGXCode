@@ -27,6 +27,7 @@ import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
 import { dom, el, toast } from '../dom.js';
 import { ago, clip, clockOf, dateOf, dur, shortModel } from '../format.js';
+import { toolDisplayName } from '../tool-name.js';
 import { PR_ICON } from '../icons.js';
 import { html, render } from '../vendor/preact.js';
 import { icon } from '../boards/parts.js';
@@ -887,7 +888,10 @@ function paintRunSummary(det) {
     // and say nothing about what the agent actually did first.
     const byName = new Map();
     for (const e of tools) byName.set(e.name, (byName.get(e.name) || 0) + 1);
-    const parts = [...byName].map(([name, n]) => (n > 1 ? `${name} \u00d7${n}` : name));
+    const parts = [...byName].map(([name, n]) => {
+        const shown = toolDisplayName(name);
+        return n > 1 ? `${shown} \u00d7${n}` : shown;
+    });
     if (thoughts) parts.push(thoughts > 1 ? `${thoughts} thoughts` : '1 thought');
 
     // Wall time across the run, which is what you would have watched. A call
@@ -920,7 +924,9 @@ function paintRunSummary(det) {
                 el('div', { class: 'trow', 'data-status': status },
                     el('span', { class: 'tname' },
                         `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
-                    el('span', { class: 'targ' }, parts.join(' \u00b7 ')),
+                    // The raw names in the tooltip, as a tool row carries its own.
+                    el('span', { class: 'targ', title: [...byName.keys()].join(', ') || null },
+                        parts.join(' \u00b7 ')),
                     el('span', { class: 'tmeta' }, dur(span)),
                 ),
             ),

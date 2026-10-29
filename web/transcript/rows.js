@@ -14,6 +14,8 @@ import { escapeHtml } from '../highlight.js';
 import { icon } from '../icons.js';
 import { inline, renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
+import { toolNamesIn } from '../tool-name.js';
+import { grouping } from '../app.js';
 import { attachExt, openAttachment } from '../composer/attachments.js';
 import { editAndBranch, editAndResend } from '../composer/branch.js';
 import { insertMention, loadPeers, peerByName } from '../composer/mentions.js';
@@ -313,9 +315,16 @@ function renderAssistant(ev) {
     );
 }
 
+// Thought blocks you opened or closed against the setting, by event id, for as
+// long as the page is up. A redraw — a fold, a reload of the window — would
+// otherwise put a block you had shut back the way the setting says.
+const thoughtToggled = new Map();
+
 function renderThinking(ev) {
     const words = ev.text.trim().split(/\s+/).length;
-    const det = el('details', { class: 'tool thinking' },
+    const byDefault = grouping().thinkingExpanded !== false;
+    const open = ev.id && thoughtToggled.has(ev.id) ? thoughtToggled.get(ev.id) : byDefault;
+    const det = el('details', { class: 'tool thinking', open: open || null },
         el('summary', {},
             el('span', { class: 'tname' }, 'Thought'),
             el('span', { class: 'targ' }, clip(ev.text, 90)),
@@ -324,6 +333,12 @@ function renderThinking(ev) {
         el('div', { class: 'tool-body' },
             el('div', { class: 'prose', html: renderMarkdown(ev.text) })),
     );
+    // Only a difference from the setting is remembered, so changing the setting
+    // still moves every block you never touched.
+    if (ev.id) det.addEventListener('toggle', () => {
+        if (det.open === byDefault) thoughtToggled.delete(ev.id);
+        else thoughtToggled.set(ev.id, det.open);
+    });
     return row(ev, 'thinking', det);
 }
 
@@ -560,7 +575,10 @@ function renderSystem(ev) {
         : ev.subtype.replace(/_/g, ' ');
     const body = [
         el('div', { class: 'ev-label' }, label),
-        el('div', { class: 'prose', html: renderMarkdown(ev.text) }),
+        // The CLI writes these, and a denial names the tool raw. A summary is the
+        // model's own prose, which is left as it was written.
+        el('div', { class: 'prose', html: renderMarkdown(
+            ev.subtype === 'away_summary' ? ev.text : toolNamesIn(ev.text)) }),
     ];
     if (ev.subtype === 'permission_denied') {
         // Now that asks are answerable, most denials on this line are somebody's

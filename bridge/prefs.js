@@ -196,6 +196,10 @@ const DEFAULTS = {
         // it. Folding it in keeps runs long; breaking on it fragments a turn
         // that thinks between every call into groups of two.
         groupIncludesThinking: true,
+        // Draw a thinking block open, on load and as it streams. What the model
+        // was weighing is most of why it did what it did; a collapsed row that
+        // says "Thought, 212 words" hides exactly the part worth reading.
+        thinkingExpanded: true,
         // How a wall clock reads: `24h` (15:04:05) or `12h` (3:04:05 PM). Here
         // because nearly every clock the app draws is a transcript's gutter, but
         // it is every clock the page draws — the rail's scheduled badge and the
@@ -592,6 +596,7 @@ const SHAPE = {
         groupToolCalls: (v) => typeof v === 'boolean',
         groupMinCalls: (v) => Number.isInteger(v) && v >= 2 && v <= 1000,
         groupIncludesThinking: (v) => typeof v === 'boolean',
+        thinkingExpanded: (v) => typeof v === 'boolean',
         clock: (v) => v === '24h' || v === '12h',
     },
     live: {

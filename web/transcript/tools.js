@@ -90,6 +90,12 @@ export function toolSummary(ev) {
         case 'WebSearch': return i.query;
         case 'TodoWrite': return `${todoItemsOf(i).length} items`;
         case 'Skill': return '/' + (i.skill || '');
+        // `select:mcp__a__b,mcp__c__d` loads tools by name; name them the way
+        // their own rows will.
+        case 'ToolSearch': {
+            const q = String(i.query || '');
+            return q.startsWith('select:') ? q.slice(7).split(',').map(toolDisplayName).join(', ') : q;
+        }
         // The first heading of a plan is what it is a plan for.
         case 'ExitPlanMode': return clip((i.plan || '').replace(/^#+\s*/, ''), 80);
         case 'AskUserQuestion':

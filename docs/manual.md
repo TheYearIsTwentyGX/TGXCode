@@ -561,11 +561,18 @@ draws, reading *16 tool calls* with a tally of what they were and how long they
 took. Open it and the rows are there, unchanged, each still opening to its own
 output.
 
+An MCP tool is named the way you would say it, here and everywhere else the app
+names a tool — the row, the fold's tally, the activity line, permission cards,
+notifications, search hits and the Images pane: `mcp__tgxcode__next_message`
+reads *TGXCode: Next Message*. Hover the name for the raw one, which is what a
+permission rule or a hook matcher is written against; the hooks editor keeps
+names raw for that reason.
+
 Only once the run is **closed**. While the calls are still arriving they are the
 work you are watching, so they stay where they are and fold the moment the agent
 speaks again.
 
-Three settings control it, from `~/.tgxcode/settings.json` — written out with the
+The settings that control it are in `~/.tgxcode/settings.json` — written out with the
 defaults the first time the bridge runs, so it is there to edit:
 
 ```json
@@ -575,6 +582,7 @@ defaults the first time the bridge runs, so it is there to edit:
     "groupToolCalls": true,
     "groupMinCalls": 3,
     "groupIncludesThinking": true,
+    "thinkingExpanded": true,
     "clock": "24h"
   }
 }
@@ -584,7 +592,10 @@ defaults the first time the bridge runs, so it is there to edit:
 or two rows collapsed into a summary loses more than it saves.
 `groupIncludesThinking` decides whether a thinking block is part of the work
 stretch or the end of it; folding it in keeps runs long, and breaking on it
-fragments a turn that thinks between every call. `clock` is `"24h"` (`15:04:05`)
+fragments a turn that thinks between every call. `thinkingExpanded` draws each
+thinking block open, on load and as it streams (Settings → Reading → Show
+thinking expanded); a block you close yourself stays closed until the window
+reloads, and turning it off goes back to collapsed rows. `clock` is `"24h"` (`15:04:05`)
 or `"12h"` (`3:04:05 PM`), and it is every clock the app draws, not only the
 transcript's — Settings → Reading → Clock.
 

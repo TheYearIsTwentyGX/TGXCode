@@ -637,7 +637,7 @@ class AskBar extends Component {
         const ask = s.ask;
         const kind = ask.kind || 'tool';
         const what = kind === 'tool'
-            ? (toolSummary({ name: ask.tool, input: ask.input }) || ask.displayName)
+            ? (toolSummary({ name: ask.tool, input: ask.input }) || toolDisplayName(ask.displayName))
             : askBody(ask, kind);
         const off = this.state.answering !== undefined && this.state.answering === s.sig;
         const theirs = s.askFor === 'orchestrator';
@@ -654,7 +654,7 @@ class AskBar extends Component {
                         html`<button key="allow" class="lbtn ok" type="button" disabled=${off}
                             onClick=${() => this.answer({ decision: 'allow' })}>Allow</button>`,
                         html`<button key="always" class="lbtn" type="button" disabled=${off}
-                            title=${`Allow ${ask.displayName} for the rest of this session`}
+                            title=${`Allow ${toolDisplayName(ask.displayName)} for the rest of this session`}
                             onClick=${() => this.answer({ decision: 'allow-always' })}>Always</button>`,
                         html`<button key="deny" class="lbtn no" type="button" disabled=${off}
                             onClick=${() => this.answer({ decision: 'deny' })}>Deny</button>`,

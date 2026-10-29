@@ -65,3 +65,13 @@ export function toolDisplayName(name) {
     if (at <= 0 || at + 2 >= rest.length) return name;
     return `${serverName(rest.slice(0, at))}: ${words(rest.slice(at + 2))}`;
 }
+
+/**
+ * A sentence with tool names in it, each drawn as the transcript draws it:
+ * "Permission to use mcp__tgxcode__next_message was denied" reads "...use
+ * TGXCode: Next Message...". For text the CLI or the bridge composed, never for
+ * what a person or the model wrote.
+ */
+export function toolNamesIn(text) {
+    return typeof text === 'string' ? text.replace(/\bmcp__[A-Za-z0-9_-]+/g, toolDisplayName) : text;
+}

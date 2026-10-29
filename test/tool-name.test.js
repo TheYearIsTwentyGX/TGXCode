@@ -71,13 +71,29 @@ const CASES = [
     assert.strictEqual(describeTool({ name: 'Read', input: { file_path: '/a/b.js' } }), 'Reading b.js');
     ok('the activity line uses the friendly name');
 
+    // Names inside a sentence the CLI or the bridge wrote.
+    const webIn = (await import('../web/tool-name.js')).toolNamesIn;
+    const bridgeIn = require('../bridge/tool-name.js').toolNamesIn;
+    for (const [raw, want] of [
+        ['Permission to use mcp__tgxcode__next_message has been denied.',
+            'Permission to use TGXCode: Next Message has been denied.'],
+        ['mcp__github__list_prs ×3 · Bash', 'GitHub: List PRs ×3 · Bash'],
+        ['no tools here', 'no tools here'],
+        ['', ''],
+        [null, null],
+    ]) {
+        assert.strictEqual(webIn(raw), want, `web: ${raw}`);
+        assert.strictEqual(bridgeIn(raw), want, `bridge: ${raw}`);
+    }
+    ok('tool names inside text are drawn friendly');
+
     // The two files must stay the same function: compare their bodies.
     const fs = require('fs');
     const path = require('path');
     const body = (f) => {
         const s = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         return s.slice(s.indexOf('// Servers whose'), s.indexOf('module.exports') >= 0 ? s.indexOf('module.exports') : undefined)
-            .replace('export function', 'function').trim();
+            .replace(/export function/g, 'function').trim();
     };
     assert.strictEqual(body('bridge/tool-name.js'), body('web/tool-name.js'),
         'bridge/tool-name.js and web/tool-name.js have drifted; change them together');
