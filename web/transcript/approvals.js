@@ -217,7 +217,7 @@ function liveCard() {
 /** "May I run this?" — the original card, in the original place. */
 function renderToolCard(ask) {
     const card = el('div', { class: 'perm perm-tool-ask', tabindex: '0', role: 'group',
-        'aria-label': `Permission needed for ${ask.displayName}` });
+        'aria-label': `Permission needed for ${toolDisplayName(ask.displayName)}` });
 
     card.append(el('div', { class: 'perm-head' },
         el('span', { class: 'perm-tool', title: ask.tool || null }, toolDisplayName(ask.displayName)),
@@ -238,7 +238,7 @@ function renderToolCard(ask) {
             'Allow ', el('kbd', {}, 'Y')),
         el('button', { class: 'perm-btn', type: 'button',
             onclick: () => answerAsk({ decision: 'allow-always' }) },
-            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
+            `Allow ${toolDisplayName(ask.displayName)} all session `, el('kbd', {}, 'A')),
         el('button', { class: 'perm-btn deny', type: 'button',
             onclick: () => answerAsk({ decision: 'deny' }) },
             'Deny ', el('kbd', {}, 'N')),

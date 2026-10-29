@@ -1788,7 +1788,8 @@ may sleep, which is the machine's. `sudo` is root on this machine.
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
 `groupIncludesThinking` (whether a thinking block is part of the run or the end
-of it), `clock` (string, `"24h"` or `"12h"`, default `"24h"` — how a wall clock
+of it), `thinkingExpanded` (bool, default `true` — draw thinking blocks open;
+applied by the client, the bridge sends the same events either way), `clock` (string, `"24h"` or `"12h"`, default `"24h"` — how a wall clock
 reads: `15:04:05` or `3:04:05 PM`). **`clock` is applied by the client, not the
 bridge** — every timestamp in every payload is the same ISO string or epoch
 milliseconds whatever it says. The desktop applies it to every clock it draws,
@@ -3976,6 +3977,13 @@ before the first `__` after `mcp__`, `claude_ai_` and `plugin_<x>_` prefixes
 dropped, words title-cased with acronyms kept upper case — is
 `bridge/tool-name.js`, and a client that draws a raw tool name of its own (an
 event's `name`) can apply the same rule to match.
+
+Text the bridge writes itself follows it too — a `notice`'s `text`, such as the
+`permission_uninteractive` one, names the tool friendly. Text the CLI wrote and
+the bridge passes through does not: a `system` event's `text` (a
+`permission_denied` line) and a search hit's `text` carry raw names, and the
+desktop rewrites every `mcp__…` token in them at render time. A client wanting
+the same look applies the rule to each such token.
 
 The halves are on the wire for one reason: a surface too narrow for the whole
 label has to choose which half to keep, and it should keep the informative one.

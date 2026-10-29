@@ -99,6 +99,13 @@ assert.ok(SHAPE.transcript.clock('24h') && SHAPE.transcript.clock('12h'));
 assert.ok(!SHAPE.transcript.clock('12') && !SHAPE.transcript.clock(true) && !SHAPE.transcript.clock(''));
 ok('transcript.clock is 24h or 12h and nothing else');
 
+// --- transcript.thinkingExpanded -----------------------------------------
+assert.strictEqual(DEFAULTS.transcript.thinkingExpanded, true, 'thinking should show expanded by default');
+assert.ok(SHAPE.transcript.thinkingExpanded(true) && SHAPE.transcript.thinkingExpanded(false));
+assert.ok(!SHAPE.transcript.thinkingExpanded('true') && !SHAPE.transcript.thinkingExpanded(1)
+    && !SHAPE.transcript.thinkingExpanded(null));
+ok('transcript.thinkingExpanded is a boolean, on by default');
+
 // --- keyboard: what the shape allows ------------------------------------
 const kb = SHAPE.keyboard;
 assert.ok(kb.contextualTerminalCopy(true) && kb.contextualTerminalCopy(false));

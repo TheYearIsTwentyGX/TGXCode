@@ -133,7 +133,7 @@ export const SETTINGS = [
     {
         title: 'Reading', section: 'transcript', category: 'workspace',
         note: 'How a transcript folds the work between one message and the next, '
-            + 'and how its clocks read.',
+            + 'whether its thinking shows, and how its clocks read.',
         rows: [
             { key: 'clock', type: 'choice',
                 label: 'Clock',
@@ -152,6 +152,10 @@ export const SETTINGS = [
                 label: 'A thinking block is part of the run',
                 note: 'Off breaks the run there instead, which fragments a turn that '
                     + 'thinks between every call.' },
+            { key: 'thinkingExpanded', type: 'bool',
+                label: 'Show thinking expanded',
+                note: 'Thought blocks open as they arrive. One you close stays closed '
+                    + 'while the window is open.' },
         ],
     },
     {
