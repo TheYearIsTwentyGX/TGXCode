@@ -32,12 +32,16 @@ const lines = [
 fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
 
 (async () => {
-    const d = await digest(file, { cwd: null, status: { state: 'busy', pendingPermission: { kind: 'plan' } } });
+    const d = await digest(file, { cwd: null, status: { state: 'busy', pendingPermission: { kind: 'plan' } },
+        model: 'haiku', effort: null });
     assert.match(d.text, /^state: busy — waiting on a plan approval/);
+    assert.match(d.text, /^model: haiku, effort: default$/m, 'the digest says what it runs on');
     assert.deepStrictEqual(d.fields, {
         state: 'busy',
         pending: 'plan',
         turns: 1,
+        model: 'haiku',
+        effort: null,
         todo: { done: 1, total: 3, now: 'Write the panel' },
         tools: [{ name: 'Edit', n: 2 }, { name: 'TodoWrite', n: 1 }],
         files: ['/x/panel.js', '/x/panel.css'],

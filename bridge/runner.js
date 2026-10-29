@@ -260,7 +260,8 @@ const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'b
 // leaves the flag off) here, at the one place it would reach argv: the stores
 // keep whatever string they were given, as they do for a model, so that a level
 // added upstream is not silently erased from a draft by a build that predates it.
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// The list itself is bridge/models.js's, which every picker also reads.
+const { EFFORTS } = require('./models');
 const effortOrNull = (v) => (EFFORTS.includes(v) ? v : null);
 
 /** Two held model/effort changes (either may be null) asking for the same thing. */
@@ -2516,6 +2517,19 @@ class RunnerPool extends EventEmitter {
         // And whether a session's queue waits for a move at the end of its turn
         // — `(sessionId, runner) => boolean`. See Runner#_flushQueue.
         this.holdFor = () => false;
+        // A model and effort a session must run with whatever a send asks for —
+        // `(sessionId) => {model, effort} | null`, either field null for "no
+        // say". An orchestrator's own model setting (bridge/orchestration.js):
+        // with it here rather than in each caller, the send route, a nudge, a
+        // recycle and a held change all start the process the same way.
+        this.settingsFor = () => null;
+    }
+
+    /** `model`/`effort` as asked, with whatever `settingsFor` insists on put over them. */
+    _forced(sessionId, model, effort) {
+        const f = this.settingsFor(sessionId);
+        if (!f) return { model, effort };
+        return { model: f.model || model, effort: f.effort || effort };
     }
 
     get(sessionId) {
@@ -2526,6 +2540,7 @@ class RunnerPool extends EventEmitter {
     ensure(sessionId, {
         cwd, model, effort, permissionMode, isNew = false, fork = false, branch = null,
     } = {}) {
+        ({ model, effort } = this._forced(sessionId, model, effort));
         let r = this.runners.get(sessionId);
         let carried = [];
         // Absent and null are different answers for effort, unlike model: absent
@@ -2762,6 +2777,7 @@ class RunnerPool extends EventEmitter {
      * `_evict` documents is exactly the kind of fix that lands in one copy only.
      */
     _replace(r, { model, effort, cwd = r.cwd }) {
+        ({ model, effort } = this._forced(r.sessionId, model, effort));
         const carried = r.takeQueue();
         const fresh = this._make({ sessionId: r.sessionId, cwd, model, effort,
             permissionMode: r.permissionMode });

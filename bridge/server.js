@@ -29,6 +29,7 @@ const { ClaudeDocs } = require('./claude-docs');
 const { HookScripts } = require('./hook-scripts');
 const { HookSources } = require('./hook-sources');
 const keymap = require('./keymap');
+const models = require('./models');
 const { Spinner } = require('./spinner');
 const { Suggestions } = require('./suggestions');
 const { Drafts } = require('./drafts');
@@ -838,6 +839,10 @@ function serveStatic(req, res, pathname, who) {
         // stay drawn the wrong way, since nothing re-renders history.
         body = Buffer.from(auth.injectMeta(body.toString('utf8'),
             'tgx-prefs', JSON.stringify(prefs.page(''))), 'utf8');
+        // The models every picker offers (bridge/models.js), for the same
+        // reason: the composer's selector is painted before any fetch returns.
+        body = Buffer.from(auth.injectMeta(body.toString('utf8'),
+            'tgx-models', JSON.stringify(models.payload())), 'utf8');
         // The shortcut catalogue, for the same reason and one more: the first
         // key somebody presses may land before a fetch could answer, and a
         // Ctrl+3 that does nothing because the keymap has not arrived yet is

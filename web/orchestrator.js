@@ -25,6 +25,7 @@ import { ago, clip } from './format.js';
 import { grow, isUp, morph } from './motion.js';
 import { orchPageUp, paintOrchPage, setOrchPageMode } from './orchestrator-page.js';
 import { needsYou, progress } from './orchestrator-model.js';
+import { EFFORTS, MODELS } from './models.js';
 
 const KIND_LABEL = {
     plan: 'Plan', permission: 'Permission', ask: 'Question for it', question: 'Question',
@@ -35,6 +36,23 @@ export function goTo(id) {
     // Imported at call time: conversation.js imports this module, and a static
     // import back would make the two wait on each other at load.
     import('./transcript/conversation.js').then(m => m.openSession(id));
+}
+
+// Called whenever the payload is drawn, so app.js can repaint the composer's
+// model and effort pickers — they show this orchestrator's own setting when it
+// has one. A setter rather than an import: app.js imports this module.
+let afterPaint = () => {};
+export function onOrchestratorPaint(fn) { afterPaint = fn; }
+
+/**
+ * The composer's model or effort picker, changed on an orchestrator whose own
+ * setting decides it: the change is saved as that setting, so the picker and
+ * the popover are one control and never disagree. `patch` is
+ * `{orchestratorModel}` or `{orchestratorEffort}`; null clears it.
+ */
+export function saveOwnModel(patch) {
+    const p = state.orch;
+    if (p) saveSettings(p, patch);
 }
 
 /** Fetch the payload for the session on screen, if it has a part in one. */
@@ -114,6 +132,7 @@ export function paintOrchestratorButton() {
  * all of it is.
  */
 export function paintOrchestrator() {
+    afterPaint();
     const d = dom.orchDock;
     if (!d) return;
     const s = state.current;
@@ -286,6 +305,7 @@ export function settings(p) {
             onChange=${(e) => save({ maxRunning: Number(e.target.value) })} /></span> workers running <span class="orch-nw">at once</span></label>
         <label class="orch-check"><input type="checkbox" checked=${s.worktree}
             onChange=${(e) => save({ worktree: e.target.checked })} /><span>Start each worker in its own worktree</span></label>
+        ${modelSettings(s, save)}
         <label class="orch-check"><input type="checkbox" checked=${s.usageStop.enabled}
             onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} /><span>${all
             ? 'Stop everything past any of these limits '
@@ -317,6 +337,52 @@ export function settings(p) {
         ${whereItRuns(p)}
         <div class="orch-note">The defaults for new orchestrators, and text added to every
             orchestrator's instructions, are in Settings › Orchestrators.</div>
+    </div>`;
+}
+
+/** `<option>`s for a model or effort picker, after whatever the caller puts first. */
+const modelOptions = (kind) => (kind === 'effort' ? EFFORTS.map(e => ({ id: e, label: e })) : MODELS)
+    .map(m => html`<option key=${m.id} value=${m.id} title=${m.note || null}>${m.label || m.id}</option>`);
+
+/**
+ * Which models it and its workers run with. Its own: the composer's pick, or a
+ * setting that wins over it (the composer then shows and edits the setting).
+ * Its workers': its own choice per spawn, with a default for when it makes
+ * none, or one model for all of them. A task the user handed over keeps the
+ * user's pick either way — said here, since it is the exception to "fixed".
+ */
+function modelSettings(s, save) {
+    const choose = s.workerModel === 'choose';
+    const chooseEffort = s.workerEffort === 'choose';
+    const nul = (v) => v || null;
+    return html`<div class="orch-models">
+        <label class="orch-line"><span class="orch-nw">Orchestrator runs on <select name="orchestratorModel"
+            value=${s.orchestratorModel || ''} onChange=${(e) => save({ orchestratorModel: nul(e.target.value) })}>
+            <option value="">the composer's pick</option>${modelOptions('model')}
+        </select></span> <span class="orch-nw">at <select name="orchestratorEffort"
+            value=${s.orchestratorEffort || ''} onChange=${(e) => save({ orchestratorEffort: nul(e.target.value) })}>
+            <option value="">the composer's effort</option>${modelOptions('effort')}
+        </select></span></label>
+        <label class="orch-line"><span class="orch-nw">Workers run on <select name="workerModel"
+            value=${s.workerModel} onChange=${(e) => save({ workerModel: e.target.value })}>
+            <option value="choose">what the orchestrator chooses</option>${modelOptions('model')}
+        </select></span> <span class="orch-nw">at <select name="workerEffort"
+            value=${s.workerEffort} onChange=${(e) => save({ workerEffort: e.target.value })}>
+            <option value="choose">its choice of effort</option>${modelOptions('effort')}
+        </select></span></label>
+        ${choose || chooseEffort ? html`<label class="orch-line"><span class="orch-nw">When it does not say: </span>${choose
+            ? html`<select name="workerDefaultModel" value=${s.workerDefaultModel || ''}
+                onChange=${(e) => save({ workerDefaultModel: nul(e.target.value) })}>
+                <option value="">the default model</option>${modelOptions('model')}
+            </select> ` : null}${chooseEffort
+            ? html`<select name="workerDefaultEffort" value=${s.workerDefaultEffort || ''}
+                onChange=${(e) => save({ workerDefaultEffort: nul(e.target.value) })}>
+                <option value="">the default effort</option>${modelOptions('effort')}
+            </select>` : null}</label>` : null}
+        <div class="orch-note">${`${choose
+            ? 'It is told which models there are and when each fits, and picks per worker.'
+            : `Every worker runs on ${s.workerModel}, whatever the orchestrator asks for — it is told when it was overridden.`
+        } A task you hand it keeps the model you picked.`}</div>
     </div>`;
 }
 
@@ -427,6 +493,9 @@ async function saveSettings(p, patch) {
         const next = await put(`/api/sessions/${p.orchestratorId}/orchestrator`, { settings: patch });
         // Saved, but the window may have moved to another session meanwhile.
         if (stillShowing(p.orchestratorId)) state.orch = next;
+        if (next.ownModelApplied === 'after-turn') {
+            toast('Saved. The orchestrator switches when its current turn ends.', 'ok');
+        }
     } catch (err) {
         toast(`Could not save that: ${err.message}`, 'error');
     }

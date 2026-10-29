@@ -1716,6 +1716,19 @@ not a hole. `xdg-open` takes an argument vector and does not have this problem.
 `403 {"error": "opening a file only makes sense on the machine itself"}`. The window
 it opens is on this machine's desktop, which a phone cannot look at.
 
+### `GET /api/models`
+
+`{models: [{id: string, label: string, note: string}], efforts: [string]}` — the
+models and effort levels the app offers, from `bridge/models.js`. The desktop's model
+and effort pickers (composer, Start dialog, orchestrator settings, Settings ›
+Orchestrators) are built from this same list, which the page receives in a
+`tgx-models` `<meta>` tag (URI-encoded JSON, as `tgx-prefs`), and so are the model
+list in an orchestrator's brief and `spawn_worker`'s description and validation. `id`
+is the value to send (an alias the CLI resolves — `"opus"`, not `"claude-opus-…"`);
+`note` is one line on when that model fits. Order is the order to show them in.
+Open to a paired remote caller. A client should still offer `inherit` (send `null`)
+first — it is not in the list because it is not a model.
+
 ### `GET /api/prefs?cwd=<path>&files=1`
 
 `{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
@@ -5743,6 +5756,9 @@ event:
 ```
 { orchestratorId: string, enabled: true,
   settings: { maxRunning: number (1–10), worktree: boolean,
+              orchestratorModel: string|null, orchestratorEffort: string|null,
+              workerModel: "choose" | string, workerEffort: "choose" | string,
+              workerDefaultModel: string|null, workerDefaultEffort: string|null,
               usageStop: { enabled: boolean, percent: number (1–100),
                            window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet"|"all",
                            limits: { five_hour, seven_day, seven_day_opus, seven_day_sonnet:
@@ -5762,6 +5778,8 @@ event:
               spawnedAt: number, closedAt: number|null,
               state: "idle"|"busy"|"starting"|"stopped"|"error",
               pending: null | "tool"|"plan"|"question",
+              model: string|null, effort: string|null,
+              modelSource: null | { model: source, effort: source },
               pr: null | { number: number, url: string|null, repo: string|null,
                            title: string|null, status: string, label: string|null },
               origin: null | origin }],
@@ -5818,7 +5836,46 @@ a while should refetch before acting on it.
 **Settings are per orchestrator.** `orchestrator.usageStopAutoResume` and the other
 `usageStop*` prefs in `settings.json` are only the defaults a **new** orchestrator
 starts with; changing them does nothing to one that already exists. Change an
-existing one with `PUT /api/sessions/:id/orchestrator`.
+existing one with `PUT /api/sessions/:id/orchestrator`. The same goes for the six
+model prefs below (`orchestrator.orchestratorModel` and so on), where `""` in prefs
+is `null` here.
+
+**Models.** Every model and effort value in these settings is one from
+`GET /api/models` (below): a model alias (`"opus"`, `"sonnet"`, `"haiku"`, `"fable"`)
+or an effort level (`"low"` … `"max"`). A value not on that list is ignored by a `PUT`
+— the field keeps what it had — and `null` clears a field that allows it.
+
+- **`orchestratorModel`** / **`orchestratorEffort`** — the orchestrator's **own**
+  process. `null` (the default) leaves it to whatever the send asks for, as for any
+  session: the composer's picker. Set, **it wins over the `model`/`effort` of every
+  `/send`** to this session — the bridge starts the process with it whatever the body
+  says — so a client should show it in its model picker for that session, and the
+  desktop writes a picker change on such a session back to this setting (a pick of
+  `inherit` there clears it). The two are independent: only `orchestratorEffort` set
+  leaves the model to the send. A change takes effect on the existing process the way
+  a picker change does: replaced at once when it is idle, when its turn ends when it
+  is busy, after its background work when it has some. The `PUT` reply says which as
+  **`ownModelApplied: "now"|"after-turn"|null`** — `null` when nothing had to change
+  (no process yet, or it already runs with it; the next start reads the setting).
+- **`workerModel`** / **`workerEffort`** — the policy for its workers. **`"choose"`**
+  (the default) lets the orchestrator pick per worker: `spawn_worker`'s `model`/`effort`
+  are used when given, else **`workerDefaultModel`** / **`workerDefaultEffort`**, else
+  nothing (`null`: the CLI's own default). **A model id or effort level** fixes it:
+  every spawn uses it, overriding what the orchestrator asked for, and the spawn reply
+  says it was overridden. **A task the user handed over keeps the user's own model and
+  effort under either policy**, where they picked one; a field left on `inherit` in the
+  task falls to the policy.
+- A worker row's **`model`** / **`effort`** is what its live process runs with when it
+  has one (the user may have changed it from that session's composer since), else
+  what it was started with; `null` is inherit. **`modelSource`** says where each came
+  from at spawn: `source` is `"user"` (the task's), `"fixed"` (the setting),
+  `"orchestrator"` (its `spawn_worker` argument), `"default"` (the `workerDefault*`
+  setting) or `"inherit"`. `null` on a worker started before this existed.
+- The orchestrator's brief and its `spawn_worker` tool description list the models
+  with a line on when each fits, and say whether the policy is fixed. Both are read
+  when its process starts, so a policy changed later is reflected there only after a
+  restart — the spawn reply's override note is what keeps the orchestrator honest
+  meanwhile.
 
 **A worker of a `test` orchestrator is a `test` session**, and so is a worker started from
 a task whose `test` is true — the flag is set at spawn, not asked for, so a client need not
@@ -6050,6 +6107,9 @@ The payload above. Never 404s: a session that is not one answers `enabled: false
   Nothing starts while paused — including a pause the same save just caused.
 - `settings` alone merges into the current settings field by field; a bad value
   leaves that field as it was.
+- `settings.orchestratorModel` / `orchestratorEffort` are put into effect on the
+  orchestrator's process as described under **Models** above; the reply carries
+  `ownModelApplied` (`"now"`, `"after-turn"` or `null`) on every settings save.
 - `settings.usageStop.autoResume` takes effect now: while paused it starts or stops
   the wake clock (`paused.resumeAt`), no restart. It also stamps
   `settings.usageStop.autoResumeBy` — `by: "agent"` only when the body says
@@ -6182,7 +6242,12 @@ cutoff: settings.usageStop|null, paused}`.
 All `POST`, all refused remotely, all with the orchestrator's id in the path:
 `spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
 effort?, task?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
-position, running, maxRunning}` — with `task` (a task item's id) `prompt` is optional and
+position, running, maxRunning}`, either with **`model`, `effort`** (string or null — what
+the worker runs, or will run, with), **`modelSource {model, effort}`** and
+**`overridden {model: string|null, effort: string|null}`** — what the orchestrator asked
+for that a fixed `workerModel`/`workerEffort` replaced, `null` where nothing was (see
+**Models** above). A `model` not in `GET /api/models` is **`400`** with the list in
+`error`, as is an unknown `effort`, before a task is claimed — with `task` (a task item's id) `prompt` is optional and
 the task's settings apply as described under *Tasks from the user*; `404` for no such
 task, `409` once it is started or taken back; `next` `{max?}` → `{items, left}` (marks them
 read); `send` `{worker, text?, task?}` → `{ok, queued, state}` — `text` is required
@@ -6209,7 +6274,8 @@ options?, worker?}`. `mergeOrder` accepts numbers or strings like `"#212"`.
 `read` answers by mode. `digest` is `{text, headline: string|null, fields}` —
 `text` is what the orchestrator's model reads, and **`fields` is the same reading
 laid out for a page**: `{state: string|null (null: no process), pending:
-"tool"|"plan"|"question"|null, turns: number, todo: null | {done, total, now:
+"tool"|"plan"|"question"|null, turns: number, model: string|null, effort:
+string|null (null: inherit — the live process's when it has one), todo: null | {done, total, now:
 string|null}, tools: [{name, n}] (most used first), files: [string] (paths edited),
 diffStat: string|null (the output of git diff --stat HEAD), lastMessage: string|null
 (at most 3000 chars)}`. **A worker with no transcript yet** (just spawned, still

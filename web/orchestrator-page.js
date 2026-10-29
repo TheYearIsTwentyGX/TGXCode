@@ -60,7 +60,7 @@ import { onQuotaChange, quotaWindows } from './quota.js';
 import { clockAt, goTo, inboxList, paintOrchestrator, resume, settings } from './orchestrator.js';
 import {
     STAGES, blockedOn, lastReport, mergeOrder, needsYou, openDecisionFor, progress, shortAge,
-    stageLine, usageMeters, workerStage,
+    stageLine, usageMeters, workerModelWords, workerStage,
 } from './orchestrator-model.js';
 
 // ── per-window state ───────────────────────────────────────────────────────
@@ -556,6 +556,7 @@ function row(p, w, now) {
     const where = `${STAGE_WORD[STAGES[stage.at - 1]]}: ${[line.lead, line.detail].filter(Boolean).join(', ')
         || (chip ? `#${w.pr.number} ${PR_WORD[stage.prStatus] || ''}` : '')}`;
     const branch = !w.closedAt && w.worktree && w.worktree.branch;
+    const mw = workerModelWords(w);
     // Named as a whole: read from its content, the name and the branch ran
     // together with nothing between them.
     const label = `${w.title || 'untitled worker'}${branch ? `, ${branch}` : ''} — ${where}`;
@@ -569,6 +570,7 @@ function row(p, w, now) {
             <span class="op-who-text">
                 <span class="op-name">${fromTag(w.origin)}${w.title || 'untitled worker'}</span>
                 ${branch ? html`<span class="op-branch">${branch}</span>` : null}
+                ${mw ? html`<span class="op-model" title=${mw.title}>${mw.text}</span>` : null}
             </span>
         </span>
         <span class="op-track" aria-hidden="true">
@@ -688,6 +690,7 @@ function peekTree(p, w) {
     const dg = ui.digest.get(w.id);
     const f = dg && dg.fields;
     const reports = p.inbox.filter(i => i.workerId === w.id && ['update', 'done', 'turn', 'question'].includes(i.kind)).slice(0, 3);
+    const mw = workerModelWords(w);
     return html`<div class="op-peek" onKeyDown=${(e) => {
         if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); closePeek(); }
     }}>
@@ -702,6 +705,7 @@ function peekTree(p, w) {
             <div class="op-peek-facts">
                 ${w.worktree && w.worktree.branch ? html`<span class="op-branch" title=${w.worktree.path || ''}>${w.worktree.branch}</span>` : null}
                 <span>${`started ${hm(w.spawnedAt)}`}</span>
+                ${mw ? html`<span class="op-model" title=${mw.title}>${mw.text}</span>` : null}
                 ${w.pr ? html`<a class="op-pr" data-status=${freshPr(w.id) || w.pr.status} href=${w.pr.url || undefined}
                     target="_blank" rel="noreferrer">${`#${w.pr.number}`}<em>${PR_WORD[freshPr(w.id) || w.pr.status] || ''}</em></a>` : null}
             </div>

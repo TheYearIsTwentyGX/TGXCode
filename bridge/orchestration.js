@@ -55,8 +55,9 @@ const { resolveWorkdir } = require('./runner');
 const { createWorktree } = require('./worktree');
 const {
     shouldNudge, usageTrips, resumeAtFor, describeCounts, cleanSettings, DEFAULT_SETTINGS,
-    spawnOptsFromTask, isOpenTask,
+    spawnOptsFromTask, isOpenTask, resolveWorkerModel, CHOOSE,
 } = require('./orchestrators');
+const models = require('./models');
 const workerRead = require('./worker-read');
 const { inTemp } = require('./sessions');
 const pulls = require('./pulls');
@@ -97,6 +98,7 @@ function init(deps) {
     if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
     pool.roleOf = roleOf;
     pool.delegateFor = (id) => store.roleOf(id) === 'worker';
+    pool.settingsFor = ownModel;
     // A queue waits only for a move that will be made when the turn ends — not
     // for one that is itself waiting on background work, which can take hours.
     pool.holdFor = (id, r) => {
@@ -115,6 +117,10 @@ function defaultSettings() {
     return cleanSettings({
         maxRunning: p.maxRunning,
         worktree: p.worktree,
+        // '' in Settings is null here: "not set".
+        orchestratorModel: p.orchestratorModel || null, orchestratorEffort: p.orchestratorEffort || null,
+        workerModel: p.workerModel, workerEffort: p.workerEffort,
+        workerDefaultModel: p.workerDefaultModel || null, workerDefaultEffort: p.workerDefaultEffort || null,
         usageStop: {
             enabled: p.usageStopEnabled, percent: p.usageStopPercent, window: p.usageStopWindow,
             limits: { five_hour: p.usageStopAllFiveHour, seven_day: p.usageStopAllWeekly },
@@ -123,12 +129,56 @@ function defaultSettings() {
     }, DEFAULT_SETTINGS);
 }
 
+/**
+ * The model and effort an orchestrator's own process must run with, or null when
+ * its settings leave that to the composer. The pool's `settingsFor`, so every
+ * start of its process — a send, a nudge, a recycle — reads it.
+ */
+function ownModel(id) {
+    const o = store.get(id);
+    if (!o) return null;
+    const { orchestratorModel: model, orchestratorEffort: effort } = o.settings;
+    return model || effort ? { model: model || null, effort: effort || null } : null;
+}
+
+/**
+ * Put a changed own-model setting into effect: now when the orchestrator is idle,
+ * when its turn ends when it is not — the replace a composer model change does.
+ * `'now'`, `'after-turn'`, or null when nothing needed to change (no process, or
+ * it already runs with it; the next start reads the setting either way).
+ */
+function applyOwnModel(id) {
+    const r = pool.get(id);
+    const f = ownModel(id);
+    if (!r || !f) return null;
+    if ((f.model || r.model) === r.model && (f.effort || r.effort) === r.effort) return null;
+    return pool.recycle(id) ? 'now' : 'after-turn';
+}
+
+/** The model lines of the brief: the list, how to choose, and what the policy is. */
+function modelBrief(settings) {
+    const s = settings || DEFAULT_SETTINGS;
+    const fixed = (v, word) => (v && v !== CHOOSE ? `fixed by the user to ${v} — every worker runs at it `
+        + `whatever you pass, and spawn_worker says when it overrode you` : `yours to choose per worker${word}`);
+    return [
+        '- spawn_worker takes model and effort. The models you may name:',
+        ...models.guideLines().map(l => `  ${l}`),
+        `  Efforts: ${models.EFFORTS.join(', ')}. Match the model to the work: a cheaper,`,
+        '  faster one for mechanical work, the strongest for design, security or hard',
+        '  debugging. An unknown name is refused.',
+        `  Model: ${fixed(s.workerModel, s.workerDefaultModel ? ` (left out: ${s.workerDefaultModel})` : ' (left out: the default)')}.`,
+        `  Effort: ${fixed(s.workerEffort, s.workerDefaultEffort ? ` (left out: ${s.workerDefaultEffort})` : ' (left out: the default)')}.`,
+        '  A task the user handed you keeps the model and effort they picked.',
+    ];
+}
+
 // ---------------------------------------------------------------------------
 // Roles and briefs
 // ---------------------------------------------------------------------------
 
 function orchestratorBrief(id) {
     const add = String(userPrefs().addendum || '').trim();
+    const o = store.get(id);
     return [
         '# You are an orchestrator',
         '',
@@ -152,6 +202,7 @@ function orchestratorBrief(id) {
         '- read_worker shows a worker\'s transcript. Start with mode digest; use tail or',
         '  full only when you need detail, and ask to have the worker summarise itself.',
         '- At most a few workers run at once; extra spawns are queued, not refused.',
+        ...modelBrief(o && o.settings),
         '- get_usage shows the account\'s quota. If it passes the configured cutoff,',
         '  TGXCode stops everything: you and your workers mid-turn. Depending on the',
         '  settings it waits for the user, or wakes you once the window resets with a',
@@ -239,6 +290,11 @@ function workerRow(w) {
         closedAt: w.closedAt,
         state: st ? st.state : 'stopped',
         pending: st && st.pendingPermission ? st.pendingPermission.kind : null,
+        // The live process's when there is one — the user may have changed it
+        // from the composer since — else what it was started with. Null: inherit.
+        model: r ? r.model || null : w.model || null,
+        effort: r ? r.effort || null : w.effort || null,
+        modelSource: w.modelSource || null,
         pr: workerPr(s),
         origin: w.origin || null,
     };
@@ -590,12 +646,28 @@ async function spawn(orchId, opts) {
         throw refuse(409, `this orchestrator is paused (${o.paused.reason}) — nothing new starts `
             + 'until the user resumes it');
     }
+    // Checked before a task is claimed, so a typo does not use one up. Only
+    // what the orchestrator named: a task's own model is the user's pick.
+    const asked = { model: opts.model || null, effort: opts.effort || null };
+    if (asked.model && !models.isModel(asked.model)) {
+        throw refuse(400, `unknown model "${asked.model}" — use one of: ${models.MODEL_IDS.join(', ')}, `
+            + 'or leave it out');
+    }
+    if (asked.effort && !models.isEffort(asked.effort)) {
+        throw refuse(400, `unknown effort "${asked.effort}" — use one of: ${models.EFFORTS.join(', ')}, `
+            + 'or leave it out');
+    }
     // A task: the user's settings, filled in from the item. Claimed before the
     // first await so two calls naming the same task cannot both start it, and
     // given back if the start fails, so a worktree that could not be made does
     // not lose what the user wrote.
     const item = opts.task ? openTask(orchId, opts.task) : null;
     if (item) opts = spawnOptsFromTask(item.task, opts);
+    // Decided now rather than at start, so a queued spawn's reply can say it too.
+    const chosen = resolveWorkerModel(o.settings, asked, item ? item.task : null);
+    opts = { ...opts, model: chosen.model, effort: chosen.effort, modelSource: chosen.source };
+    const said = { model: chosen.model, effort: chosen.effort, modelSource: chosen.source,
+        overridden: chosen.overridden };
     if (!opts.prompt || !String(opts.prompt).trim()) throw refuse(400, 'prompt is required');
     if (item) store.settle(orchId, item.id, { status: 'resolved', outcome: 'spawned', by: 'orchestrator' });
     if (running(orchId) >= o.settings.maxRunning) {
@@ -604,10 +676,10 @@ async function spawn(orchId, opts) {
         });
         emit(orchId);
         return { queued: true, id: row.id, position: store.get(orchId).pendingSpawns.length,
-            running: running(orchId), maxRunning: o.settings.maxRunning };
+            running: running(orchId), maxRunning: o.settings.maxRunning, ...said };
     }
     try {
-        return { queued: false, ...(await startWorker(orchId, opts)) };
+        return { queued: false, ...(await startWorker(orchId, opts)), ...said };
     } catch (err) {
         if (item) { store.reopen(orchId, item.id); emit(orchId); }
         throw err;
@@ -699,7 +771,8 @@ async function place(orchId, opts, free, { o, base, title, sessionId, wantTree }
     }
 
     // Filed before the spawn: the role is read off the store as `claude` starts.
-    store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree, origin: opts.origin || null });
+    store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree, origin: opts.origin || null,
+        model: opts.model || null, effort: opts.effort || null, modelSource: opts.modelSource || null });
     try {
         pool.create({
             sessionId, cwd: startIn, prompt: String(opts.prompt),
@@ -795,6 +868,7 @@ async function read(orchId, workerId, { mode = 'digest', turns, offset } = {}) {
     const s = index.summary(workerId);
     return workerRead.digest(rec.file, {
         cwd: (s && s.cwd) || w.cwd, status: r ? r.status() : null, lastResult: r ? r.lastResultText : null,
+        model: r ? r.model : w.model, effort: r ? r.effort : w.effort,
     });
 }
 
@@ -1502,7 +1576,7 @@ function onPrsChanged() {
 }
 
 module.exports = {
-    init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
+    init, payload, roleOf, ownModel, applyOwnModel, modelBrief, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
     fileTask, withdrawTask, list,
     report, noteAutoResume, resume, drainSpawns, moveTo, moveToCheckout, cancelMove, settleMove, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,

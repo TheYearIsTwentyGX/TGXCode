@@ -324,9 +324,11 @@ const TASK_REF_HELP = 'The task, as the `task:` line find_tasks prints '
 // header.
 const AGENT_MODES = ['plan', 'auto', 'acceptEdits', 'dontAsk'];
 
-// `EFFORTS` in runner.js, copied rather than required: this process is spawned
-// by every `claude` the bridge starts and loads nothing it does not need.
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// bridge/models.js, the list every picker reads. A leaf with no requires of its
+// own: this process is spawned by every `claude` the bridge starts and loads
+// nothing it does not need.
+const models = require('./models');
+const { EFFORTS } = models;
 
 const FIND_TASKS = {
     name: 'find_tasks',
@@ -591,6 +593,40 @@ const GUIDE = {
 
 const WORKER_REF = { type: 'string', description: 'The worker\'s session id, from spawn_worker or list_workers.' };
 
+/**
+ * What spawn_worker's description says about models: the list every picker
+ * offers (bridge/models.js), how to choose, and — when the orchestrator's
+ * settings could be read at tools/list — whether the user has fixed it. A
+ * setting changed later is not reflected until the next process; the spawn's
+ * reply says when it overrode a choice, which is what keeps that honest.
+ */
+function modelHelp(settings) {
+    const policy = (v, what) => {
+        if (!settings) return null;
+        return v && v !== 'choose'
+            ? `The user has fixed every worker's ${what} to ${v}; passing another is overridden.`
+            : `The ${what} is yours to choose per worker.`;
+    };
+    return [
+        'Models you may pass as `model` (anything else is refused):',
+        ...models.guideLines(),
+        'Use a cheaper, faster model for mechanical work (renames, docs, small fixes) and',
+        'the strongest for design-heavy, security-sensitive or tricky debugging work.',
+        'Left out, the worker gets the default the user set, or the CLI\'s own.',
+        ...[policy(settings && settings.workerModel, 'model'),
+            policy(settings && settings.workerEffort, 'effort')].filter(Boolean),
+    ];
+}
+
+function spawnWorkerTool(settings = null) {
+    return { ...SPAWN_WORKER,
+        description: [SPAWN_WORKER.description, '', ...modelHelp(settings)].join('\n'),
+        inputSchema: { ...SPAWN_WORKER.inputSchema, properties: { ...SPAWN_WORKER.inputSchema.properties,
+            model: { type: 'string', enum: [...models.MODEL_IDS],
+                description: 'Which model the worker runs. See the list above.' },
+        } } };
+}
+
 const SPAWN_WORKER = {
     name: 'spawn_worker',
     title: 'Start a worker session',
@@ -627,7 +663,7 @@ const SPAWN_WORKER = {
                     + 'with answer_worker before it changes anything.',
             },
             model: { type: 'string' },
-            effort: { type: 'string', enum: EFFORTS },
+            effort: { type: 'string', enum: EFFORTS, description: 'How hard the worker thinks.' },
         },
     },
 };
@@ -922,6 +958,21 @@ const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_S
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
     ...(ROLE === 'worker' ? [REPORT] : []),
     ...(PREVIEW ? [OPEN_IN_PREVIEW] : [])];
+
+/**
+ * TOOLS, with spawn_worker's description finished from this orchestrator's
+ * settings. Read once per tools/list, which `claude` asks for at start; a
+ * bridge that cannot be reached leaves the policy unsaid rather than wrong.
+ */
+async function toolsList() {
+    if (ROLE !== 'orchestrator') return TOOLS;
+    let settings = null;
+    if (SESSION_ID) {
+        const r = await api('GET', orchRoute(''));
+        if (r.ok && r.body && r.body.settings) settings = r.body.settings;
+    }
+    return TOOLS.map(t => (t === SPAWN_WORKER ? spawnWorkerTool(settings) : t));
+}
 
 // What comes back to the model after a suggestion. It says the offer was made
 // and, more usefully, says not to go and do it — an agent told only "ok"
@@ -1414,16 +1465,39 @@ async function callSpawnWorker(id, args) {
         permissionMode: args.permissionMode, model: args.model, effort: args.effort,
     });
     if (failed) return failed;
+    const runsAt = modelLine(body);
     if (body.queued) {
-        return say(id, `Queued: ${body.running} of ${body.maxRunning} workers are already running, so `
-            + `this one (position ${body.position}) starts when one finishes its turn. Nothing to do now.`);
+        return say(id, [`Queued: ${body.running} of ${body.maxRunning} workers are already running, so `
+            + `this one (position ${body.position}) starts when one finishes its turn. Nothing to do now.`,
+        `    ${runsAt}`, ...overrideLines(body)].join('\n'));
     }
     return say(id, [
         `Started worker "${body.title}".`,
         `    worker: ${body.sessionId}`,
         `    runs in: ${body.cwd}${body.worktree ? ` (worktree, branch ${body.worktree.branch})` : ''}`,
+        `    ${runsAt}`,
+        ...overrideLines(body),
         'Its reports will arrive in your inbox. End your turn when you have nothing else to do.',
     ].join('\n'));
+}
+
+/** "model: haiku (yours), effort: default" — from a spawn reply or a worker row. */
+function modelLine(b) {
+    const why = { user: 'the user\'s pick', fixed: 'fixed by the user', orchestrator: 'yours',
+        default: 'the default setting', inherit: null };
+    const one = (v, src) => {
+        const w = src ? why[src] : null;
+        return `${v || 'default'}${w ? ` (${w})` : ''}`;
+    };
+    const src = b.modelSource || {};
+    return `model: ${one(b.model, src.model)}, effort: ${one(b.effort, src.effort)}`;
+}
+
+/** Said when a fixed setting replaced what was asked for, so the choice is not assumed to have held. */
+function overrideLines(b) {
+    const o = b.overridden || {};
+    return ['model', 'effort'].filter(k => o[k]).map(k => `    NOTE: you asked for ${k} ${o[k]}, but the `
+        + `user has fixed every worker's ${k} to ${b[k]}, so it runs at ${b[k]}.`);
 }
 
 async function callListWorkers(id) {
@@ -1434,6 +1508,7 @@ async function callListWorkers(id) {
         `${w.title || '(untitled)'}  [${w.state}${w.pending ? `, waiting on a ${w.pending}` : ''}]`,
         `    worker: ${w.id}`,
         `    in: ${w.cwd}${w.worktree ? ` (branch ${w.worktree.branch})` : ''}`,
+        `    ${modelLine(w)}`,
     ].join('\n'));
     const head = [`${rows.length} open worker${rows.length === 1 ? '' : 's'}, `
         + `at most ${body.maxRunning} running at once.`];
@@ -1654,7 +1729,7 @@ async function handle(msg) {
         });
     }
 
-    if (method === 'tools/list') return reply(id, { tools: TOOLS });
+    if (method === 'tools/list') return reply(id, { tools: await toolsList() });
 
     if (method === 'tools/call') {
         const name = params && params.name;

@@ -152,6 +152,7 @@
 /* A setting is a sentence with fields in it, laid out as text: it wraps between
    phrases, never between a field and the words that lead up to it. */
 .orch-line { display: block; }
+.orch-models { display: grid; gap: var(--sp-2); }
 .orch-nw { white-space: nowrap; }
 /* A checkbox in a column of its own, its sentence beside it: wrapped lines hang
    under the text, not under the box. */
@@ -634,6 +635,7 @@ button.op-row:hover { --row: var(--s2); }
 .op-who { display: flex; align-items: center; gap: var(--sp-5); min-width: 0; }
 .op-who-text { display: grid; min-width: 0; }
 .op-name { overflow: hidden; color: var(--text); font: 400 var(--fs-base)/var(--lh-tight) var(--sans); white-space: nowrap; text-overflow: ellipsis; }
+.op-model { overflow: hidden; color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--sans); white-space: nowrap; text-overflow: ellipsis; }
 .op-branch { overflow: hidden; color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); white-space: nowrap; text-overflow: ellipsis; }
 
 .op-track { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-width: 0; align-items: center; min-height: inherit; }
@@ -919,7 +921,7 @@ button.op-order-t:hover { color: var(--blue); }
         margin-left: var(--sp-3);
         justify-content: flex-start;
     }
-    .op-say-detail, .op-branch, .op-fold-names { display: none; }
+    .op-say-detail, .op-branch, .op-model, .op-fold-names { display: none; }
     .op-need { grid-template-columns: minmax(0, 1fr); }
     .op-need-act { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: var(--sp-3); }
     .op-meter { grid-template-columns: auto 56px auto; }

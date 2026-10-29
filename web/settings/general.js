@@ -25,6 +25,7 @@ import { get } from '../api.js';
 import { shortPath } from '../format.js';
 import { canPreviewUrls } from '../preview.js';
 import { state } from '../state.js';
+import { EFFORTS, MODELS } from '../models.js';
 import {
     paintBackdropTint, refreshPairUrl, renderProjectBackdrop, renderProjectColors,
     renderProjectOrder,
@@ -314,6 +315,30 @@ export const SETTINGS = [
                 note: 'Instead of waiting for Resume: the orchestrator wakes a minute after the '
                     + 'window that stopped it resets, and is told which workers were cut off '
                     + 'mid-turn so it can set them going again.' },
+            { key: 'orchestratorModel', type: 'choice',
+                label: 'Orchestrator model',
+                note: 'What the orchestrator itself runs on. The composer’s pick leaves it to the '
+                    + 'model selector, as for any session; a model here wins over the selector, '
+                    + 'which then shows it.',
+                options: [['', 'The composer’s pick'], ...MODELS.map(m => [m.id, m.label || m.id])] },
+            { key: 'orchestratorEffort', type: 'choice',
+                label: 'Orchestrator effort',
+                options: [['', 'The composer’s effort'], ...EFFORTS.map(e => [e, e])] },
+            { key: 'workerModel', type: 'choice',
+                label: 'Worker model',
+                note: 'Let it choose: the orchestrator is told which models there are and when each '
+                    + 'fits, and picks per worker. A model here is used for every worker whatever it '
+                    + 'asks for. A task you hand it keeps the model you picked either way.',
+                options: [['choose', 'Let the orchestrator choose'], ...MODELS.map(m => [m.id, m.label || m.id])] },
+            { key: 'workerEffort', type: 'choice',
+                label: 'Worker effort',
+                options: [['choose', 'Let the orchestrator choose'], ...EFFORTS.map(e => [e, e])] },
+            { key: 'workerDefaultModel', type: 'choice',
+                label: 'Worker model when it does not choose',
+                options: [['', 'The default model'], ...MODELS.map(m => [m.id, m.label || m.id])] },
+            { key: 'workerDefaultEffort', type: 'choice',
+                label: 'Worker effort when it does not choose',
+                options: [['', 'The default effort'], ...EFFORTS.map(e => [e, e])] },
             { key: 'addendum', type: 'text',
                 label: 'Instructions for every orchestrator',
                 note: 'Added to each orchestrator’s system prompt, after the brief that explains '

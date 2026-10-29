@@ -41,6 +41,7 @@ const path = require('path');
 const { randomUUID, createHash } = require('crypto');
 
 const { STATE_DIR } = require('./config');
+const { isEffort, isModel } = require('./models');
 
 const DEFAULT_FILE = path.join(STATE_DIR, 'orchestrators.json');
 const VERSION = 1;
@@ -90,9 +91,25 @@ const WINDOWS = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']
 // them past its own trips the cutoff.
 const STOP_WINDOWS = [...WINDOWS, 'all'];
 
+// `workerModel`/`workerEffort` when the orchestrator picks per worker.
+const CHOOSE = 'choose';
+
 const DEFAULT_SETTINGS = Object.freeze({
     maxRunning: 3,
     worktree: true,
+    // The orchestrator's own process. Null leaves it to the composer's picker,
+    // as for any session; set, it wins over the picker and the picker shows it.
+    // Aliases from bridge/models.js.
+    orchestratorModel: null,
+    orchestratorEffort: null,
+    // What its workers run with. `choose` honours spawn_worker's model/effort
+    // and falls back to the two defaults below (null: the CLI's own default);
+    // a model id or effort level is used for every spawn, whatever it asked for.
+    // A task the user handed over keeps their own choice under either.
+    workerModel: CHOOSE,
+    workerEffort: CHOOSE,
+    workerDefaultModel: null,
+    workerDefaultEffort: null,
     usageStop: Object.freeze({
         enabled: true,
         percent: 90,
@@ -124,6 +141,12 @@ function cleanSettings(raw, base = DEFAULT_SETTINGS) {
         maxRunning: Number.isInteger(s.maxRunning) && s.maxRunning >= 1 && s.maxRunning <= 10
             ? s.maxRunning : base.maxRunning,
         worktree: typeof s.worktree === 'boolean' ? s.worktree : base.worktree,
+        orchestratorModel: pick(s, base, 'orchestratorModel', isModel, null),
+        orchestratorEffort: pick(s, base, 'orchestratorEffort', isEffort, null),
+        workerModel: pick(s, base, 'workerModel', (v) => v === CHOOSE || isModel(v), CHOOSE),
+        workerEffort: pick(s, base, 'workerEffort', (v) => v === CHOOSE || isEffort(v), CHOOSE),
+        workerDefaultModel: pick(s, base, 'workerDefaultModel', isModel, null),
+        workerDefaultEffort: pick(s, base, 'workerDefaultEffort', isEffort, null),
         usageStop: {
             enabled: typeof u.enabled === 'boolean' ? u.enabled : bu.enabled,
             percent: pct(u.percent) ? u.percent : bu.percent,
@@ -134,6 +157,17 @@ function cleanSettings(raw, base = DEFAULT_SETTINGS) {
             autoResumeBy: 'autoResumeBy' in u ? cleanAutoResumeBy(u.autoResumeBy) : (bu.autoResumeBy || null),
         },
     };
+}
+
+/**
+ * One model/effort field: the incoming value when it passes `ok`, null when it
+ * is explicitly null and null is allowed (`fallback` null), else `base`'s — and
+ * `fallback` for a store written before the field existed.
+ */
+function pick(s, base, key, ok, fallback) {
+    if (ok(s[key])) return s[key];
+    if (s[key] === null && fallback === null) return null;
+    return base && key in base && (base[key] === fallback || ok(base[key])) ? base[key] : fallback;
 }
 
 const MAX_REASON = 200;
@@ -331,6 +365,42 @@ function spawnOptsFromTask(task, opts = {}) {
     };
 }
 
+/**
+ * The model and effort a worker starts with, and where each came from. Pure, so
+ * every mode is tested.
+ *
+ * `asked` is what the orchestrator passed to spawn_worker; `task` the payload of
+ * a task the user handed over, or null. Per field, first match wins:
+ *
+ *   user          the task carries the user's own choice — under either policy
+ *   fixed         the setting names one; `overridden` keeps what was asked
+ *                 instead, so the reply can tell the orchestrator
+ *   orchestrator  spawn_worker said
+ *   default       workerDefaultModel / workerDefaultEffort
+ *   inherit       nothing did: no --model / --effort, the CLI's default
+ */
+function resolveWorkerModel(settings, asked = {}, task = null) {
+    const s = settings || DEFAULT_SETTINGS;
+    const set = (v) => typeof v === 'string' && v !== '';
+    const one = (field, policy, dflt) => {
+        const want = asked && set(asked[field]) ? asked[field] : null;
+        if (task && set(task[field])) return { value: task[field], source: 'user', overridden: null };
+        if (set(policy) && policy !== CHOOSE) {
+            return { value: policy, source: 'fixed', overridden: want && want !== policy ? want : null };
+        }
+        if (want) return { value: want, source: 'orchestrator', overridden: null };
+        if (set(dflt)) return { value: dflt, source: 'default', overridden: null };
+        return { value: null, source: 'inherit', overridden: null };
+    };
+    const m = one('model', s.workerModel, s.workerDefaultModel);
+    const e = one('effort', s.workerEffort, s.workerDefaultEffort);
+    return {
+        model: m.value, effort: e.value,
+        source: { model: m.source, effort: e.source },
+        overridden: { model: m.overridden, effort: e.overridden },
+    };
+}
+
 function cleanItem(i) {
     if (!i || typeof i.id !== 'string' || !KINDS.includes(i.kind)) return null;
     return {
@@ -440,6 +510,12 @@ function cleanWorker(w) {
         // of the turn it was said in, so that turn does not also file a `turn`.
         reportedDone: !!w.reportedDone,
         origin: cleanOrigin(w.origin),
+        // What it was started with (null: inherit), and where each came from —
+        // see resolveWorkerModel. Null on a worker filed before this existed.
+        model: str(w.model, 100),
+        effort: str(w.effort, 40),
+        modelSource: w.modelSource && typeof w.modelSource === 'object'
+            ? { model: str(w.modelSource.model, 20), effort: str(w.modelSource.effort, 20) } : null,
     };
 }
 
@@ -1035,7 +1111,7 @@ function refusal(message) {
 module.exports = {
     Orchestrators, cleanSettings, sortInbox, shouldNudge, usageTrip, describeCounts,
     usageTrips, resumeAtFor, decisionId, cleanMergeOrder, cleanTask, spawnOptsFromTask, isOpenTask,
-    liveCwdOverride,
-    DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY, MAX_DECISIONS,
+    liveCwdOverride, resolveWorkerModel,
+    CHOOSE, DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY, MAX_DECISIONS,
     MAX_OPEN_TASKS,
 };
