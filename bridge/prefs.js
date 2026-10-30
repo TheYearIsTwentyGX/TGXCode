@@ -324,7 +324,8 @@ const DEFAULTS = {
         beaconDir: null,
         // How often, in minutes. Each run costs a CLI start and one
         // `max_tokens: 1` API call — a rounding error against a window, but not
-        // nothing, so this is a floor of five rather than a free knob.
+        // nothing, so this is a floor of one rather than a free knob. A run that
+        // is still going (ninety-second timeout) makes the next tick skip.
         beaconEveryMinutes: 20,
     },
     orchestrator: {
@@ -656,7 +657,7 @@ const SHAPE = {
         // A floor of five minutes. Each run is a process and an API call, and a
         // settings file asking for one every ten seconds is a mistake rather
         // than a preference.
-        beaconEveryMinutes: (v) => Number.isInteger(v) && v >= 5 && v <= 1440,
+        beaconEveryMinutes: (v) => Number.isInteger(v) && v >= 1 && v <= 1440,
     },
     orchestrator: {
         maxRunning: (v) => Number.isInteger(v) && v >= 1 && v <= 10,

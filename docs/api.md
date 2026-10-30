@@ -1956,7 +1956,7 @@ of it.
 `quota` is about the background refresh that keeps the percentages current with
 no terminal open: `beacon` (bool), `beaconDir` (**string or null** — where the
 short-lived `claude` runs; nothing happens until it names somewhere you have
-already trusted), `beaconEveryMinutes` (int, 5–1440). See `GET /api/quota` for
+already trusted), `beaconEveryMinutes` (int, 1–1440). See `GET /api/quota` for
 what the refresh itself reports. User file only.
 
 `keyboard` is about keys, and is four keys of its own:

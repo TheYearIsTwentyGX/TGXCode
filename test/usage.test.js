@@ -532,10 +532,10 @@ const {
     assert.strictEqual(shape.beaconDir(42), false);
 
     // The floor matters: each run is a process and an API call, so a file
-    // asking for one a minute is a mistake to reject rather than obey.
+    // asking for more than one a minute is a mistake to reject rather than obey.
     assert.strictEqual(shape.beaconEveryMinutes(20), true);
-    assert.strictEqual(shape.beaconEveryMinutes(5), true);
-    assert.strictEqual(shape.beaconEveryMinutes(4), false);
+    assert.strictEqual(shape.beaconEveryMinutes(1), true);
+    assert.strictEqual(shape.beaconEveryMinutes(0.5), false);
     assert.strictEqual(shape.beaconEveryMinutes(0), false);
     assert.strictEqual(shape.beaconEveryMinutes(2000), false);
     assert.strictEqual(shape.beaconEveryMinutes(20.5), false);

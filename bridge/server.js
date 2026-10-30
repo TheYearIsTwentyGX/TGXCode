@@ -1138,7 +1138,7 @@ async function tickBeacon() {
     if (!q.beacon || !q.beaconDir) return;
     if (beacon.busy) return;
 
-    const everyMs = Math.max(5, q.beaconEveryMinutes || 20) * 60_000;
+    const everyMs = Math.max(1, q.beaconEveryMinutes || 20) * 60_000;
     if (Date.now() - beaconLastRunAt < everyMs) return;
 
     await runBeaconNow(q.beaconDir);
