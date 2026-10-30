@@ -715,14 +715,16 @@ button.op-row:hover { --row: var(--s2); }
 /* Activity is a section, so its fold reads as the section's heading: the word
    on the headings' line and in their type, the twist hung in the gutter to its
    left, the hover ground reaching past both. */
-.op-activity > .op-fold {
+.op-activity > .op-fold,
+.op-sec[aria-label="Merge order"] > .op-fold {
     width: auto;
     margin-left: calc(-1 * (var(--sp-3) + 12px + var(--sp-4)));
     padding-left: var(--sp-3);
     color: var(--text-2);
     font: 500 var(--fs-md)/var(--lh-snug) var(--sans);
 }
-.op-activity > .op-fold:hover { color: var(--text); }
+.op-activity > .op-fold:hover,
+.op-sec[aria-label="Merge order"] > .op-fold:hover { color: var(--text); }
 
 /* ── merge order: a real sequence, so numbered ───────────────────────── */
 

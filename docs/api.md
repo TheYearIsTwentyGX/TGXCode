@@ -1956,7 +1956,7 @@ of it.
 `quota` is about the background refresh that keeps the percentages current with
 no terminal open: `beacon` (bool), `beaconDir` (**string or null** — where the
 short-lived `claude` runs; nothing happens until it names somewhere you have
-already trusted), `beaconEveryMinutes` (int, 5–1440). See `GET /api/quota` for
+already trusted), `beaconEveryMinutes` (int, 1–1440). See `GET /api/quota` for
 what the refresh itself reports. And one about hitting the limit: `resumeAfterLimit`
 (bool, default `true`) — when a session's turn ends on the usage limit, set a `limit`
 wake-up that resumes it a minute after the window resets (§*Wake-ups* under

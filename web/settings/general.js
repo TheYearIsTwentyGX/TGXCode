@@ -276,9 +276,9 @@ export const SETTINGS = [
                 note: 'Open Claude Code there yourself at least once first — the beacon '
                     + 'never answers the trust prompt, so an untrusted directory just '
                     + 'makes every run time out.' },
-            { key: 'beaconEveryMinutes', type: 'int', min: 5, max: 1440,
+            { key: 'beaconEveryMinutes', type: 'int', min: 1, max: 1440,
                 label: 'How often, in minutes',
-                note: 'Each run is a CLI start and one tiny API call. Floor of five.' },
+                note: 'Each run is a CLI start and one tiny API call. Floor of one.' },
             { key: 'resumeAfterLimit', type: 'bool',
                 label: 'Resume sessions after the usage limit resets',
                 note: 'A session whose turn ended on the usage limit carries on by itself a '
