@@ -94,8 +94,8 @@ const TASK = {
         const list = await mcp.rpc('tools/list', {});
         assert.deepStrictEqual(list.result.tools.map(t => t.name), [
             'tgxcode_guide', 'suggest_session', 'list_sessions', 'message_session',
-            'find_tasks', 'start_task', 'set_task_status', 'schedule_session', 'install_on_phone',
-            'phone_install_status',
+            'find_tasks', 'start_task', 'set_task_status', 'schedule_session', 'wake_me_up',
+            'install_on_phone', 'phone_install_status',
         ]);
         for (const t of list.result.tools) {
             const modes = t.inputSchema.properties.permissionMode;
@@ -263,6 +263,29 @@ const TASK = {
         assert.strictEqual(r.isError, true);
         assert.strictEqual(r.text, 'x is in the past');
         ok('schedule_session sends at and from, and refuses bypass, neither, and both');
+
+        // wake_me_up: set, list and cancel, all against this session's own route.
+        const wake = { id: 'w-1', kind: 'wake', text: 'check CI', reason: 'slow CI',
+            at: Date.now() + 45 * 60_000, permissionMode: 'acceptEdits' };
+        answers.set('POST /api/sessions/me/wake', { status: 200, body: { wake } });
+        r = await mcp.call('wake_me_up', { in: '45m', prompt: 'check CI', reason: 'slow CI' });
+        assert.strictEqual(r.isError, false, r.text);
+        assert.deepStrictEqual(seen[0].body, { in: '45m', prompt: 'check CI', reason: 'slow CI' });
+        assert.match(r.text, /w-1/);
+        assert.match(r.text, /acceptEdits/);
+        answers.set('GET /api/sessions/me/wake', { status: 200, body: { wakes: [wake,
+            { ...wake, id: 'w-2', kind: 'limit', text: 'The usage limit reset' }] } });
+        r = await mcp.call('wake_me_up', { action: 'list' });
+        assert.match(r.text, /2 pending/);
+        assert.match(r.text, /w-2: .*after the usage limit/);
+        answers.set('DELETE /api/sessions/me/wake/w-1', { status: 200, body: { ok: true, cancelled: 1 } });
+        r = await mcp.call('wake_me_up', { action: 'cancel', id: 'w-1' });
+        assert.match(r.text, /Cancelled 1 wake-up\./);
+        answers.set('POST /api/sessions/me/wake', { status: 409, body: { error: 'already has 3' } });
+        r = await mcp.call('wake_me_up', { in: '5m', prompt: 'x' });
+        assert.strictEqual(r.isError, true);
+        assert.strictEqual(r.text, 'already has 3');
+        ok('wake_me_up sets, lists and cancels through the session\'s own wake route');
 
         // install_on_phone: files the APK with this session's id, then polls the
         // record until the phone settles it or the wait runs out.

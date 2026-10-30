@@ -39,6 +39,8 @@ const {
     attachmentPath, attachmentRefused, receiveAttachment, resolveAttachments,
 } = require('./files');
 const { laterFields, laterOut, laterPayload } = require('./later');
+const { armNext } = require('../later-delivery');
+const wakeUps = require('../wakes');
 const { archiveStoppedRuns } = require('./session-workspace');
 
 // What a transcript entry's id looks like. `fromUuid` is spliced into an argv as
@@ -462,7 +464,42 @@ async function handle(req, res, url, pathname, seg, who) {
                 });
             }
             broadcast('later-changed', laterPayload());
+            armNext();
             return send(res, 200, { message: laterOut(row) });
+        }
+
+        // --- wake-ups ------------------------------------------------------
+        // A session resuming itself later — `wake_me_up` in bridge/mcp.js. Rows in
+        // the same store as the messages above (bridge/wakes.js says why), so the
+        // chip, the rail badge and `DELETE /api/later/:id` all cover them too;
+        // these three are the session-shaped view an agent needs.
+        if (tail === 'wake' && !seg[4] && req.method === 'GET') {
+            return send(res, 200, { wakes: wakeUps.listWakes(sessionId).map(laterOut) });
+        }
+
+        if (tail === 'wake' && !seg[4] && req.method === 'POST') {
+            const body = await readJson(req);
+            // The wake resumes the session in the mode it runs in, so a remote
+            // caller is held to the rule a remote /send is: no starting a
+            // bypassPermissions turn from off the machine.
+            const st = pool.statuses()[sessionId];
+            const summary = index.summary(sessionId);
+            const refusal = modeRefusal(normalizeMode((st && st.permissionMode)
+                || (summary && summary.permissionMode)), who);
+            if (refusal) return send(res, 403, { error: refusal, remote: true });
+            const out = wakeUps.setWake(sessionId, {
+                at: body.at, in: body.in, prompt: body.prompt, reason: body.reason,
+            });
+            if (out.error) return send(res, out.status, { error: out.error });
+            return send(res, 200, { wake: laterOut(out.wake) });
+        }
+
+        // One by id, or every one this session has. Only this session's: an id
+        // that belongs to another session is a 404 here, not a cancel.
+        if (tail === 'wake' && req.method === 'DELETE') {
+            const n = wakeUps.cancelWakes(sessionId, seg[4] || null);
+            if (seg[4] && !n) return send(res, 404, { error: 'no pending wake-up with that id on this session' });
+            return send(res, 200, { ok: true, cancelled: n });
         }
 
         // --- handoff -------------------------------------------------------

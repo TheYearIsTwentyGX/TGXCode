@@ -326,6 +326,10 @@ const DEFAULTS = {
         // `max_tokens: 1` API call — a rounding error against a window, but not
         // nothing, so this is a floor of five rather than a free knob.
         beaconEveryMinutes: 20,
+        // When a session's turn ends because the account hit its usage limit,
+        // resume it a minute after the window resets — bridge/wakes.js. Not for
+        // an orchestrator or its workers when the orchestrator resumes itself.
+        resumeAfterLimit: true,
     },
     orchestrator: {
         // What a session marked as an orchestrator starts with. Each one keeps
@@ -657,6 +661,7 @@ const SHAPE = {
         // settings file asking for one every ten seconds is a mistake rather
         // than a preference.
         beaconEveryMinutes: (v) => Number.isInteger(v) && v >= 5 && v <= 1440,
+        resumeAfterLimit: (v) => typeof v === 'boolean',
     },
     orchestrator: {
         maxRunning: (v) => Number.isInteger(v) && v >= 1 && v <= 10,

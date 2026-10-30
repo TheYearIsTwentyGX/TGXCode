@@ -17,13 +17,21 @@
 // delivers" true by construction: it is literally the same functions. Requiring
 // server.js back for them would be a cycle.
 //
-// **No timers here.** The catch-up pass and the interval are started from
-// server.js's listen callback, on the schedule tick's clock, as before.
+// **One timer here, and it is the fast path.** The catch-up pass and the
+// interval are started from server.js's listen callback, on the schedule tick's
+// clock, as before — that is the backstop. `armNext` sets a single timeout for
+// the soonest row this bridge would deliver, so a wake-up set for 15:00 goes at
+// 15:00 rather than up to thirty seconds after; the interval still finds one the
+// timeout was lost for, or one further off than setTimeout can hold.
+//
+// **Wake-ups go through here too** (`kind` `wake` and `limit`; bridge/wakes.js).
+// What differs for them is marked `isWake` below and listed in that file's header.
 
 const cfg = require('./config');
 const { LATE_MS } = require('./later');
 const { stateOf: handoffState, wakes, wakeFailure } = require('./handoff');
 const { broadcast } = require('./events');
+const wakeUps = require('./wakes');
 
 // Handed over by server.js; see the header.
 let later = null;
@@ -127,6 +135,10 @@ async function deliverLater(row) {
     const effort = row.effort || null;
 
     const st = pool.statuses()[row.sessionId] || null;
+    // A wake-up goes to a live process as it is — see bridge/wakes.js — so it is
+    // queued behind a running turn rather than waiting for a mode to match, and it
+    // never retires a process to change one.
+    const asIs = wakeUps.isWake(row) && !!pool.get(row.sessionId);
 
     // Held by a terminal, VS Code or a background agent: two writers cannot append
     // to one transcript. Worth retrying rather than failing, which is the one place
@@ -148,7 +160,7 @@ async function deliverLater(row) {
     // would not is simply queued behind the turn, which is correct and needs no
     // special case.
     const busy = st && (st.state === 'busy' || st.state === 'starting');
-    if (busy && (st.permissionMode !== mode || (st.model || null) !== model
+    if (busy && !asIs && (st.permissionMode !== mode || (st.model || null) !== model
         || (st.effort || null) !== effort)) {
         return {
             ok: false, retry: true,
@@ -174,8 +186,8 @@ async function deliverLater(row) {
     let r;
     let entry;
     try {
-        r = pool.ensure(row.sessionId, { cwd, model, effort, permissionMode: mode });
-        entry = r.send(String(row.text || ''), files);
+        r = pool.ensure(row.sessionId, asIs ? { cwd } : { cwd, model, effort, permissionMode: mode });
+        entry = r.send(wakeUps.deliveredText(row), files);
     } catch (err) {
         return { ok: false, error: err.message };
     }
@@ -208,7 +220,34 @@ let laterTicking = false;
 function tickLater() {
     if (laterTicking) return Promise.resolve();
     laterTicking = true;
-    return runLaterTick().finally(() => { laterTicking = false; });
+    return runLaterTick().finally(() => { laterTicking = false; armNext(); });
+}
+
+// setTimeout's ceiling; the interval picks up anything further off.
+const MAX_TIMER_MS = 2 ** 31 - 1;
+let nextTimer = null;
+
+/**
+ * Arm one timeout for the soonest row this bridge delivers. Only rows still in
+ * the future: one that is due and was put back (its session busy elsewhere) is
+ * the interval's to retry, or this would spin on it.
+ */
+function armNext() {
+    clearTimeout(nextTimer);
+    nextTimer = null;
+    if (!later) return;
+    const now = Date.now();
+    let soonest = null;
+    for (const r of later.rows) {
+        if (r.state !== 'pending' || r.at <= now || cfg.IS_DEV !== !!r.test) continue;
+        if (soonest === null || r.at < soonest) soonest = r.at;
+    }
+    if (soonest === null || soonest - now > MAX_TIMER_MS) return;
+    nextTimer = setTimeout(() => {
+        nextTimer = null;
+        tickLater().catch(err => console.error(`[tgxcode] scheduled message timer failed: ${err.message}`));
+    }, soonest - now + 50);
+    nextTimer.unref();
 }
 
 /**
@@ -235,10 +274,20 @@ async function runLaterTick() {
         // "the bridge that owns this session is the one that delivers to it".
         if (cfg.IS_DEV !== !!row.test) continue;
 
+        // A limit wake whose orchestrator has taken over, or whose setting was
+        // turned off since. Dropped, not failed: nothing went wrong.
+        const drop = wakeUps.dropReason(row);
+        if (drop) {
+            later.remove(row.id);
+            changed = true;
+            continue;
+        }
+
         // Past its window. Reported rather than sent — an instruction seven hours
         // late is the wrong instruction, and this one arrives carrying the
-        // permission to act on itself.
-        if (now - row.at > LATE_MS) {
+        // permission to act on itself. Not a wake-up: "carry on" stays true, and
+        // a limit wake that is late because the bridge was down must still go.
+        if (!wakeUps.isWake(row) && now - row.at > LATE_MS) {
             later.note(row.id, {
                 state: 'missed',
                 error: 'the bridge was not running when this was due, and it was too '
@@ -269,7 +318,10 @@ async function runLaterTick() {
             out = { ok: false, error: err.message };
         }
 
-        if (out.ok) {
+        if (out.ok && wakeUps.isWake(row)) {
+            // Delivered, and the transcript says so; a "sent" chip would be noise.
+            later.remove(row.id);
+        } else if (out.ok) {
             later.note(row.id, { state: 'sent', sentAt: Date.now() });
         } else if (out.retry) {
             // Nothing was attempted, so the claim can be given back. Only ever
@@ -318,4 +370,4 @@ function recoverInterruptedLater() {
     broadcast('later-changed', laterPayload());
 }
 
-module.exports = { init, deliverLater, tickLater, recoverInterruptedLater };
+module.exports = { init, deliverLater, tickLater, recoverInterruptedLater, armNext };

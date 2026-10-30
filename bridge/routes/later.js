@@ -18,7 +18,8 @@
 const { broadcast } = require('../events');
 const { NEXT, readJson, send } = require('../http');
 const { LATE_MS, MAX_AHEAD_MS } = require('../later');
-const { deliverLater } = require('../later-delivery');
+const { deliverLater, armNext } = require('../later-delivery');
+const { isWake } = require('../wakes');
 const { projectName } = require('../sessions');
 
 // Handed over by server.js — see the note above ROUTES there.
@@ -158,6 +159,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 });
             }
             broadcast('later-changed', laterPayload());
+            armNext();
             return send(res, 200, { message: laterOut(out) });
         }
 
@@ -166,6 +168,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 return send(res, 404, { error: 'no scheduled message with that id' });
             }
             broadcast('later-changed', laterPayload());
+            armNext();
             return send(res, 200, { ok: true, id: seg[2] });
         }
 
@@ -198,7 +201,10 @@ async function handle(req, res, url, pathname, seg, who) {
             } catch (err) {
                 out = { ok: false, error: err.message };
             }
-            if (out.ok) {
+            if (out.ok && isWake(row)) {
+                // The tick's rule: a wake-up delivered is gone; the transcript has it.
+                later.remove(seg[2]);
+            } else if (out.ok) {
                 later.note(seg[2], { state: 'sent', sentAt: Date.now() });
             } else if (out.retry) {
                 later.release(seg[2]);
@@ -212,8 +218,9 @@ async function handle(req, res, url, pathname, seg, who) {
                 // delivery that was attempted and did not land.
                 return send(res, out.retry ? 409 : 502, { error: out.error });
             }
+            const sent = later.get(seg[2]);
             return send(res, 200, {
-                ok: true, message: laterOut(later.get(seg[2])),
+                ok: true, message: sent ? laterOut(sent) : null,
                 status: out.status, queued: out.queued, woke: out.woke,
             });
         }

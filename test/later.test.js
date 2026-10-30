@@ -61,8 +61,8 @@ function make(store, over = {}) {
     });
 }
 
-const FIELDS = ['at', 'attachments', 'createdAt', 'cwd', 'effort', 'error', 'id', 'model',
-    'permissionMode', 'sentAt', 'sessionId', 'state', 'test', 'text', 'updatedAt'];
+const FIELDS = ['at', 'attachments', 'createdAt', 'cwd', 'effort', 'error', 'id', 'kind', 'model',
+    'permissionMode', 'reason', 'sentAt', 'sessionId', 'state', 'test', 'text', 'updatedAt'];
 
 // --- the wire shape -----------------------------------------------------
 

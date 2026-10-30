@@ -524,6 +524,40 @@ Three things it will not do:
 A stopped session is resumed to receive one, which is the point: the agent you
 left at midnight is the agent that reads it.
 
+### Wake-ups bring a session back by itself
+
+An agent can set a timer that resumes **its own** session later, in the same
+conversation — the `wake_me_up` tool ("TGXCode: Wake Me Up"). It is for work that
+has to wait on something slow: *check the CI run in 45 minutes*, *see whether the
+deploy finished at 17:30*. The agent writes the message it will be woken with,
+ends its turn, and comes back when the time arrives; a stopped session is resumed
+for it, and one that is mid-turn gets it queued behind the turn, like anything you
+type. `schedule_session` is different: it starts a *new* session with none of
+this one's context.
+
+A wake-up shows as a chip above the composer, beside your Send later messages,
+tagged ⏰ *wake-up* with the reason the agent gave; the rail's 🕐 badge counts it
+too. The × cancels it and **Wake now** delivers it early. It runs in whatever mode
+the session already runs in — nothing about it is chosen by the agent — and an
+agent may hold three at once.
+
+**After the usage limit, sessions carry on by themselves.** When a turn ends
+because the account hit its usage limit, TGXCode sets a wake-up for a minute after
+that window resets, tagged ⏰ *after limit*, which resumes the session with *The
+usage limit reset; carry on where you left off.* A second limit stop moves it
+rather than adding another, and if the session gets going again before then —
+you sent it something and the turn went through — the wake-up is withdrawn. Turn
+it off under *Settings → Quota → Resume sessions after the usage limit resets*.
+
+Orchestrators already resume themselves after their usage cutoff, and tell
+themselves which workers were cut off. So no limit wake-up is set for an
+orchestrator, or for its workers, while that orchestrator is paused or has
+*Carry on by itself when the window resets* on — one "carry on" is enough.
+
+Unlike a Send later message, a wake-up is never marked *missed* for being late: if
+the bridge was down when it was due, it goes when the bridge comes back, because
+"carry on" does not stop being true.
+
 ### The rail is sorted on load, and then left alone
 
 The bridge returns sessions ordered by when *you* last wrote in them, and it

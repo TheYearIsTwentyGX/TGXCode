@@ -38,7 +38,7 @@ export const PREFS_FALLBACK = {
         bumpOnTurn: false, bumpOnPr: false, order: [], newAt: 'top',
         compactActions: false,
     },
-    quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
+    quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20, resumeAfterLimit: true },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
     toolbar: { items: [], conversation: [] },

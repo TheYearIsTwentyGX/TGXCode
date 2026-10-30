@@ -178,6 +178,9 @@ const AGENT_TOOLS = [
     'mcp__tgxcode__start_task',
     'mcp__tgxcode__set_task_status',
     'mcp__tgxcode__schedule_session',
+    // Speaks only to this session, later; see bridge/wakes.js. A card for it would
+    // be asked exactly when a session is about to stop for the night.
+    'mcp__tgxcode__wake_me_up',
     // A read. install_on_phone is not here: it makes bytes downloadable off this
     // machine, which is a call worth a card.
     'mcp__tgxcode__phone_install_status',
@@ -253,6 +256,13 @@ const IDLE_EVICT_MS = 15 * 60 * 1000;
 const BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
 // The task statuses that mean it is over, as `task_updated` spells them.
 const TASK_DONE = ['completed', 'failed', 'killed', 'stopped'];
+
+// What the CLI says when a turn is refused for the usage limit: the synthetic
+// "You've hit your session limit · resets 3:20pm" (and the 5-hour and weekly
+// spellings), or the older "Claude AI usage limit reached". A fallback for the
+// `rate_limit_event` with status `rejected`, which is the reliable signal but is
+// not there for a turn read back from an adopted process.
+const LIMIT_TEXT = /\b(hit your (?:[\w-]+ )*limit|usage limit reached)\b/i;
 
 const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'bypassPermissions'];
 
@@ -449,7 +459,8 @@ class Runner extends EventEmitter {
         this.state = 'stopped';        // stopped | starting | idle | busy | error
         this.activity = null;          // human-readable "what is it doing right now"
         this.lastError = null;
-        this.lastResult = null;        // {costUsd, durationMs, numTurns, isError}
+        this.lastResult = null;        // {costUsd, durationMs, numTurns, isError, usageLimit}
+        this._limitInfo = null;        // this turn's `rejected` rate_limit_info, until its result
         this.lastResultText = null;    // the turn's final text, tail-capped; never broadcast
         this.lastResultBody = null;    // the same text from the front; never broadcast
         this.lastUsedAt = Date.now();
@@ -1963,6 +1974,7 @@ class Runner extends EventEmitter {
 
             case 'result': {
                 const { failed, detail } = this._readResult(msg);
+                this._limitInfo = null;     // read into lastResult.usageLimit
                 this._pendingTools.clear();
                 this.inFlight.length = 0;   // safely in the transcript now
                 this._saveNote();
@@ -1996,6 +2008,9 @@ class Runner extends EventEmitter {
                 // bridge/usage.js decides what is worth showing; see the note
                 // there on why `utilization` is usually absent.
                 this.emit('quota', msg.rate_limit_info);
+                // A refusal is what ends a turn on the usage limit. Kept until the
+                // result, which says whether the turn actually ended on it.
+                if (msg.rate_limit_info.status === 'rejected') this._limitInfo = msg.rate_limit_info;
                 if (msg.rate_limit_info.status !== 'allowed') {
                     this.emit('notice', {
                         level: 'warn', kind: 'rate_limit',
@@ -2055,8 +2070,26 @@ class Runner extends EventEmitter {
             durationMs: msg.duration_ms || msg.duration_api_ms || 0,
             numTurns: msg.num_turns || 0,
             stopReason: msg.stop_reason || null,
+            usageLimit: this._usageLimit(failed, detail),
         };
         return { failed, detail };
+    }
+
+    /**
+     * `{resetsAt, window}` when this turn ended because the account hit its usage
+     * limit, else null. `resetsAt` is epoch ms, or null when only the text said so
+     * — bridge/wakes.js then asks bridge/usage.js. Read by the auto-resume after a
+     * limit; see there.
+     */
+    _usageLimit(failed, detail) {
+        if (!failed) return null;
+        const info = this._limitInfo;
+        if (!info && !LIMIT_TEXT.test(detail)) return null;
+        const secs = info && Number.isFinite(info.resetsAt) ? info.resetsAt : null;
+        return {
+            resetsAt: secs === null ? null : Math.round(secs * 1000),
+            window: (info && typeof info.rateLimitType === 'string' && info.rateLimitType) || null,
+        };
     }
 
     /**
@@ -2990,4 +3023,6 @@ class RunnerPool extends EventEmitter {
     }
 }
 
-module.exports = { RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, sessionEnv, mcpConfig, PREVIEW_TOOLS };
+module.exports = {
+    RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, sessionEnv, mcpConfig, PREVIEW_TOOLS, LIMIT_TEXT,
+};

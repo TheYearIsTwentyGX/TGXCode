@@ -49,6 +49,12 @@
 //   * **`test` is copied off the session, not chosen.** It decides which bridge
 //     delivers the row — the everyday one, or a dev one — and the answer is
 //     already written down as a property of the session it is aimed at.
+//
+// **A wake-up is a row here too**, with `kind` saying which: `message` is the
+// composer's send-later, `wake` is one a session set for itself with
+// `wake_me_up`, and `limit` is the one the bridge sets when a turn ends on the
+// usage limit. Same file, same claim, same tick, same chip with the same cancel —
+// bridge/wakes.js says what differs and why it is not a store of its own.
 
 const fs = require('fs');
 const path = require('path');
@@ -94,6 +100,16 @@ const STATES = new Set(['pending', 'delivering', 'sent', 'missed', 'failed']);
 
 /** The states nothing will happen to again. */
 const TERMINAL = new Set(['sent', 'missed', 'failed']);
+
+/**
+ * message — written in the composer, delivered as typed
+ * wake    — a session's own `wake_me_up`
+ * limit   — set by the bridge when a turn ended on the usage limit
+ *
+ * Anything else reads as `message`, so a row from a newer bridge with a kind this
+ * one has never heard of is still delivered as the text it carries.
+ */
+const KINDS = new Set(['message', 'wake', 'limit']);
 
 /** `null` unless it is a non-empty string. */
 function orNull(v) {
@@ -158,6 +174,9 @@ function clean(row) {
         updatedAt: row.updatedAt,
         sentAt: row.sentAt,
         error: row.error,
+        kind: row.kind,
+        // Why a wake-up was set, in the session's words. Null on a message.
+        reason: row.reason,
     };
 }
 
@@ -213,6 +232,8 @@ function read() {
                 updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
                 sentAt: Number.isFinite(row.sentAt) ? row.sentAt : null,
                 error: orNull(row.error),
+                kind: KINDS.has(row.kind) ? row.kind : 'message',
+                reason: orNull(row.reason),
             }));
         }
         return out.sort(byDue);
@@ -351,6 +372,16 @@ class Later {
         return row ? clean(row) : null;
     }
 
+    /**
+     * One session's pending wake-ups, of the kinds asked for, soonest first.
+     * @param {string[]} [kinds]
+     */
+    pendingWakes(sessionId, kinds = ['wake', 'limit']) {
+        return this.rows
+            .filter(r => r.sessionId === sessionId && r.state === 'pending' && kinds.includes(r.kind))
+            .map(clean);
+    }
+
     /** How many are still waiting for one session, for the route's ceiling. */
     pendingCount(sessionId) {
         return this.rows.filter(r => r.sessionId === sessionId && r.state === 'pending').length;
@@ -361,7 +392,10 @@ class Later {
      *   ceiling — which the route turns into a 409. Null rather than a throw so
      *   the caller does not have to read a message to tell the two apart.
      */
-    create({ sessionId, cwd, text, attachments, model, effort, permissionMode, at, test } = {}) {
+    create({
+        sessionId, cwd, text, attachments, model, effort, permissionMode, at, test,
+        kind = 'message', reason = null,
+    } = {}) {
         if (this.pendingCount(sessionId) >= MAX_PER_SESSION) return null;
         const now = this._stamp();
         const row = clean({
@@ -380,6 +414,8 @@ class Later {
             updatedAt: now,
             sentAt: null,
             error: null,
+            kind: KINDS.has(kind) ? kind : 'message',
+            reason: orNull(reason),
         });
         this.rows.push(row);
         this._sort();
@@ -581,5 +617,5 @@ class Later {
 
 module.exports = {
     Later, STATE_FILE, LATE_MS, KEEP_MS,
-    MAX_PER_SESSION, MAX_AHEAD_MS, MAX_ATTACHMENTS, STATES, TERMINAL,
+    MAX_PER_SESSION, MAX_AHEAD_MS, MAX_ATTACHMENTS, STATES, TERMINAL, KINDS,
 };

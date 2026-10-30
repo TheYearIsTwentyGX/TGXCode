@@ -265,7 +265,8 @@ export const SETTINGS = [
     {
         title: 'Quota', section: 'quota', category: 'workspace', userOnly: true,
         note: 'Keeping the percentages current with no terminal open, by starting a '
-            + '`claude` for a few seconds and killing it.',
+            + '`claude` for a few seconds and killing it — and what happens when a session hits '
+            + 'the limit.',
         rows: [
             { key: 'beacon', type: 'bool',
                 label: 'Refresh quota in the background',
@@ -278,6 +279,11 @@ export const SETTINGS = [
             { key: 'beaconEveryMinutes', type: 'int', min: 5, max: 1440,
                 label: 'How often, in minutes',
                 note: 'Each run is a CLI start and one tiny API call. Floor of five.' },
+            { key: 'resumeAfterLimit', type: 'bool',
+                label: 'Resume sessions after the usage limit resets',
+                note: 'A session whose turn ended on the usage limit carries on by itself a '
+                    + 'minute after the window resets. The wake shows above its composer, where '
+                    + 'you can cancel it. Orchestrators that resume themselves are left to it.' },
         ],
     },
     {

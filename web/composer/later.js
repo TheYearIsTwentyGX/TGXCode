@@ -141,10 +141,19 @@ function laterChip(m) {
     // "Send now" only while it is still waiting. On a message already sent it
     // would send it twice, and the bridge refuses that — better not to offer it.
     const pending = m.state === 'pending';
+    // A wake-up (bridge/wakes.js) rides on the same store and the same chip, and
+    // says which it is: one the session set for itself, or the bridge's own after
+    // a usage-limit stop. Its mode is the session's own, so it is not shown loud.
+    const wake = m.kind === 'wake' || m.kind === 'limit';
+    const tag = m.kind === 'limit' ? 'after limit' : m.kind === 'wake' ? 'wake-up' : null;
+    const tagTitle = m.kind === 'limit'
+        ? `Resumes this session after the ${m.reason || 'usage limit'} resets. Turn this off in Settings → Quota.`
+        : `This session set this wake-up for itself${m.reason ? `: ${m.reason}` : ''}`;
     return html`<div key=${m.id} data-id=${m.id}
-        class=${`later-chip${open ? ' open' : ''}${done ? ' done' : ''}${bad ? ' bad' : ''}`}>
+        class=${`later-chip${open ? ' open' : ''}${done ? ' done' : ''}${bad ? ' bad' : ''}${wake ? ' wake' : ''}`}>
         <span class="later-when" title=${new Date(m.at).toLocaleString()}>${laterWhen(m)}</span>
-        <span class=${`later-mode${loud ? ' loud' : ''}`}
+        ${tag ? html`<span class="later-kind" title=${tagTitle}>${`\u23F0 ${tag}`}</span>` : null}
+        <span class=${`later-mode${loud && !wake ? ' loud' : ''}`}
             title=${`It will be delivered in ${m.permissionMode}`}>${m.permissionMode}</span>
         ${m.attachments.length
             ? html`<span class="queue-files">${`${m.attachments.length}📎`}</span>`
@@ -159,12 +168,12 @@ function laterChip(m) {
             ${pending
                 ? html`<button class="queue-act" type="button"
                     disabled=${state.laterSending.has(m.id)}
-                    title="Deliver this message now instead of waiting"
-                    onClick=${() => sendLaterNow(m)}>Send now</button>`
+                    title=${wake ? 'Wake the session now instead of waiting' : 'Deliver this message now instead of waiting'}
+                    onClick=${() => sendLaterNow(m)}>${wake ? 'Wake now' : 'Send now'}</button>`
                 : null}
             <button class="queue-act danger" type="button"
-                title=${pending ? 'Cancel this message' : 'Clear this row'}
-                aria-label=${pending ? 'Cancel this message' : 'Clear this row'}
+                title=${pending ? (wake ? 'Cancel this wake-up' : 'Cancel this message') : 'Clear this row'}
+                aria-label=${pending ? (wake ? 'Cancel this wake-up' : 'Cancel this message') : 'Clear this row'}
                 onClick=${() => cancelLater(m)}>×</button>
         </span>
     </div>`;

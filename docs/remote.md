@@ -514,7 +514,7 @@ time so it cannot be turned into a fan of processes.
 
 | | Why |
 |---|---|
-| `bypassPermissions`, `dontAsk` | Runs everything unasked. A deliberate choice at the desk, not one tap away on a device that might be in someone else's hand. Refused on send too, so a session cannot be escalated after the fact. |
+| `bypassPermissions`, `dontAsk` | Runs everything unasked. A deliberate choice at the desk, not one tap away on a device that might be in someone else's hand. Refused on send too, so a session cannot be escalated after the fact — and on `POST /api/sessions/:id/wake` when the session already runs in one of them, since a wake-up resumes it in its own mode and would otherwise be a remote send in that mode. |
 | `/api/terminals/*` | A raw pty. Everything else is mediated by the app; this is a shell, and a leaked token that reaches it has the machine. |
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
 | `/api/restart`, **both methods** | Restarts the bridge, pulling the checkout first — the same processes, plus a `git pull` into the checkout the desk is running. The GET is refused too: it is the restart journal, which names the checkout and what a restart decided about it, and a phone has no use for it. |
