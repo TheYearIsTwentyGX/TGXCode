@@ -17,6 +17,8 @@
 //   start_task        — take one up, as a new session or inside this one.
 //   set_task_status   — say one is done, or dismiss it, or offer it again.
 //   schedule_session  — start a session later, once or on a cron.
+//   wake_me_up        — resume *this* session later, with a prompt of its own;
+//                       also lists and cancels. See bridge/wakes.js.
 //
 // And two that reach past the machine:
 //
@@ -504,6 +506,44 @@ const SCHEDULE = {
     },
 };
 
+const WAKE_ME_UP = {
+    name: 'wake_me_up',
+    title: 'Wake me up later',
+    description: [
+        'Set a timer that resumes THIS session later, in this same conversation, with a',
+        'message you write now. Unlike schedule_session, which starts a new session with',
+        'none of your context, this brings you back. Use it to check on something slow',
+        '(a CI run, a deploy, a long build) instead of polling or sleeping, or to carry',
+        'on at a time the user named.',
+        '',
+        'Give `in` (a duration: "45m", "2h", "1h30m") or `at` (a local date and time,',
+        'e.g. 2026-09-25T09:00, or a clock time like 17:30 for the next one), and',
+        '`prompt`: the message you will be woken with — write it so that future you',
+        'knows what to check and what to do next. It survives a bridge restart. If you',
+        'are mid-turn when it fires it waits for the turn to end. The user sees it above',
+        'the composer and can cancel it. Up to 3 at once per session.',
+        '',
+        'action "list" shows your pending wake-ups (including the one TGXCode sets',
+        'itself after a usage-limit stop); action "cancel" cancels one by `id`, or all',
+        'of them without one. After setting one, end your turn — do not wait for it.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            action: { type: 'string', enum: ['set', 'list', 'cancel'], description: 'Defaults to set.' },
+            in: { type: 'string', description: 'How long from now, e.g. "45m", "2h", "1h30m". Give in or at.' },
+            at: {
+                type: 'string',
+                description: 'When, in local time: 2026-09-25T09:00, or 17:30 / 5:30pm for the next such '
+                    + 'time. Within 30 days.',
+            },
+            prompt: { type: 'string', description: 'The message this session is resumed with.' },
+            reason: { type: 'string', description: 'One line on why, shown to the user beside it.' },
+            id: { type: 'string', description: 'For cancel: the wake-up to cancel. Omit to cancel all.' },
+        },
+    },
+};
+
 const INSTALL_ON_PHONE = {
     name: 'install_on_phone',
     title: 'Install an APK on the user\'s phone',
@@ -954,7 +994,7 @@ const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WO
     READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY, MOVE_SESSION];
 
 const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
-    INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
+    WAKE_ME_UP, INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
     ...(ROLE === 'worker' ? [REPORT] : []),
     ...(PREVIEW ? [OPEN_IN_PREVIEW] : [])];
@@ -1292,6 +1332,66 @@ async function callSchedule(id, args) {
     lines.push('', 'The user can see and change it in the Schedules panel. '
         + 'Tell them it is set, and when.');
     return say(id, lines.join('\n'));
+}
+
+/** "Thu 3:05 PM (in 45m)" — a wake-up's time, as the model reads it back. */
+function wakeWhen(ms) {
+    const mins = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+    const span = mins < 90 ? `${mins}m` : mins < 48 * 60 ? `${Math.round(mins / 6) / 10}h` : `${Math.round(mins / 1440)}d`;
+    return `${new Date(ms).toString().replace(/:\d\d GMT.*$/, '')} (in ${span})`;
+}
+
+function wakeLine(w) {
+    const what = w.kind === 'limit' ? 'after the usage limit (set by TGXCode)' : clip(w.text, 100);
+    return `- ${w.id}: ${wakeWhen(w.at)} — ${what}${w.reason && w.kind !== 'limit' ? ` [${w.reason}]` : ''}`;
+}
+
+function clip(text, n) {
+    const s = String(text || '').replace(/\s+/g, ' ').trim();
+    return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+async function callWakeMeUp(id, args) {
+    if (!SESSION_ID) return toolError(id, 'this session does not know its own id, so it cannot be woken');
+    const route = `/api/sessions/${encodeURIComponent(SESSION_ID)}/wake`;
+    const action = args.action || 'set';
+
+    if (action === 'list') {
+        const r = await api('GET', route);
+        if (r.error) return toolError(id, r.error);
+        if (!r.ok) return toolError(id, msgOf(r));
+        const ws = (r.body && r.body.wakes) || [];
+        if (!ws.length) return say(id, 'No wake-ups pending for this session.');
+        return say(id, [`${ws.length} pending:`, ...ws.map(wakeLine)].join('\n'));
+    }
+
+    if (action === 'cancel') {
+        const one = typeof args.id === 'string' && args.id.trim() ? args.id.trim() : null;
+        const r = await api('DELETE', one ? `${route}/${encodeURIComponent(one)}` : route);
+        if (r.error) return toolError(id, r.error);
+        if (!r.ok) return toolError(id, msgOf(r));
+        const n = (r.body && r.body.cancelled) || 0;
+        return say(id, n ? `Cancelled ${n} wake-up${n === 1 ? '' : 's'}.` : 'There was nothing to cancel.');
+    }
+
+    if (action !== 'set') return toolError(id, 'action must be set, list or cancel');
+    const r = await api('POST', route, {
+        in: typeof args.in === 'string' ? args.in : undefined,
+        at: typeof args.at === 'string' ? args.at : undefined,
+        prompt: args.prompt,
+        reason: typeof args.reason === 'string' ? args.reason : undefined,
+    });
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+    const w = (r.body && r.body.wake) || {};
+    return say(id, [
+        `Wake-up set for ${wakeWhen(w.at)}.`,
+        `    id: ${w.id}`,
+        `    resumes in: ${w.permissionMode} mode`,
+        '',
+        'The user can see and cancel it above the composer. End your turn now; you will be '
+            + 'resumed with your prompt then.',
+    ].join('\n'));
 }
 
 // How long install_on_phone waits for the phone, and how often it looks. The
@@ -1742,6 +1842,7 @@ async function handle(msg) {
         if (name === 'start_task') return callStartTask(id, args);
         if (name === 'set_task_status') return callSetTaskStatus(id, args);
         if (name === 'schedule_session') return callSchedule(id, args);
+        if (name === 'wake_me_up') return callWakeMeUp(id, args);
         if (name === 'install_on_phone') return callInstallOnPhone(id, args);
         if (name === 'phone_install_status') return callPhoneInstallStatus(id, args);
         if (name === 'open_in_preview' && PREVIEW) return callOpenInPreview(id, args);

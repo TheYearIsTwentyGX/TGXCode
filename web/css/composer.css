@@ -476,6 +476,19 @@
 /* bypassPermissions and dontAsk, which is what this pill is really for. */
 .later-mode.loud { background: var(--yellow-cont-hover); color: var(--yellow); }
 
+/* A wake-up rather than a message: the session's own, or the bridge's after a
+   usage-limit stop (bridge/wakes.js). */
+.later-kind {
+    flex: none;
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--pill);
+    background: var(--blue-cont);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--sans);
+    color: var(--blue);
+    white-space: nowrap;
+    cursor: default;
+}
+
 .later-text {
     flex: 1;
     min-width: 0;

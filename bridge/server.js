@@ -59,6 +59,7 @@ const prRefresh = require('./pr-refresh');
 const prReviews = require('./pr-reviews');
 const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
+const wakes = require('./wakes');
 const { Orchestrators } = require('./orchestrators');
 const orchestration = require('./orchestration');
 const { pair } = require('./pairing');
@@ -638,6 +639,12 @@ laterDelivery.init({
 });
 const { tickLater, recoverInterruptedLater } = laterDelivery;
 
+// Wake-ups ride on the scheduled-message store; see bridge/wakes.js.
+wakes.init({
+    later, pool, index, orchestrators, prefs, usage, sessionCwd,
+    changed: () => { broadcast('later-changed', laterPayload()); laterDelivery.armNext(); },
+});
+
 /**
  * Log a remote request, once per minute per source rather than per request.
  *
@@ -1180,6 +1187,8 @@ pool.on('turn-complete', (r) => {
     noteScheduledOutcome(r);
     prReviews.noteTurn(r);
     orchestration.onTurnComplete(r);
+    // A turn that ended on the usage limit gets a wake for after the reset.
+    wakes.onTurnComplete(r);
     // The header's running total. The turn's own `costUsd` covers this turn
     // alone, so the session's transcript is re-read for the whole of it.
     spend.refreshSession(index, r.sessionId).then((out) => {

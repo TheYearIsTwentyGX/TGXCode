@@ -1957,7 +1957,10 @@ of it.
 no terminal open: `beacon` (bool), `beaconDir` (**string or null** — where the
 short-lived `claude` runs; nothing happens until it names somewhere you have
 already trusted), `beaconEveryMinutes` (int, 1–1440). See `GET /api/quota` for
-what the refresh itself reports. User file only.
+what the refresh itself reports. And one about hitting the limit: `resumeAfterLimit`
+(bool, default `true`) — when a session's turn ends on the usage limit, set a `limit`
+wake-up that resumes it a minute after the window resets (§*Wake-ups* under
+`GET /api/later`). User file only.
 
 `keyboard` is about keys, and is four keys of its own:
 
@@ -2710,7 +2713,7 @@ picked. Where a draft is a `POST /api/sessions` held back, one of these is a
       "model": null, "effort": null, "permissionMode": "bypassPermissions",
       "at": 1790112000000, "state": "pending", "late": false, "test": false,
       "createdAt": 1790086931954, "updatedAt": 1790086931954,
-      "sentAt": null, "error": null }
+      "sentAt": null, "error": null, "kind": "message", "reason": null }
   ],
   "counts": { "total": 1, "pending": 1 }
 }
@@ -2738,6 +2741,8 @@ one value that cannot.
 | `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
 | `sentAt` | **number or null**, epoch ms — when it was handed to the process. `null` until then |
 | `error` | **string or null** — why it is `missed` or `failed`, in a sentence fit to show |
+| **`kind`** | **string**, one of `message` · `wake` · `limit`. `message` is a send-later written in a composer. `wake` is a **wake-up** a session set for itself with the `wake_me_up` tool; `limit` is one the bridge set because the session's turn ended on the usage limit. See *Wake-ups* below. Any other value, or the field absent (a row from before it existed), reads as `message` |
+| **`reason`** | **string or null** — on a `wake`, the one line the session gave for it; on a `limit`, which limit (`"five-hour usage limit"`). Always null on a `message` |
 
 Ordered **soonest `at` first** — the order they will happen in, which is the order to
 read them in. Delivered and missed rows keep their place in that order rather than
@@ -2791,7 +2796,76 @@ re-run work that has already happened. The `error` says so.
 dropped, and every row for a session goes when the session is deleted. So a client must
 treat this list as something that shrinks underneath it.
 
+#### Wake-ups
+
+A row with `kind` `wake` or `limit` is a **wake-up**: it resumes the same session, in the
+same conversation, at `at`. They are rows in this same list — same chip, same cancel
+(`DELETE /api/later/:id`), same `Send now` — and differ from a message in four ways a
+client should know:
+
+- **Never `missed`.** The one-hour grace does not apply; a wake-up is delivered however
+  late it is, because "carry on" does not stop being true, and a limit wake that is late
+  because the bridge was down is exactly the one that must still go. `late` is always
+  `false` on one.
+- **Delivered to the session as it is.** With a process up, the wake-up goes to it
+  without changing its mode, model or effort, so it is **queued behind a running turn**
+  rather than waiting for idle. `permissionMode`, `model` and `effort` on the row are what
+  the session was running when it was set, and are used only to resume it when it has no
+  process. Not chosen by any caller.
+- **The text it arrives as.** A `wake` is delivered as
+  `(TGXCode wake-up you set at 3:05 PM, for 3:50 PM — <reason>)`, a blank line, then
+  `text`. A `limit` is delivered as its `text`, which is
+  `The usage limit reset; carry on where you left off.`
+- **Removed once delivered**, never kept as `sent` — the transcript has it. So a wake-up
+  leaves this list when it fires, and `later-changed` says so. A delivery that fails is
+  kept as `failed`, like a message.
+
+A **`limit`** wake is set when a turn ends with `lastResult.usageLimit` (§*`runner-status`*),
+for **one minute after** that window's reset, one per session (a second limit stop moves
+it). It is removed without being delivered when a later turn on that session finishes
+without an error, when `quota.resumeAfterLimit` is turned off (§`PUT /api/prefs`), or —
+at fire time as well as when it is set — when the session is an orchestrator, or a worker
+of one, whose orchestrator is paused or has its usage cutoff on with auto-resume: that
+flow resumes them itself. Such a removal files no notification.
+
+At most **3 pending `wake` rows per session** (`409` past that, from
+`POST /api/sessions/:id/wake`), inside the 20-per-session ceiling below.
+
 Also pushed as the `later-changed` SSE event, carrying this same payload.
+
+### `GET /api/sessions/:id/wake`
+
+→ `{wakes: [...]}` — this session's **pending** `wake` and `limit` rows, as
+`GET /api/later` shapes them, soonest first. `[]` for an unknown id.
+
+### `POST /api/sessions/:id/wake`
+
+`{prompt, in?, at?, reason?}` → `{wake}`, the row as `GET /api/later` shapes it. What the
+`wake_me_up` MCP tool calls; a client may call it too.
+
+- `prompt` (string, required, at most 20000 characters) — the message the session is
+  woken with; stored as `text`.
+- **Exactly one of `in` and `at`.** `in` is a duration string: `"45m"`, `"2h"`,
+  `"1h30m"`, `"90s"`, `"2 days"`; a bare number is minutes. `at` is a **local** date and
+  time (`"2026-09-25T09:00"`), a clock time alone (`"17:30"`, `"5:30pm"`) meaning the
+  next time the clock reads that, or a number of epoch ms. A date with no time is refused.
+  The result must be at least a minute away and within 30 days.
+- `reason` (string, optional, cut at 300 characters) — stored as `reason`.
+
+The mode, model and effort are the session's current ones (its live process, else the
+mode it was last seen in) and cannot be given. `test` is copied off the session.
+
+`400` for a missing prompt or an unreadable, too-near or too-far time; `403`
+(`{error, remote: true}`) for a remote caller when the session's mode is
+`bypassPermissions` or `dontAsk`, the pair refused remotely everywhere else; `404` for an
+unknown session; `409` past 3 pending wake-ups for this session.
+
+### `DELETE /api/sessions/:id/wake/:wakeId` and `DELETE /api/sessions/:id/wake`
+
+→ `{ok: true, cancelled}` — cancel one of this session's pending wake-ups by id, or with
+no id every one (`wake` and `limit`), `cancelled` being how many went. **Scoped to the
+session**: an id belonging to another session is a `404`, not a cancel, so one session
+cannot cancel another's. `DELETE /api/later/:id` cancels any row with no such check.
 
 ### `GET /api/sessions/:id/later`
 
@@ -3910,7 +3984,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, a worker's PR changing status in the bridge's PR cache, settings, the summary or a decision answered, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
-| `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
+| `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason, usageLimit}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError`. `usageLimit` as in `lastResult` (§*`runner-status`*) |
 | `session-spend` | `{sessionId, totals}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id`: that session's all-time API-equivalent spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
@@ -3940,7 +4014,7 @@ down from:
 | **`pendingSettings`** | **object or null** — `{model, effort}` (each a string or null), a model/effort change the bridge is holding until `background` reaches zero, because applying it restarts the process and would stop that work. When it is applied, a status with the new `model`/`effort` follows |
 | `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
 | **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
-| **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
+| **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason, usageLimit}` for the turn that most recently finished. **`usageLimit` is an object or null**: `{resetsAt, window}` when the turn ended because the account hit its usage limit — `resetsAt` epoch **ms** or null (known from the stream's `rejected` rate-limit event; null when only the CLI's "You've hit your … limit" text said so), `window` the `rateLimitType` string or null. Null for every other turn. It is what sets a `limit` wake-up (§*Wake-ups* under `GET /api/later`) |
 | **`stalled`** | **bool** — the turn is `busy` and has said nothing for longer than the threshold, with nothing waiting on you and no tool call open. See below. Always `false` when `state` is not `busy` |
 | `lastActivityAt` | number or null — epoch ms of the last line the process wrote (any stream-json line, a tool starting or finishing), or of an ask being answered. Null until the process has written one. Not reset between turns: the stall clock uses the later of this and `busySince` |
 
@@ -4508,7 +4582,8 @@ produced is in the transcript either way.
 ### `POST /api/later/:id/send`
 
 No body → `{ok: true, message, status, queued, woke}` — deliver it now, whatever its
-clock says.
+clock says. **`message` is `null` for a wake-up** (`kind` `wake` or `limit`), which is
+removed once delivered rather than kept as `sent`.
 
 **The same function the tick calls**, which is `POST /api/schedules/:id/run`'s rule and
 matters for the same reason: "the button delivers what the clock delivers" is only true

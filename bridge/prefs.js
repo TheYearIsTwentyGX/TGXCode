@@ -327,6 +327,10 @@ const DEFAULTS = {
         // nothing, so this is a floor of one rather than a free knob. A run that
         // is still going (ninety-second timeout) makes the next tick skip.
         beaconEveryMinutes: 20,
+        // When a session's turn ends because the account hit its usage limit,
+        // resume it a minute after the window resets — bridge/wakes.js. Not for
+        // an orchestrator or its workers when the orchestrator resumes itself.
+        resumeAfterLimit: true,
     },
     orchestrator: {
         // What a session marked as an orchestrator starts with. Each one keeps
@@ -658,6 +662,7 @@ const SHAPE = {
         // settings file asking for one every ten seconds is a mistake rather
         // than a preference.
         beaconEveryMinutes: (v) => Number.isInteger(v) && v >= 1 && v <= 1440,
+        resumeAfterLimit: (v) => typeof v === 'boolean',
     },
     orchestrator: {
         maxRunning: (v) => Number.isInteger(v) && v >= 1 && v <= 10,

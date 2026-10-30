@@ -372,7 +372,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/worktrees.js` | `/api/worktrees*`: the worktree janitor's listing, and the removal refused to remote callers |
 | `bridge/routes/pr-reviews.js` | `/api/pr-review` (the nightly review's findings) and `/api/pr-review/fix` (a session on the PR's branch to fix them) |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
-| `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
+| `bridge/routes/session.js` | One session's conversation: read, delete, send, later, wake, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
 | `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal, and the code reviews it ran |
 | `bridge/routes/commands.js` | A project's commands, their runs, and the editor's view of the files that declare them |
 | `bridge/routes/terminals.js` | A terminal pane's stream, input, size and close — all refused remotely |
@@ -448,7 +448,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them, the brief each keeps for the user (goal, open decisions, merge order) and a directory override for one moved back to its main checkout — the store, and the pure rules for inbox order, nudging, the usage cutoff, how a task's settings combine with a spawn's, and which model a worker gets (`resolveWorkerModel`) |
 | `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, tasks from the user (filed, started, taken back, returned to Drafts when the orchestrator goes), moving one out of a worktree it cannot leave, and re-broadcasting one when a worker's PR moves |
 | `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest (as text, and as fields for the orchestrator page's drawer), the last few turns, or the whole thing a page at a time |
-| `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
+| `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery, and the timeout that makes the soonest one go on time |
+| `bridge/wakes.js` | Wake-ups: `wake_me_up` resuming a session later, and resuming one after the usage limit resets — rows in the scheduled-message store |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
 | `bridge/templates.js` | Session templates: a create call kept for reuse, with `{{placeholders}}`, global or scoped to a project |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
@@ -559,7 +560,7 @@ Two rules worth knowing before you send a patch:
 | `web/composer/send.js` | Sizing the box, enabling the send controls, the optimistic chip a message shows until the transcript has it, and whether Enter sends |
 | `web/composer/branch.js` | Doing an earlier turn over: Edit and resend, and Edit and branch — `state.branchFrom`, the banner above the box, and the turn-1 case that starts a new session instead |
 | `web/composer/queue.js` | The send queue's chips — messages typed while a turn runs — reordered, edited back or dropped |
-| `web/composer/later.js` | Send later: the popover, the held messages' chips, and delivering one now or cancelling it |
+| `web/composer/later.js` | Send later: the popover, the held messages' chips (wake-ups' too), and delivering one now or cancelling it |
 | `web/composer/attachments.js` | Files pasted, dropped or picked into either composer, as chips, uploaded or held until the session exists |
 | `web/composer/wispr.js` | The Wispr Flow transform buttons, their Settings group, and `wisprAvailable` |
 | `web/new-session/` | The Start-a-session dialog. Same top-level rule as `composer/` |

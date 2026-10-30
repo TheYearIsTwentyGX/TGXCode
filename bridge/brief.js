@@ -79,6 +79,7 @@ Its \`tgxcode\` MCP tools give you:
 {{/if}}
 {{#if scheduling}}
 - schedule_session: start a session later, once or on a cron.
+- wake_me_up: resume this same session later with a prompt you write now — to check on something slow instead of polling.
 {{/if}}
 {{#if phone}}
 - install_on_phone: put an APK you built on the user's phone, without adb.
@@ -134,13 +135,15 @@ When the work exists, set_task_status "completed" with a note saying where (a PR
     {
         id: 'scheduling',
         title: 'Scheduling',
-        summary: 'running work later, and what an unattended run can do',
+        summary: 'running work later, waking yourself up, and what an unattended run can do',
         requires: [],
         text: `## Scheduling
 
 schedule_session starts a new session later: once (\`at\`, local time) or on a cron. It appears in the user's Schedules panel marked as yours, where they can edit, pause or delete it. Schedule only when the user asked for something to happen later.
 
-A scheduled run is unattended. Nobody can answer a question, and a permission prompt raised while no TGXCode window or phone is watching is denied at once. So write the prompt for an agent with none of your context, say what to do when something is unclear, and keep the default permission mode (auto) unless the user chose another; plan mode stops at a plan nobody approves.
+A scheduled run is unattended: nobody can answer a question, and a permission prompt raised while no window or phone is watching is denied at once. Write the prompt for an agent with none of your context, say what to do when something is unclear, and keep the default mode (auto) unless the user chose another; plan mode stops at a plan nobody approves.
+
+wake_me_up resumes *this* session, in this conversation, later (\`in\` "45m" or \`at\` local time) with a prompt you write now. Use it to check on CI, a deploy or a long build instead of polling, then end your turn. It waits for a running turn to end. Up to 3; \`action\` "list"/"cancel" manage them. After a usage-limit stop TGXCode wakes you by itself once the window resets.
 
 The user can also hold a message for an existing session until a set time (Send later, in the composer). That one is theirs; there is no tool for it.`,
     },
