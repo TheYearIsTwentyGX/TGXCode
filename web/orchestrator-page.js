@@ -65,6 +65,14 @@ import {
 
 // ── per-window state ───────────────────────────────────────────────────────
 
+const ORDER_FOLDED_KEY = 'tgx.orchOrderFolded';
+function storedOrderFolded() {
+    try { return localStorage.getItem(ORDER_FOLDED_KEY) === '1'; } catch { return false; }
+}
+function storeOrderFolded(v) {
+    try { localStorage.setItem(ORDER_FOLDED_KEY, v ? '1' : '0'); } catch { /* private window */ }
+}
+
 const ui = {
     // orchestrator id → 'overview' | 'conversation'. Overview unless changed.
     mode: new Map(),
@@ -72,6 +80,7 @@ const ui = {
     peek: null,                // the worker id in the drawer
     finished: false,           // the Finished fold
     activity: false,           // the Activity fold
+    orderFolded: storedOrderFolded(), // the Merge order section, collapsed; remembered across reloads
     brief: false,              // the brief's prose, all of it
     settings: false,           // the settings popover
     answering: new Set(),      // request ids in flight from the drawer
@@ -594,16 +603,21 @@ function order(p) {
     const m = mergeOrder(p, { prStatusOf: freshPr });
     if (!m.rows.length) return null;
     return html`<section class="op-sec" aria-label="Merge order">
-        <h2 class="op-h">Merge order <span>${m.fromBrief ? 'from the brief' : 'in the order the workers started — the brief has none yet'}</span></h2>
-        <ol class="op-order">${m.rows.map(r => html`<li key=${r.key} data-merged=${String(r.status === 'merged')}>
+        <button class="op-fold" type="button" aria-expanded=${String(!ui.orderFolded)}
+            onClick=${() => { ui.orderFolded = !ui.orderFolded; storeOrderFolded(ui.orderFolded); paintOrchPage(); }}>
+            <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
+            Merge order <b>${m.fromBrief ? 'from the brief' : 'in the order the workers started — the brief has none yet'}</b>
+        </button>
+        ${ui.orderFolded ? null : html`<ol class="op-order">${m.rows.map(r => html`<li key=${r.key} data-merged=${String(r.status === 'merged')}>
             <span class="op-num">${r.n}</span>
             ${r.url ? html`<a class="op-pr" data-status=${r.status} href=${r.url} target="_blank" rel="noreferrer"
                 title=${`Open #${r.number} on GitHub`}>${`#${r.number}`}<em>${PR_WORD[r.status] || ''}</em></a>`
                 : html`<span class="op-pr" data-status=${r.status}>${`#${r.number}`}</span>`}
             ${r.workerId ? html`<button class="op-order-t" type="button" title=${r.title} onClick=${() => openPeek(r.workerId)}>${r.title}</button>`
                 : html`<span class="op-order-t op-quiet" title="Not opened by one of these workers">not opened by one of these workers</span>`}
-        </li>`)}</ol>
-        ${m.rest.length ? html`<div class="op-order-rest" title=${m.rest.map(x => x.title).join('\n')}>${m.rest.length === 1
+        </li>`)}</ol>`}
+        ${!ui.orderFolded && m.rest.length ? html`<div class="op-order-rest" title=${m.rest.map(x => x.title).join('\n')}>${m.rest.length === 1
             ? `Then ${m.rest[0].title}, once it opens a PR.`
             : `Then ${m.rest.length} more as they open PRs: ${m.rest.map(x => x.title).join(', ')}.`}</div>` : null}
     </section>`;
