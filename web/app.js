@@ -4776,7 +4776,7 @@ async function choosePathAction(a, e) {
 // is somebody asking for the browser, and never reaches here as a plain click.
 document.addEventListener('click', (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-    const a = e.target.closest('.prose a[href]');
+    const a = e.target.closest('.prose a[href], .md a[href]');
     if (!a || a.classList.contains('fs-path')) return;
     if (!opensInPreview(a.href, BOOT_PREFS.preview)) return;
     e.preventDefault();

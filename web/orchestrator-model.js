@@ -276,7 +276,7 @@ export function stageLine(w, stage, inbox, { runner = null, now = Date.now(), de
             return { lead: `${what} waiting${since(item && item.at)}`, detail: [tool, reader].filter(Boolean).join(' · ') || null };
         }
         case 'you':
-            return { lead: 'Waiting on you', detail: decision ? `${clipText(decision.text, 60)}${since(decision.at)}` : null };
+            return { lead: 'Waiting on you', detail: decision ? `${clipText(plainText(decision.text), 60)}${since(decision.at)}` : null };
         case 'error':
             return { lead: 'Stopped with an error', detail: null };
         case 'run': {
@@ -297,6 +297,13 @@ export function stageLine(w, stage, inbox, { runner = null, now = Date.now(), de
 }
 
 const firstLineOf = (t) => String(t || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+/** A line of markdown as the plain words a one-line summary should show. */
+export const plainText = (t) => String(t == null ? '' : t)
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(`+)([\s\S]*?[^`])\1/g, '$2')
+    .replace(/(\*\*|__|\*|~~)(?=\S)([\s\S]*?\S)\1/g, '$2')
+    .replace(/^\s{0,3}(?:#{1,6}|[-*+]|\d+[.)]|>)\s+/gm, '')
+    .replace(/\s*\n\s*/g, ' ').trim();
 const clipText = (t, n) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
 
 /**

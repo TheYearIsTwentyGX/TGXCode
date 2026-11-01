@@ -592,8 +592,13 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
     color: var(--text-2);
     font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
+.op-brief-text.prose { font: 400 var(--fs-md)/var(--lh-base) var(--sans); }
 .op-brief-text p { margin: 0 0 var(--sp-4); }
 .op-brief-text p:last-child { margin-bottom: 0; }
+.op-brief-text :is(ul, ol) { margin: 0 0 var(--sp-4); padding-left: 1.3em; }
+.op-brief-text li { margin: 0.1em 0; }
+.op-brief-text pre { margin: 0 0 var(--sp-4); }
+.op-brief-text :is(h1, h2, h3, h4, h5, h6) { font-size: var(--fs-md); font-weight: 600; margin: var(--sp-4) 0 var(--sp-2); }
 .op-brief[data-open="false"] .op-brief-text {
     display: -webkit-box;
     -webkit-box-orient: vertical;
