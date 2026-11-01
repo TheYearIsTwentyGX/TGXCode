@@ -855,7 +855,9 @@ const SET_SUMMARY = {
     description: [
         'Replace your brief, which the orchestrator page shows the user: `text` is one or two',
         'short paragraphs on what is done, what is in flight and what is waiting on them (up',
-        'to 1500 characters). The other fields are drawn as structure, and each is optional:',
+        'to 1500 characters). It is rendered as Markdown (bold, italic, `code`, links, lists,',
+        'headings, fenced code), as are `goal` and each decision\'s question; keep it light.',
+        'The other fields are drawn as structure, and each is optional:',
         'leave one out to keep it as it was, pass null or [] to clear it.',
         '',
         '`decisions` is every question you need the user to answer. Put them here rather than',

@@ -48,7 +48,7 @@ import { state } from './state.js';
 import { dom, toast } from './dom.js';
 import { post } from './api.js';
 import { ago, clip, clockOf } from './format.js';
-import { renderMarkdown } from './markdown.js';
+import { inline, renderMarkdown } from './markdown.js';
 import { ICON } from './icons.js';
 import { enter, isUp, present, settle } from './motion.js';
 import { answerAskFor } from './transcript/approvals.js';
@@ -275,8 +275,9 @@ function head(p) {
     // ran together.
     return html`<header class="op-head">
         <div class="op-goal-row">
-            <p class="op-goal" data-empty=${String(!goal)}>${goal
-                || 'No goal yet — the orchestrator sets one when it writes its brief.'}</p>
+            ${goal
+                ? html`<p class="op-goal md" data-empty="false" dangerouslySetInnerHTML=${{ __html: inline(goal) }}></p>`
+                : html`<p class="op-goal" data-empty="true">No goal yet — the orchestrator sets one when it writes its brief.</p>`}
             <span class="op-settings-wrap" onKeyDown=${(e) => {
                 // On the wrap, not the popover: opened with the mouse, focus is
                 // still on the button beside it.
@@ -380,14 +381,14 @@ function decisionCard(p, d, now) {
     // it, and focus waits here rather than falling to the page.
     if (d.answeredAt) {
         return html`<div key=${`d:${d.id}`} class="op-need" data-answered="true" data-need=${d.id} tabindex="-1">
-            <div class="op-need-q">${d.text}</div>
+            <div class="op-need-q md" dangerouslySetInnerHTML=${{ __html: inline(d.text) }}></div>
             <div class="op-need-from">${`You answered “${clip(d.answer || '', 80)}” ${agoWords(now - d.answeredAt)} — waiting for the orchestrator to pick it up.`}</div>
         </div>`;
     }
     const open = ui.reply === d.id;
     return html`<div key=${`d:${d.id}`} class="op-need" data-busy=${String(busy)} data-stack=${String(d.options.length > 0)}
         data-need=${d.id} tabindex="-1">
-        <div class="op-need-q">${d.text}</div>
+        <div class="op-need-q md" dangerouslySetInnerHTML=${{ __html: inline(d.text) }}></div>
         <div class="op-need-from" title=${w && w.title ? `From ${w.title}` : null}>${from.join(' · ')}</div>
         <div class="op-need-act">
             ${d.options.map(o => html`<button key=${o} class="lbtn" type="button" disabled=${busy}
@@ -451,7 +452,7 @@ function brief(p) {
     if (!b || !b.text) return null;
     return html`<section class="op-sec op-brief" data-open=${String(ui.brief)} aria-label="Brief">
         <h2 class="op-h">Brief <span>${`updated ${ago(b.at) === 'now' ? 'just now' : `${ago(b.at)} ago`}`}</span></h2>
-        <div class="op-brief-text md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(b.text) }}></div>
+        <div class="op-brief-text prose md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(b.text) }}></div>
         ${b.text.length > 280 ? html`<button class="op-more" type="button" aria-expanded=${String(ui.brief)}
             onClick=${() => { ui.brief = !ui.brief; paintOrchPage(); }}>${ui.brief ? 'Show less' : 'Show all'}</button>` : null}
     </section>`;
