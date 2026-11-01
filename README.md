@@ -381,6 +381,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/preview.js` | `/api/preview/*` (local only): a window registers the shell's CDP endpoint, and `open_in_preview` waits for a window to open the page or ask the user |
 | `bridge/routes/phone-installs.js` | `/api/phone-installs*`: filing an APK (local only), the list, the download with `Range`, the phone's status reports and progress heartbeats, cancel, retry |
 | `bridge/routes/sudo.js` | `/api/sudo*`: the askpass helper's held-open ask (session key, not the token; local only), the list, and the answer (local only unless `sudo.allowRemote`) and deny |
+| `bridge/routes/secrets.js` | `/api/secrets*`: names (open), the agent's held-open ask, the answer, set, delete and reveal (local only), deny (open), and the wrapper's token-auth'd fetch (local only) |
 | `bridge/routes/files.js` | `/api/fs`, `mkdir`, `open`, `/api/attachments`, and the attachment helpers the session routes share |
 | `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
 | `bridge/viewers.js` | A polling client's viewer lease (`X-TGXCode-Viewer`), so dropping the stream for polling does not auto-deny its asks |
@@ -457,6 +458,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/keepawake.js` | Holds off system sleep while an agent is working (`power.keepAwake`): one `powershell.exe` or `systemd-inhibit` child is the lock, with a stdin watchdog so a killed bridge cannot leak it |
 | `bridge/sudo.js` | Approving `sudo -A` from the app: the per-session key, `SUDO_ASKPASS` on a session's environment, reading and verifying the command from `/proc`, and the open asks. `bridge/sudo-askpass` (+ `.js`) is the helper sudo runs |
+| `bridge/secrets.js` | Secrets agents use as `$NAME` without seeing them: the per-project store outside the repo (keyed by the main repository, `0600`), name rules, the open asks, and the command rewrite. `bridge/secret-hook` (+ `.js`) is the PreToolUse hook that wraps a Bash command; `bridge/secret-exec.js` runs it with the values and redacts them from its output |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
 | `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
 | `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
@@ -529,6 +531,7 @@ Two rules worth knowing before you send a patch:
 | `web/settings/updates.js` | The Updates group — where the shell looks for a build, what it found, Restart to update, and Build update |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
+| `web/settings/secrets.js` | The Secrets group — a project's secrets by name, with Reveal (30 seconds), Update, Delete and Add; values are never kept in state |
 | `web/settings/brief.js` | The Agent brief group — the switches, each text as a draft with Reset to default, and a preview with what is left out struck through |
 | `web/settings/review-types.js` | The Code reviews group — which skills count as reviews, edited as a list and saved whole |
 | `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over). `fitBar()` fits the bar to the window: labels go first, then buttons move into More from the end, and back when there is room |
@@ -543,6 +546,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/images.js` | The Images pane beside the transcript: every image in the chat once each, as a thumbnail grid with a ×N for repeats |
 | `web/transcript/approvals.js` | A blocked turn — the permission card, the plan pane and the question dock — and answering it |
 | `web/transcript/sudo.js` | The sudo card at the foot of the log: the exact command, as whom and where, the Bash command it is part of, a password field sent once and cleared |
+| `web/transcript/secret.js` | The secret card: the name an agent asked for, why, and a masked field sent once and cleared |
 | `web/transcript/review.js` | Reviewing a plan or a question after the fact |
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |
 | `web/transcript/suggestions.js` | Suggested follow-ups — the panel, the dialog that shows one at a readable width, and starting or dismissing one |

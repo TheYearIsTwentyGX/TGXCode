@@ -585,6 +585,7 @@ function tbAskWords(ask) {
     if (ask.kind === 'plan') return 'A plan is waiting to be approved.';
     if (ask.kind === 'question') return 'It asked you a question.';
     if (ask.kind === 'sudo') return `Wants your password for sudo ${clip(ask.command || '', 50)}`;
+    if (ask.kind === 'secret') return `Wants the secret ${ask.name || ''}`;
     const what = toolSummary({ name: ask.tool, input: ask.input }) || toolDisplayName(ask.displayName);
     return `Wants to run ${clip(what, 60)}`;
 }

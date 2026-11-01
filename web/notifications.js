@@ -180,6 +180,7 @@ const ASK_TITLE = {
     plan: 'a plan to approve',
     question: 'a question for you',
     sudo: 'sudo needs your password',
+    secret: 'wants a secret',
 };
 
 export function askBody(p, kind) {
@@ -193,6 +194,7 @@ export function askBody(p, kind) {
     if (kind === 'sudo') {
         return clip(`sudo ${p.command || ''}${p.runsShell ? ' — runs a shell' : ''}`, 160);
     }
+    if (kind === 'secret') return clip(`${p.name || ''}${p.why ? ` — ${p.why}` : ''}`, 160);
     return clip(toolSummary({ name: p.tool, input: p.input }) || p.description || '', 160);
 }
 
@@ -202,6 +204,7 @@ const ASK_ACTIONS = {
     question: [],
     // A password does not fit on a toast; a click opens the card.
     sudo: [],
+    secret: [],
 };
 
 /**

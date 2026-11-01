@@ -1429,3 +1429,23 @@
     font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
     color: var(--text-3);
 }
+
+/* ── Secrets ─────────────────────────────────────────────────────────────── */
+/* web/settings/secrets.js. A row per name, its buttons on the right; a revealed
+   value under the name, wrapping rather than widening the row, because a key is
+   often one long unbroken token. */
+.secret-actions { flex: none; display: flex; align-items: center; gap: var(--sp-3); }
+.secret-value {
+    display: block;
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--r-sm, 4px);
+    background: var(--s2);
+    font: 400 var(--fs-sm) var(--mono);
+    color: var(--text);
+    word-break: break-all;
+    user-select: all;
+}
+.secret-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); }
+.secret-form .settings-text { width: 260px; }
+.secret-form .secret-name { width: 180px; }

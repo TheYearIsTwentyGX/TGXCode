@@ -48,6 +48,7 @@ const { KeepAwake } = require('./keepawake');
 const { PhoneInstalls } = require('./phone-installs');
 const { SudoAsks, sessionKey } = require('./sudo');
 const sudoRoutes = require('./routes/sudo');
+const { SecretAsks } = require('./secrets');
 const devbrowser = require('./devbrowser');
 const prStore = require('./pr-store');
 const { TerminalPool } = require('./terminal');
@@ -172,6 +173,8 @@ const phoneInstalls = new PhoneInstalls({ onChange: (r) => broadcast('phone_inst
 // The sudo asks waiting on a person — bridge/sudo.js. Wired to the event stream
 // below, beside the permission asks it mirrors.
 const sudoAsks = new SudoAsks({ allowRemote: () => sudoRoutes.settings().allowRemote });
+// The secrets agents have asked for and you have not answered — bridge/secrets.js.
+const secretAsks = new SecretAsks();
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -446,6 +449,15 @@ function remoteRefusal(pathname, method) {
     }
     if (pathname.startsWith('/api/devbrowser')) {
         return 'DevBrowser is only reachable from the machine it runs on';
+    }
+    // Secrets: a prefix with two exceptions, so a route added under it later is
+    // refused until somebody decides otherwise. The list is names and dates and
+    // denying an ask grants nothing; everything else here carries a value or
+    // changes one. bridge/routes/secrets.js checks again. See docs/remote.md.
+    if (pathname === '/api/secrets' || pathname.startsWith('/api/secrets/')) {
+        const open = (pathname === '/api/secrets' && method === 'GET')
+            || (/^\/api\/secrets\/asks\/[^/]+\/deny$/.test(pathname) && method === 'POST');
+        if (!open) return 'secrets can only be set or read at the machine they live on';
     }
     if (/^\/api\/sessions\/[^/]+\/reveal$/.test(pathname) && method === 'POST') {
         return 'opening a folder only makes sense on the machine itself';
@@ -731,6 +743,7 @@ const ROUTES = [
     require('./routes/phone-installs'),
     require('./routes/preview'),
     sudoRoutes,
+    require('./routes/secrets'),
 ];
 
 // Builds the full-text index in the background, a few milliseconds at a time.
@@ -745,7 +758,7 @@ const ROUTE_DEPS = {
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent, keepAwake, evaluateKeepAwake,
-    phoneInstalls, briefFor, sudoAsks,
+    phoneInstalls, briefFor, sudoAsks, secretAsks,
 };
 for (const routes of ROUTES) if (routes.init) routes.init(ROUTE_DEPS);
 
@@ -922,6 +935,9 @@ pool.previewControl = () => {
 pool.sudoAccess = (sessionId) => (sudoRoutes.settings().enabled && auth.current()
     ? { key: sessionKey(auth.current(), sessionId), port: cfg.PORT } : null);
 pool.sudoAskFor = (sessionId) => sudoAsks.forSession(sessionId);
+// Secrets — bridge/secrets.js. Every session gets the hook and the wrapper's port;
+// what is asked for and not yet answered rides on its status like a sudo ask.
+pool.secretAskFor = (sessionId) => secretAsks.forSession(sessionId);
 
 // The agent brief — what TGXCode is and offers, appended to every session's
 // system prompt at each spawn, new or resumed. See bridge/brief.js. Composed from
@@ -1024,6 +1040,20 @@ const SUDO_OUTCOME = { approved: 'allow', denied: 'deny', cancelled: 'cancelled'
 sudoAsks.on('resolved', (p) => {
     broadcast('sudo-resolved', p);
     const row = notifications.resolve(p.requestId, SUDO_OUTCOME[p.outcome] || p.outcome);
+    if (row) broadcast('notification-resolved', { id: row.id, outcome: row.outcome, outcomeAt: row.outcomeAt });
+    sudoStatus(p.sessionId);
+});
+// A secret ask goes the same places, for the same reasons, and never carries a
+// value: there is none on it — SecretAsks#publicAsk.
+secretAsks.on('ask', (p) => {
+    broadcast('secret-ask', p);
+    filed(notifications.ask(p));
+    sudoStatus(p.sessionId);
+});
+const SECRET_OUTCOME = { saved: 'allow', denied: 'deny', cancelled: 'cancelled' };
+secretAsks.on('resolved', (p) => {
+    broadcast('secret-resolved', p);
+    const row = notifications.resolve(p.requestId, SECRET_OUTCOME[p.outcome] || p.outcome);
     if (row) broadcast('notification-resolved', { id: row.id, outcome: row.outcome, outcomeAt: row.outcomeAt });
     sudoStatus(p.sessionId);
 });
@@ -1277,6 +1307,7 @@ function shutdown(code = 0) {
     // this just does not make it wait for that.
     try { keepAwake.shutdown(); } catch { /* nothing to clean */ }
     try { sudoAsks.close(); } catch { /* nothing to clean */ }
+    try { secretAsks.close(); } catch { /* nothing to clean */ }
     try { standing.shutdown(); } catch { /* nothing to clean */ }
     // Drafts are written on a 400ms debounce and this process exits 200ms from
     // here, so a draft saved in the last moment before a restart would simply be

@@ -632,6 +632,18 @@ function runner() {
         assert.ok(!argv2.includes('mcp__tgxcode__spawn_worker'));
         await plain.stop({ hard: true });
         ok('a role reaches the argv: --role on the MCP server, the brief, and the tools');
+
+        // Every session, role or none: the secrets hook on Bash, the deny rules
+        // keeping Read and Edit out of the store, and the two tools unasked.
+        const settings = JSON.parse(argv2[argv2.indexOf('--settings') + 1]);
+        const hook = settings.hooks.PreToolUse[0];
+        assert.strictEqual(hook.matcher, 'Bash');
+        assert.ok(hook.hooks[0].command.includes('/bridge/secret-hook'), hook.hooks[0].command);
+        assert.ok(settings.permissions.deny.some(r => /^Read\(\/\/.*secrets\/\*\*\)$/.test(r)),
+            settings.permissions.deny.join(' '));
+        assert.ok(argv2.includes('mcp__tgxcode__request_secret'));
+        assert.ok(argv2.includes('mcp__tgxcode__list_secrets'));
+        ok('every session is started with the secrets hook, its deny rules and its tools');
     }
 
     // --- the agent brief: every spawn, composed with a role's ---------------

@@ -262,6 +262,9 @@ export const state = {
     // A `sudo -A` this session is waiting on a password for, in the bridge's
     // public form (never the password). web/transcript/sudo.js.
     sudoAsk: null,
+    // A secret this session's agent asked for with request_secret — names only.
+    // web/transcript/secret.js.
+    secretAsk: null,
     // The mode the bridge last reported, per session, so that a mode which moves
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),

@@ -103,6 +103,7 @@ const { toolDisplayName } = require('./tool-name');
 const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
 const hostClient = require('./host-client');
 const sudo = require('./sudo');
+const secrets = require('./secrets');
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
@@ -130,6 +131,11 @@ let queueSeq = 0;
  * `sudo` is `{key, port}` when Settings › Sudo is on, and then the session gets
  * SUDO_ASKPASS and what the helper needs to reach this bridge; null strips them.
  * Read at spawn like the browser — see bridge/sudo.js.
+ *
+ * `TGXCODE_SECRETS_PORT` is where bridge/secret-exec.js fetches a command's
+ * secrets from. Always set, because the hook that wraps a command is always
+ * there (bridge/secrets.js), and deliberately not `TGXCODE_PORT`: nothing reads
+ * this one as the port to bind.
  */
 function sessionEnv({ browser = 'visible', sudo: sudoAccess = null } = {}) {
     const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'tgxcode' };
@@ -146,6 +152,7 @@ function sessionEnv({ browser = 'visible', sudo: sudoAccess = null } = {}) {
     if (cfg.TODO_TOOLS) env.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1';
     if (browser === 'headless') env.PLAYWRIGHT_MCP_HEADLESS = 'true';
     sudo.applyEnv(env, sudoAccess);
+    env.TGXCODE_SECRETS_PORT = String(cfg.PORT);
     return env;
 }
 
@@ -184,6 +191,10 @@ const AGENT_TOOLS = [
     // A read. install_on_phone is not here: it makes bytes downloadable off this
     // machine, which is a call worth a card.
     'mcp__tgxcode__phone_install_status',
+    // Asking changes nothing until you answer the card it raises, and the answer
+    // is only ever "it is set" — see bridge/secrets.js. Listing is names only.
+    'mcp__tgxcode__request_secret',
+    'mcp__tgxcode__list_secrets',
 ];
 
 // The extra tools a session gets for its part in an orchestration — see
@@ -446,6 +457,8 @@ class Runner extends EventEmitter {
         // supplied by the pool — see bridge/sudo.js.
         this.sudoAccess = opts.sudoAccess || (() => null);
         this.sudoAskFor = opts.sudoAskFor || (() => null);
+        // The secret this session's agent asked for and you have not answered.
+        this.secretAskFor = opts.secretAskFor || (() => null);
         this.lastActivityAt = null;    // the last stream line, tool or answered ask
         this.stalled = false;
         this._stallTimer = null;
@@ -620,6 +633,10 @@ class Runner extends EventEmitter {
         try { preview = this.previewControl(this.cwd) === true; } catch { /* off */ }
         args.push('--mcp-config', mcpConfig(this.sessionId, this.role, { preview }));
         for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
+        // The secrets hook, and the rules keeping Read and Edit out of the store —
+        // bridge/secrets.js. Additive, like --mcp-config: the user's own settings
+        // and hooks still apply.
+        args.push('--settings', JSON.stringify(secrets.sessionSettings()));
         if (preview) for (const tool of PREVIEW_TOOLS) args.push('--allowedTools', tool);
         for (const tool of (this.role && ROLE_TOOLS[this.role]) || []) args.push('--allowedTools', tool);
         // What TGXCode is and offers (bridge/brief.js), then what an orchestrator
@@ -1452,7 +1469,13 @@ class Runner extends EventEmitter {
         } else {
             const always = decision === 'allow-always';
             if (always) this._sessionAllow.add(ask.tool);
-            const { updatedInput } = extra;
+            let { updatedInput } = extra;
+            // An edited command was edited unwrapped, as the card showed it; it
+            // still needs its secrets, so it goes back into the same wrapper.
+            if (ask.secrets && updatedInput && typeof updatedInput.command === 'string') {
+                updatedInput = { ...updatedInput, command: secrets.wrapCommand(updatedInput.command,
+                    ask.secrets.names, { node: ask.secrets.node, exec: ask.secrets.exec }) };
+            }
             this._respondPermission(ask, {
                 behavior: 'allow',
                 updatedInput: updatedInput && Object.keys(updatedInput).length ? updatedInput : null,
@@ -2340,6 +2363,9 @@ class Runner extends EventEmitter {
             // waiting on sudo has already been allowed to run — but can be, when
             // a subagent asks meanwhile, so neither hides the other.
             sudoAsk: this.sudoAskFor(this.sessionId),
+            // A secret the agent asked for with request_secret, in
+            // bridge/secrets.js's public form (kind 'secret'), or null. Names only.
+            secretAsk: this.secretAskFor(this.sessionId),
             canPrompt: this.caps.permissionPrompt,
             // Lets the UI show how long a turn has been going, which matters
             // when the API is being retried for minutes at a time.
@@ -2361,6 +2387,9 @@ function askFrom(msg) {
         displayName: toolDisplayName(req.tool_name) !== req.tool_name
             ? toolDisplayName(req.tool_name) : req.display_name || req.tool_name,
         input: req.input || {},
+        // A Bash command the secrets hook wrapped: what it runs and with which
+        // names. The card shows that, not the wrapper — see publicAsk.
+        secrets: req.tool_name === 'Bash' && req.input ? secrets.unwrapCommand(req.input.command) : null,
         toolUseId: req.tool_use_id || null,
         description: req.description || null,
         reason: req.decision_reason || null,
@@ -2393,7 +2422,11 @@ function publicAsk(ask) {
         kind: ask.kind || 'tool',
         tool: ask.tool,
         displayName: ask.displayName,
-        input: ask.input,
+        // Unwrapped: what you approve is the command that runs, with `secretNames`
+        // in its environment. Exact — unwrapCommand refuses anything that is not
+        // the wrapper and one quoted command, so nothing else can hide behind it.
+        input: ask.secrets ? { ...ask.input, command: ask.secrets.command } : ask.input,
+        ...(ask.secrets ? { secretNames: ask.secrets.names } : {}),
         toolUseId: ask.toolUseId,
         description: ask.description,
         reason: ask.reason,
@@ -2543,6 +2576,7 @@ class RunnerPool extends EventEmitter {
         // what a session had before there was one.
         this.sudoAccess = () => null;
         this.sudoAskFor = () => null;
+        this.secretAskFor = () => null;
         // Orchestration, replaced by the server with bridge/orchestration.js.
         // Without one no session has a role and nobody answers for a window.
         this.roleOf = () => null;
@@ -2668,6 +2702,7 @@ class RunnerPool extends EventEmitter {
             agentBrowser: (dir) => this.agentBrowser(dir),
             sudoAccess: (id) => this.sudoAccess(id),
             sudoAskFor: (id) => this.sudoAskFor(id),
+            secretAskFor: (id) => this.secretAskFor(id),
             previewControl: (dir) => this.previewControl(dir),
             agentBrief: (dir, role) => this.agentBrief(dir, role) });
         // Read through `r.sessionId` rather than closing over the id it was

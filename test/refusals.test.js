@@ -714,6 +714,49 @@ const HOME = os.homedir();
             headers: LOCAL, body: { path: 'x.png' },
         })).status, 404);
 
+    console.log('\n--- secrets ---');
+    // Everything that carries a value, or changes one, is the desk's alone. The
+    // list (names and dates) and denying an ask stay open. Nothing here writes:
+    // a live bridge shares the user's secrets store.
+    check('a phone may not fetch values', (await call('POST', '/api/secrets/resolve', {
+        headers: PHONE, body: { cwd: HOME, names: ['TGX_TEST_NOPE'] },
+    })).status, 403);
+    check('a phone may not reveal one', (await call('POST', '/api/secrets/TGX_TEST_NOPE/reveal', {
+        headers: PHONE, body: { cwd: HOME },
+    })).status, 403);
+    check('a phone may not set one', (await call('PUT', '/api/secrets/TGX_TEST_NOPE', {
+        headers: PHONE, body: { cwd: HOME, value: 'x' },
+    })).status, 403);
+    check('a phone may not delete one', (await call('DELETE',
+        `/api/secrets/TGX_TEST_NOPE?cwd=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 403);
+    check('a phone may not answer an ask', (await call('POST', '/api/secrets/asks/x/answer', {
+        headers: PHONE, body: { value: 'x' },
+    })).status, 403);
+    check('a phone may not raise an ask', (await call('POST', '/api/secrets/ask', {
+        headers: PHONE, body: { cwd: HOME, name: 'TGX_TEST_NOPE', sessionId: 'x' },
+    })).status, 403);
+    check('a phone may deny an ask (409 = no such ask, not refused)',
+        (await call('POST', '/api/secrets/asks/x/deny', { headers: PHONE, body: {} })).status, 409);
+    const phoneList = await call('GET', `/api/secrets?cwd=${encodeURIComponent(HOME)}`, { headers: PHONE });
+    check('a phone may list the names', phoneList.status, 200);
+    check('and the list carries no value',
+        (phoneList.body.secrets || []).every(s => !('value' in s)), true);
+    {
+        const { authorization: _a, ...anon } = LOCAL;
+        check('fetching values needs the token, even from here', (await call('POST', '/api/secrets/resolve', {
+            headers: anon, body: { cwd: HOME, names: ['TGX_TEST_NOPE'] },
+        })).status, 401);
+        check('so does revealing one', (await call('POST', '/api/secrets/TGX_TEST_NOPE/reveal', {
+            headers: anon, body: { cwd: HOME },
+        })).status, 401);
+    }
+    check('from here, an unset name is named as missing', (await call('POST', '/api/secrets/resolve', {
+        headers: LOCAL, body: { cwd: HOME, names: ['TGX_TEST_NOPE'] },
+    })).body.missing[0], 'TGX_TEST_NOPE');
+    check('and a reserved name is refused', (await call('POST', '/api/secrets/resolve', {
+        headers: LOCAL, body: { cwd: HOME, names: ['PATH'] },
+    })).status, 400);
+
     console.log('\n--- what a phone may still do ---');
     check('read sessions', (await call('GET', '/api/sessions?limit=1', { headers: PHONE })).status, 200);
     check('read the board', (await call('GET', '/api/overview', { headers: PHONE })).status, 200);
