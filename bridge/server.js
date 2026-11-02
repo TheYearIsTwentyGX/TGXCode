@@ -48,6 +48,7 @@ const { KeepAwake } = require('./keepawake');
 const { PhoneInstalls } = require('./phone-installs');
 const { SudoAsks, sessionKey } = require('./sudo');
 const sudoRoutes = require('./routes/sudo');
+const secretRoutes = require('./routes/secrets');
 const { SecretAsks } = require('./secrets');
 const devbrowser = require('./devbrowser');
 const prStore = require('./pr-store');
@@ -174,7 +175,7 @@ const phoneInstalls = new PhoneInstalls({ onChange: (r) => broadcast('phone_inst
 // below, beside the permission asks it mirrors.
 const sudoAsks = new SudoAsks({ allowRemote: () => sudoRoutes.settings().allowRemote });
 // The secrets agents have asked for and you have not answered — bridge/secrets.js.
-const secretAsks = new SecretAsks();
+const secretAsks = new SecretAsks({ allowRemote: () => secretRoutes.allowRemote() });
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -450,13 +451,15 @@ function remoteRefusal(pathname, method) {
     if (pathname.startsWith('/api/devbrowser')) {
         return 'DevBrowser is only reachable from the machine it runs on';
     }
-    // Secrets: a prefix with two exceptions, so a route added under it later is
+    // Secrets: a prefix with three exceptions, so a route added under it later is
     // refused until somebody decides otherwise. The list is names and dates and
-    // denying an ask grants nothing; everything else here carries a value or
-    // changes one. bridge/routes/secrets.js checks again. See docs/remote.md.
+    // denying an ask grants nothing; answering one is let through to its route,
+    // which has its own conditions (`secrets.allowRemote` first). Everything else
+    // here carries a value or changes one. bridge/routes/secrets.js checks again.
+    // See docs/remote.md.
     if (pathname === '/api/secrets' || pathname.startsWith('/api/secrets/')) {
         const open = (pathname === '/api/secrets' && method === 'GET')
-            || (/^\/api\/secrets\/asks\/[^/]+\/deny$/.test(pathname) && method === 'POST');
+            || (/^\/api\/secrets\/asks\/[^/]+\/(deny|answer)$/.test(pathname) && method === 'POST');
         if (!open) return 'secrets can only be set or read at the machine they live on';
     }
     if (/^\/api\/sessions\/[^/]+\/reveal$/.test(pathname) && method === 'POST') {
@@ -743,7 +746,7 @@ const ROUTES = [
     require('./routes/phone-installs'),
     require('./routes/preview'),
     sudoRoutes,
-    require('./routes/secrets'),
+    secretRoutes,
 ];
 
 // Builds the full-text index in the background, a few milliseconds at a time.

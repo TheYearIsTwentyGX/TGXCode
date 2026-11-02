@@ -88,6 +88,11 @@
 // switch on a password prompt for every agent in the repository, or let a phone
 // type your password, is a repository reaching for root.
 //
+// `secrets` is whether a phone may answer an agent's ask for a secret — see
+// bridge/routes/secrets.js. Off by default, because a tunnel's operator can read
+// what crosses it and that is yours to weigh. **User-only**: a repository that
+// could switch it on would be choosing where your credentials travel.
+//
 // `brief` is the agent brief — the pre-prompt every session gets and the sections
 // behind `tgxcode_guide` (bridge/brief.js). A master switch, then per text an
 // on/off and an edited copy; a text that is absent or null is the shipped one,
@@ -546,6 +551,11 @@ const DEFAULTS = {
         // card read-only and may only deny.
         allowRemote: false,
     },
+    secrets: {
+        // Let a remote client (the phone) answer an agent's ask with a value. Off,
+        // it sees the card read-only and may only deny.
+        allowRemote: false,
+    },
 };
 
 for (const id of brief.SECTION_IDS) {
@@ -593,9 +603,11 @@ for (const id of brief.SECTION_IDS) {
 // `power` is whether this machine is allowed to sleep, which is the machine's.
 //
 // `sudo` is root on this machine, which is the machine's owner's.
+//
+// `secrets` is where your credentials may travel, which is yours as well.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
     'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator',
-    'digest', 'power', 'sudo']);
+    'digest', 'power', 'sudo', 'secrets']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -772,6 +784,9 @@ const SHAPE = {
     },
     sudo: {
         enabled: (v) => typeof v === 'boolean',
+        allowRemote: (v) => typeof v === 'boolean',
+    },
+    secrets: {
         allowRemote: (v) => typeof v === 'boolean',
     },
     brief: briefShape(),
@@ -1334,6 +1349,7 @@ class Prefs {
             digest: { ...DEFAULTS.digest },
             power: { ...DEFAULTS.power },
             sudo: { ...DEFAULTS.sudo },
+            secrets: { ...DEFAULTS.secrets },
             brief: { ...DEFAULTS.brief },
             reviews: { types: DEFAULTS.reviews.types.map(t => ({ ...t })) },
             sources: [],

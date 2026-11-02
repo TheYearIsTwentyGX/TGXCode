@@ -10,7 +10,10 @@
 // a value in `state`, in storage, or in a toast.
 //
 // From a phone the list is still drawn — the names are not secret — but every
-// control is the desk's, as the routes are (see docs/remote.md).
+// control is the desk's, as the routes are (see docs/remote.md). That includes
+// the switch here that lets a phone answer an ask: it says what it costs in
+// words on the page rather than in a tooltip, because it decides where a
+// credential travels and the default is off until you have read that.
 //
 // Imports from app.js's world only through modules that do not read an app.js
 // binding at load, for the reason web/settings/general.js gives.
@@ -21,10 +24,16 @@ import { toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { state } from '../state.js';
 import { DeleteButton } from '../snippets/settings.js';
-import { settingsProject } from './index.js';
+import { settingRow } from './general.js';
+import { renderSettings, settingsProject } from './index.js';
 
 const REVEAL_MS = 30_000;
 const NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+// A row of the settings file drawn inside this card, because the section is
+// `secrets` and the card already is. Mirrors USER_ONLY in bridge/prefs.js.
+const PHONE_GROUP = { section: 'secrets', userOnly: true };
+const PHONE_ROW = { key: 'allowRemote', type: 'bool', label: 'Let the phone answer them too' };
 
 // The mounted group's reload, so a secret saved from a card elsewhere shows up
 // here without a refresh.
@@ -141,7 +150,26 @@ function SecretsGroup() {
             '. This stops a secret ending up in a transcript by accident; it does not stop an agent '
             + 'that sets out to read it.'}</p>
         ${body}
+        ${phoneSwitch(desk)}
     </section>`;
+}
+
+/** Whether a phone may answer an ask, and what that costs, in full and always on the page. */
+function phoneSwitch(desk) {
+    const s = state.settings;
+    if (!s || !s.data) return null;
+    const scoped = s.scope !== 'user';
+    return html`<div key="phone">
+        ${settingRow(PHONE_GROUP, PHONE_ROW, scoped || !desk)}
+        <p class="settings-row-note"><b>Cloudflare can read a value typed on your phone.</b>${' If your phone reaches this '
+            + 'computer through a Cloudflare Tunnel, as tgxcode.com does, the value is encrypted on the network, but '
+            + 'Cloudflare decrypts it on the way through. Leave this off to keep secrets to this computer: a phone '
+            + 'then sees the ask and can deny it, and the value can only be typed here. Either way a phone can never '
+            + 'read a value, or replace one that is already set.'}</p>
+        ${scoped ? html`<p class="settings-locked">${'Set for you alone, in '}<code>~/.tgxcode/settings.json</code>${
+            ' — a checked-in file cannot change this. '}<button class="linkish" type="button"
+            onClick=${() => { s.scope = 'user'; renderSettings(); }}>Switch to User</button></p>` : null}
+    </div>`;
 }
 
 /** A masked field with a submit and an optional cancel. The value lives only in the DOM. */

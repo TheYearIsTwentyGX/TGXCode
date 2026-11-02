@@ -492,7 +492,8 @@ watch, and to answer what a session is blocked on. It should not be able to reac
 past the app into the machine.
 
 **Allowed:** reading sessions and transcripts, the live board, answering
-permissions, plans and questions, sending messages, stopping a turn, starting an
+permissions, plans and questions (and, once you switch it on, an agent's ask for a
+secret: see *A secret typed on a phone*), sending messages, stopping a turn, starting an
 ordinary session, refreshing the quota reading, and answering the questions an
 orchestrator's brief puts to the user — the answer travels as an ordinary `/send`,
 and `POST /api/sessions/:id/orchestrator/decisions/:decisionId/answered` only
@@ -535,7 +536,7 @@ time so it cannot be turned into a fan of processes.
 | `/api/commands-config`, **every method** | The editor for a project's `.tgxcode/` command files, and the second family where the read is refused too. The contrast here is not with another feature but with the route one line away: `GET /api/commands` *is* readable remotely, because what a project declares is in its repository already and that payload has never carried `env`. This one serves the files themselves — including `commands.local.json`, which is gitignored precisely because it is where somebody puts a variable with a token in it — and a write puts an arbitrary shell string into a checked-in file. Prefix, no method test, for the reason above. The two rules disagreeing is the design, and `test/refusals.test.js` pins them adjacent so a tidy-up cannot quietly make them agree. |
 | `POST /api/phone-installs`, `POST /api/phone-installs/:id/cancel` | Filing an APK for the phone names a file on this machine and makes its bytes downloadable from anywhere the token reaches — the agent that built it is on this machine, and so is that decision. Cancelling is the desk taking one back; a phone that wants to give one up posts `cancelled` to the status route instead. Everything the phone needs stays open, because the phone is who the feature is for: the list, the APK download, and `POST /api/phone-installs/:id/status`. |
 | `POST /api/sudo/:id/answer`, unless Settings › Sudo › *Let the phone answer them too* is on | Sends your sudo password to a command on this machine — root, the largest thing a token could reach through this app. Off by default, so a leaked token cannot turn a waiting `sudo -A` into root by guessing nothing more than a password; turning it on is a choice made at the desk, in a section a project file cannot set. `GET /api/sudo` and `POST /api/sudo/:id/deny` stay open: seeing that something wants root, and refusing it, grant nothing. `POST /api/sudo/ask` — the askpass helper's own route — is refused remotely whatever the setting. See docs/manual.md §*Approving sudo*. |
-| `/api/secrets*`, **every method**, except `GET /api/secrets` and `POST /api/secrets/asks/:id/deny` | Secret values: setting, changing, deleting, revealing one, answering an agent's ask with one, and the wrapper's fetch that hands them to a command. A value typed on a phone travels further than one typed here, and a leaked pairing token should not be able to read a project's API keys, so none of it is reachable remotely and there is no switch to make it so. A prefix with exceptions rather than a list, so a route added under it later is refused until somebody decides otherwise. The list (names and dates, never values) and denying an ask stay open: neither grants anything. See docs/manual.md §*Secrets*. |
+| `/api/secrets*`, **every method**, except `GET /api/secrets`, `POST /api/secrets/asks/:id/deny`, and `POST /api/secrets/asks/:id/answer` while Settings › Secrets › *Let the phone answer them too* is on | Secret values: setting, changing, deleting, revealing one, and the wrapper's fetch that hands them to a command. A leaked pairing token should not be able to read a project's API keys or replace them, so none of that is reachable remotely and there is no switch to make it so. A prefix with exceptions rather than a list, so a route added under it later is refused until somebody decides otherwise. The list (names and dates, never values) and denying an ask stay open: neither grants anything. Answering an ask is the one exception that carries a value, and see the section below for why it is off by default. See docs/manual.md §*Secrets*. |
 | `/api/claude-docs`, **every method** | Claude Code's `CLAUDE.md` files, refused on the same terms as the row above and for a stronger version of the same reason. A project's is repository source; a user's describes the machine — what is installed, which ports are in use, which instance not to touch. And writing one is not changing a setting: it changes what every session started on this machine is told before its first message, which is the largest thing on this list that is not a shell. Prefix, no method test, same as above. |
 
 Independent of remoteness, and applying to every caller: a session can only start
@@ -554,6 +555,45 @@ inside `$HOME` first. What bounds it instead is this table and a refusal to laun
 the file types Windows would execute — the same refusal `open-file` defers to, for
 a different reason: that one is already inside a repository, and the point there is
 that a checkout is exactly where a `.ps1` an agent has just written would be.
+
+## A secret typed on a phone
+
+A paired phone may answer an agent's `request_secret` ask, once you turn it on at the
+desk. **It is off by default, because of who can read the value on the way.**
+
+The path through the tunnel is phone → TLS → Cloudflare's edge → tunnel → `cloudflared`
+→ plain HTTP over loopback → bridge. Nothing crosses a network in clear text, but it is
+**not end-to-end**: Cloudflare terminates TLS, so the value is readable at its edge. The
+bearer token, every transcript and a remotely answered sudo password travel the same
+way, so this is not a new kind of exposure, but a credential for some other service is a
+new thing to expose, and that is the owner's to weigh. `tailscale serve` terminates TLS
+on this machine, so through it only this machine can read the value.
+
+There is no app-level encryption on top. Cloudflare carries the bearer token as well,
+so encrypting to a key the bridge offers over the same connection would protect nothing;
+doing it properly needs a key pinned at pairing, which is a project of its own.
+
+What a remote answer may do, with the switch on:
+
+- **Fill in a pending ask, and only that.** The name and project come from the ask, not
+  the body, and the answer returns `{ok: true}`. A caller cannot name its own target.
+- **Never replace a value.** A name set while the ask waited, by the desk or by another
+  ask, stays as it is. Without this an open ask would be a way to overwrite what
+  `PUT /api/secrets/:NAME` refuses.
+- **Only over a connection that arrived encrypted** (`who.secure`). Measured through
+  the named tunnel: `Secure` on the `/pair/forget` cookie, which reads the same flag,
+  and absent over loopback. This guards against an accident rather than an attacker, and
+  by the time it refuses a plain-HTTP origin the value has already crossed, so the
+  client checks its own origin before sending.
+
+**What a leaked token gains from this** is small. It could already message a session
+and approve its tools, which is a stronger position. With the switch on it can also
+cause an ask and answer it, setting a new name to a value of its choosing. It cannot
+read or overwrite anything through this route. **That token is the only credential a
+remote caller needs today**: it never expires, it identifies no particular device, and
+Cloudflare Access is not switched on in front of `tgxcode.com` (*Put Cloudflare Access
+in front of it*, above, is the runbook). Turning Access on is worth doing before this
+switch, and does not depend on it.
 
 ## Authentication, in one paragraph
 

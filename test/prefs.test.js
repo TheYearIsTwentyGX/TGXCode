@@ -464,7 +464,7 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
     ['agentBrowser', 'devbrowser', 'digest', 'keyboard', 'orchestrator', 'power', 'preview', 'projects',
-        'quota', 'standing', 'startup', 'sudo', 'toolbar', 'wispr']);
+        'quota', 'secrets', 'standing', 'startup', 'sudo', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -648,6 +648,16 @@ assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { sudo: 
 prefs.save({ scope: 'user', patch: { sudo: { enabled: null } } });
 assert.deepStrictEqual(prefs.forCwd().sudo, DEFAULTS.sudo);
 ok('sudo is off by default, saves booleans only, is user-only, and clears');
+
+assert.deepStrictEqual(DEFAULTS.secrets, { allowRemote: false });
+assert.deepStrictEqual(prefs.forCwd().secrets, { allowRemote: false });
+prefs.save({ scope: 'user', patch: { secrets: { allowRemote: true } } });
+assert.deepStrictEqual(prefs.forCwd().secrets, { allowRemote: true });
+assert.throws(() => prefs.save({ scope: 'user', patch: { secrets: { allowRemote: 'yes' } } }));
+assert.throws(() => prefs.save({ scope: 'project', cwd: project, patch: { secrets: { allowRemote: true } } }));
+prefs.save({ scope: 'user', patch: { secrets: { allowRemote: null } } });
+assert.deepStrictEqual(prefs.forCwd().secrets, DEFAULTS.secrets);
+ok('a phone answering a secret ask is off by default, booleans only, user-only, and clears');
 
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.

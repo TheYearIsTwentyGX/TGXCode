@@ -716,8 +716,10 @@ const HOME = os.homedir();
 
     console.log('\n--- secrets ---');
     // Everything that carries a value, or changes one, is the desk's alone. The
-    // list (names and dates) and denying an ask stay open. Nothing here writes:
-    // a live bridge shares the user's secrets store.
+    // list (names and dates) and denying an ask stay open, and answering one is
+    // let through to its route, which has conditions of its own. Nothing here
+    // writes: a live bridge shares the user's secrets store. The route itself is
+    // driven with a private store in test/secrets.test.js.
     check('a phone may not fetch values', (await call('POST', '/api/secrets/resolve', {
         headers: PHONE, body: { cwd: HOME, names: ['TGX_TEST_NOPE'] },
     })).status, 403);
@@ -729,9 +731,24 @@ const HOME = os.homedir();
     })).status, 403);
     check('a phone may not delete one', (await call('DELETE',
         `/api/secrets/TGX_TEST_NOPE?cwd=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 403);
-    check('a phone may not answer an ask', (await call('POST', '/api/secrets/asks/x/answer', {
-        headers: PHONE, body: { value: 'x' },
-    })).status, 403);
+    // Reads the switch rather than assuming it: this bridge has the user's settings.
+    const phoneMayAnswer = (await call('GET', `/api/secrets?cwd=${encodeURIComponent(HOME)}`,
+        { headers: PHONE })).body.allowRemote;
+    check('allowRemote is reported as a boolean', typeof phoneMayAnswer, 'boolean');
+    const phoneAnswer = await call('POST', '/api/secrets/asks/x/answer', { headers: PHONE, body: { value: 'x' } });
+    check('a phone answering is off until switched on, and no ask is taken either way',
+        phoneAnswer.status, phoneMayAnswer ? 409 : 403);
+    check('and it reaches the route rather than the blanket refusal',
+        /set or read at the machine/.test(phoneAnswer.body.error), false);
+    const { 'x-forwarded-proto': _p, 'x-forwarded-host': _h, ...plainPhone } = PHONE;
+    // An address, because a name the bridge does not know is refused earlier and
+    // for a different reason, which would pass this without reaching the guard.
+    const plainAnswer = await call('POST', '/api/secrets/asks/x/answer', {
+        headers: { ...plainPhone, 'x-forwarded-host': '192.0.2.10' }, body: { value: 'x' },
+    });
+    check('a phone over plain HTTP may not answer', plainAnswer.status, 403);
+    check('and is told the reason that applies',
+        (phoneMayAnswer ? /not encrypted/ : /Settings › Secrets/).test(plainAnswer.body.error), true);
     check('a phone may not raise an ask', (await call('POST', '/api/secrets/ask', {
         headers: PHONE, body: { cwd: HOME, name: 'TGX_TEST_NOPE', sessionId: 'x' },
     })).status, 403);
@@ -743,6 +760,9 @@ const HOME = os.homedir();
         (phoneList.body.secrets || []).every(s => !('value' in s)), true);
     {
         const { authorization: _a, ...anon } = LOCAL;
+        check('answering needs the token', (await call('POST', '/api/secrets/asks/x/answer', {
+            headers: { ...anon, 'x-forwarded-for': PHONE['x-forwarded-for'] }, body: { value: 'x' },
+        })).status, 401);
         check('fetching values needs the token, even from here', (await call('POST', '/api/secrets/resolve', {
             headers: anon, body: { cwd: HOME, names: ['TGX_TEST_NOPE'] },
         })).status, 401);

@@ -1592,6 +1592,17 @@ or a `Basic` credential built from it, comes back redacted too.
 you for 30 seconds), **Update**, **Delete**, and a row to add one yourself before an
 agent asks.
 
+**Answering from your phone is off until you turn it on**, with **Let the phone answer
+them too** in Settings › Secrets. Off, the phone shows the ask and can deny it, and the
+value can only be typed at this computer. Decide this knowing where the value goes: if
+your phone reaches this computer through a Cloudflare Tunnel, as `tgxcode.com` does,
+the value is encrypted on the network, but **Cloudflare decrypts it on the way through
+and could read it**. With Tailscale, only this computer can. Very sensitive values are
+better typed at the desk either way. On or off, a phone can never read a value, change
+or delete one, or replace one that is already set: it can only fill in the name a
+waiting agent asked for. Answering from the phone also needs a phone that is connected
+when the agent asks, because an ask raised with nothing connected is denied at once.
+
 **Where they are kept.** One file per project in
 `~/.local/share/tgxcode/secrets/`, readable only by you (`0600` in a `0700`
 directory). The project is the main repository, so every worktree of it shares one
