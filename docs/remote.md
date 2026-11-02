@@ -589,7 +589,11 @@ What a remote answer may do, with the switch on:
 **What a leaked token gains from this** is small. It could already message a session
 and approve its tools, which is a stronger position. With the switch on it can also
 cause an ask and answer it, setting a new name to a value of its choosing. It cannot
-read or overwrite anything through this route.
+read or overwrite anything through this route. **That token is the only credential a
+remote caller needs today**: it never expires, it identifies no particular device, and
+Cloudflare Access is not switched on in front of `tgxcode.com` (*Put Cloudflare Access
+in front of it*, above, is the runbook). Turning Access on is worth doing before this
+switch, and does not depend on it.
 
 ## Authentication, in one paragraph
 
