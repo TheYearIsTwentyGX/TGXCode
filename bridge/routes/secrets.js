@@ -5,7 +5,8 @@
 //
 //   GET    /api/secrets?cwd=               names and dates, never values; and the open asks
 //   POST   /api/secrets/ask                the request_secret tool. Held open until answered
-//   POST   /api/secrets/asks/:id/answer    {value} — this machine only
+//   POST   /api/secrets/asks/:id/answer    {value} — this machine, or a phone once
+//                                          `secrets.allowRemote` is on
 //   POST   /api/secrets/asks/:id/deny      from anywhere: refusing grants nothing
 //   PUT    /api/secrets/:NAME              {cwd, value} — this machine only
 //   DELETE /api/secrets/:NAME?cwd=         this machine only
@@ -17,6 +18,15 @@
 // of them logs a body or echoes a value in an error. A value travels in exactly
 // three directions: from your answer into the store, from the store to the
 // wrapper, and from the store to the Settings page when you press Reveal.
+//
+// **The answer is the one exception, and it is narrow.** It writes one value, to
+// the name and project a pending ask already named, and returns nothing a caller
+// did not have. A phone's answer has to clear three things before its body is even
+// read: `secrets.allowRemote`, off until you switch it on at the desk because a
+// tunnel's operator can read what crosses it (docs/remote.md); a connection that
+// arrived encrypted; and an ask still pending. And it never replaces a value: a
+// name set since the ask was raised stays as it is, or an open ask would be a way
+// to overwrite what `PUT` refuses to.
 
 const path = require('path');
 
@@ -25,9 +35,29 @@ const secrets = require('../secrets');
 
 let pool = null;
 let secretAsks = null;
+let prefs = null;
 
 function init(deps) {
-    ({ pool, secretAsks } = deps);
+    ({ pool, secretAsks, prefs } = deps);
+}
+
+/** Whether a remote caller may answer an ask. Off if it cannot be read: this fails towards the desk. */
+function allowRemote() {
+    try { return (prefs.forCwd().secrets || {}).allowRemote === true; } catch { return false; }
+}
+
+/**
+ * Why this remote caller may not send a value, or null. An accident guard rather
+ * than authentication: `secure` trusts a forwarded header, and by the time a client
+ * that ignored the card gets here its value has already crossed. It still means a
+ * plain-HTTP origin is told so, and nothing it sent is kept.
+ */
+function remoteAnswerProblem(who) {
+    if (!allowRemote()) {
+        return 'answering a secret ask from a phone is off — turn it on in Settings › Secrets at your desk';
+    }
+    if (!who.secure) return 'this connection is not encrypted, so a secret cannot be sent over it';
+    return null;
 }
 
 function cwdOf(v) {
@@ -80,6 +110,7 @@ async function handle(req, res, url, pathname, seg, who) {
         const root = secrets.projectRoot(cwd);
         return send(res, 200, {
             project: root,
+            allowRemote: allowRemote(),
             secrets: secrets.list(root),
             asks: secretAsks.list().filter(a => a.project === root),
         });
@@ -115,12 +146,21 @@ async function handle(req, res, url, pathname, seg, who) {
             return send(res, 200, { ok: true });
         }
         if (verb === 'answer') {
-            if (local(res, who)) return;
+            // Before the body is read: a refused value is not one to hold on to.
+            const refused = who.remote ? remoteAnswerProblem(who) : null;
+            if (refused) return send(res, 403, { error: refused, remote: true });
+            const gone = 'that secret ask was already answered or has gone';
+            if (who.remote && !secretAsks.get(id)) return send(res, 409, { error: gone });
             const b = await body(req, res);
             if (!b) return;
             const problem = secrets.valueProblem(b.value);
             if (problem) return send(res, 400, { error: problem });
-            if (!secretAsks.get(id)) return send(res, 409, { error: 'that secret ask was already answered or has gone' });
+            // Asked again after the read, which is where another answer could have landed.
+            const pending = secretAsks.get(id);
+            if (!pending) return send(res, 409, { error: gone });
+            if (who.remote && secrets.has(pending.root, pending.name)) {
+                return send(res, 409, { error: `${pending.name} is already set; change it at your desk`, exists: true });
+            }
             try { secretAsks.save(id, b.value); } catch (err) {
                 return send(res, err.status || 500, { error: err.status ? err.message : 'could not save the secret' });
             }
@@ -168,4 +208,4 @@ async function handle(req, res, url, pathname, seg, who) {
     return NEXT;
 }
 
-module.exports = { init, handle };
+module.exports = { init, handle, allowRemote };

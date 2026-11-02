@@ -39,6 +39,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t
 
 const VALUE = 'sk_test_51HxYzQwErTy';
 const OTHER = 'hunter2-but-longer!';
+const VIA_PHONE = 'fake-typed-on-a-phone-42!';
 
 (async () => {
     // --- names -----------------------------------------------------------
@@ -295,16 +296,22 @@ const OTHER = 'hunter2-but-longer!';
 
     // --- the routes ------------------------------------------------------
     {
-        const asks = new secrets.SecretAsks();
+        const asks = new secrets.SecretAsks({ allowRemote: () => routes.allowRemote() });
         const events = [];
         asks.on('ask', p => events.push(['ask', p]));
         asks.on('resolved', p => events.push(['resolved', p]));
         let viewer = true;
-        routes.init({ pool: { hasViewer: () => viewer }, secretAsks: asks });
+        // Which way `secrets.allowRemote` is set, or a read that fails.
+        let phone = false;
+        const prefs = { forCwd: () => {
+            if (phone === 'broken') throw new Error('unreadable');
+            return { secrets: { allowRemote: phone } };
+        } };
+        routes.init({ pool: { hasViewer: () => viewer }, secretAsks: asks, prefs });
         const server = http.createServer(async (req, res) => {
             const url = new URL(req.url, 'http://x');
             const seg = url.pathname.split('/').filter(Boolean);
-            const who = { remote: req.headers['x-remote'] === '1' };
+            const who = { remote: req.headers['x-remote'] === '1', secure: req.headers['x-secure'] === '1' };
             const r = await routes.handle(req, res, url, url.pathname, seg, who);
             if (typeof r === 'symbol') { res.writeHead(404); res.end('{}'); }
         });
@@ -338,7 +345,7 @@ const OTHER = 'hunter2-but-longer!';
         const listing = await call('GET', `/api/secrets?cwd=${encodeURIComponent(sub)}`);
         assert.strictEqual(listing.body.asks.length, 1);
         assert.strictEqual((await call('POST', `/api/secrets/asks/${pub.id}/answer`, { value: OTHER },
-            { 'x-remote': '1' })).status, 403, 'not from a phone');
+            { 'x-remote': '1', 'x-secure': '1' })).status, 403, 'not from a phone, until it is switched on');
         assert.strictEqual((await call('POST', `/api/secrets/asks/${pub.id}/answer`, { value: '' })).status, 400);
         assert.strictEqual((await call('POST', `/api/secrets/asks/${pub.id}/answer`, { value: OTHER })).status, 200);
         const answered = await pending;
@@ -393,6 +400,114 @@ const OTHER = 'hunter2-but-longer!';
         assert.strictEqual((await call('DELETE', `/api/secrets/PUT_KEY?${q}`)).status, 200);
         assert.strictEqual((await call('DELETE', `/api/secrets/PUT_KEY?${q}`)).status, 404);
         ok('set, reveal, resolve and delete are this machine\'s; the list is names only');
+
+        // --- a phone answering -------------------------------------------
+        {
+            const PHONE = { 'x-remote': '1', 'x-secure': '1' };
+            const raise = async (name, sessionId) => {
+                const reply = call('POST', '/api/secrets/ask', { sessionId, name, why: '', cwd: wt });
+                await new Promise(r => setTimeout(r, 100));
+                return { reply, ask: asks.list().find(a => a.name === name) };
+            };
+            const answer = (id, body, headers = PHONE) => call('POST', `/api/secrets/asks/${id}/answer`, body, headers);
+            const logged = [];
+            const real = { log: console.log, warn: console.warn, error: console.error };
+            for (const k of Object.keys(real)) {
+                console[k] = (...a) => { logged.push(a.join(' ')); if (k === 'log' && String(a[0]).startsWith('  ok')) real.log(...a); };
+            }
+            try {
+                // Off, which is the default, and off when it cannot be read.
+                const first = await raise('FROM_PHONE', 's5');
+                assert.strictEqual(first.ask.remoteAnswer, false, 'the card is told it is read-only');
+                assert.strictEqual((await call('GET', `/api/secrets?${q}`)).body.allowRemote, false);
+                const off = await answer(first.ask.id, { value: VIA_PHONE });
+                assert.strictEqual(off.status, 403);
+                assert.strictEqual(off.body.remote, true);
+                assert.ok(/Settings › Secrets/.test(off.body.error), 'and says where the switch is');
+                phone = 'broken';
+                assert.strictEqual((await answer(first.ask.id, { value: VIA_PHONE })).status, 403, 'a failed read is off');
+                assert.strictEqual(asks.get(first.ask.id) !== null, true, 'a refusal settles nothing');
+                assert.strictEqual(secrets.has(root, 'FROM_PHONE'), false);
+                ok('off by default, off when unreadable, and a refused answer stores nothing');
+
+                // On, over a connection that did not arrive encrypted.
+                phone = true;
+                assert.strictEqual(asks.get(first.ask.id) && asks.publicAsk(asks.get(first.ask.id)).remoteAnswer, true);
+                assert.strictEqual((await call('GET', `/api/secrets?${q}`)).body.allowRemote, true);
+                const clear = await answer(first.ask.id, { value: VIA_PHONE }, { 'x-remote': '1' });
+                assert.strictEqual(clear.status, 403);
+                assert.ok(/not encrypted/.test(clear.body.error));
+                assert.strictEqual(secrets.has(root, 'FROM_PHONE'), false);
+                ok('a remote answer over plain HTTP is refused, whatever the setting');
+
+                // A bad value is refused without settling, then a good one lands —
+                // under the ask's own name and project, whatever the body claims.
+                assert.strictEqual((await answer(first.ask.id, { value: '' })).status, 400);
+                assert.ok(asks.get(first.ask.id));
+                const saved = await answer(first.ask.id, { value: VIA_PHONE, name: 'ELSEWHERE', cwd: TMP });
+                assert.strictEqual(saved.status, 200);
+                assert.deepStrictEqual(saved.body, { ok: true }, 'and it is told nothing else');
+                const told = await first.reply;
+                assert.deepStrictEqual(told.body, { saved: true, name: 'FROM_PHONE' });
+                assert.ok(!told.raw.includes(VIA_PHONE), 'the tool hears "saved", never the value');
+                assert.strictEqual(secrets.get(root, 'FROM_PHONE'), VIA_PHONE);
+                assert.strictEqual(secrets.has(root, 'ELSEWHERE'), false);
+                assert.strictEqual(secrets.has(secrets.projectRoot(TMP), 'FROM_PHONE'), false);
+                ok('with it on, an answer stores under the ask\'s name and project, and the body cannot redirect it');
+
+                // Only a pending ask, and never twice.
+                const again = await answer(first.ask.id, { value: 'fake-second-attempt' });
+                assert.strictEqual(again.status, 409);
+                assert.strictEqual((await answer('nosuchask', { value: 'fake-second-attempt' })).status, 409);
+                assert.strictEqual(secrets.get(root, 'FROM_PHONE'), VIA_PHONE);
+                ok('an ask already answered, or one that never was, takes nothing');
+
+                // Set since the ask was raised: a phone cannot replace it.
+                const raced = await raise('RACED_KEY', 's6');
+                await call('PUT', '/api/secrets/RACED_KEY', { cwd: wt, value: 'fake-from-the-desk' });
+                assert.strictEqual(asks.publicAsk(asks.get(raced.ask.id)).exists, true);
+                const over = await answer(raced.ask.id, { value: VIA_PHONE });
+                assert.strictEqual(over.status, 409);
+                assert.strictEqual(over.body.exists, true);
+                assert.strictEqual(secrets.get(root, 'RACED_KEY'), 'fake-from-the-desk');
+                assert.ok(asks.get(raced.ask.id), 'still waiting, for the desk or a deny');
+                // And two asks for one name: the second answer is a replacement.
+                const twin = await raise('TWIN_KEY', 's7');
+                const twinToo = call('POST', '/api/secrets/ask', { sessionId: 's8', name: 'TWIN_KEY', why: '', cwd: wt });
+                await new Promise(r => setTimeout(r, 100));
+                const second = asks.list().find(a => a.name === 'TWIN_KEY' && a.sessionId === 's8');
+                assert.strictEqual((await answer(twin.ask.id, { value: VIA_PHONE })).status, 200);
+                assert.strictEqual((await answer(second.id, { value: 'fake-other-value' })).status, 409);
+                assert.strictEqual(secrets.get(root, 'TWIN_KEY'), VIA_PHONE);
+                ok('a phone never replaces a value, whether set at the desk or by another ask');
+
+                // Everything else stays the desk's, on, with an ask open.
+                const name = 'FROM_PHONE';
+                assert.strictEqual((await call('PUT', `/api/secrets/${name}`, { cwd: wt, value: 'fake-x' }, PHONE)).status, 403);
+                assert.strictEqual((await call('PUT', '/api/secrets/RACED_KEY', { cwd: wt, value: 'fake-x' }, PHONE)).status, 403);
+                assert.strictEqual((await call('POST', `/api/secrets/${name}/reveal`, { cwd: wt }, PHONE)).status, 403);
+                assert.strictEqual((await call('DELETE', `/api/secrets/${name}?${q}`, null, PHONE)).status, 403);
+                assert.strictEqual((await call('POST', '/api/secrets/resolve', { cwd: wt, names: [name] }, PHONE)).status, 403);
+                assert.strictEqual((await call('POST', '/api/secrets/ask', { sessionId: 's9', name: 'NOPE', cwd: wt }, PHONE)).status, 403);
+                assert.strictEqual(secrets.get(root, 'RACED_KEY'), 'fake-from-the-desk');
+                ok('with it on and an ask open, a phone still cannot set, reveal, delete, fetch or raise');
+
+                // The desk is unchanged by any of it: its answer may still replace.
+                assert.strictEqual((await answer(raced.ask.id, { value: 'fake-desk-replaced' }, {})).status, 200);
+                assert.strictEqual(secrets.get(root, 'RACED_KEY'), 'fake-desk-replaced');
+                await raced.reply;
+                await call('POST', `/api/secrets/asks/${second.id}/deny`, {});
+                await Promise.all([twin.reply, twinToo]);
+                ok('the desk may still answer over an existing value');
+
+                assert.ok(!JSON.stringify(events).includes(VIA_PHONE), 'no event carries a phone\'s value');
+                assert.ok(!logged.some(l => l.includes(VIA_PHONE)), 'and nothing logs it');
+                ok('no event or log line carries a value typed on a phone');
+            } finally {
+                Object.assign(console, real);
+                phone = false;
+            }
+        }
         server.close();
     }
 
@@ -407,7 +522,7 @@ const OTHER = 'hunter2-but-longer!';
                 if (e.isDirectory()) walk(p);
                 else if (e.isFile()) {
                     const text = fs.readFileSync(p, 'latin1');
-                    if ([VALUE, OTHER].some(v => text.includes(v))) leaks.push(p);
+                    if ([VALUE, OTHER, VIA_PHONE].some(v => text.includes(v))) leaks.push(p);
                 }
             }
         };

@@ -61,6 +61,15 @@ export function resolveSecret(p) {
     if (state.pinned) scrollToEnd(false);
 }
 
+/** Why this client may not type the value here, or null. The route's conditions, said before you type. */
+function remoteBlock(ask) {
+    if (!state.remote) return null;
+    if (!ask.remoteAnswer) return 'Turn on in Settings › Secrets at your desk to enter it here. Until then it can only be typed there.';
+    if (ask.exists) return `${ask.name} is already set. Change it at your desk.`;
+    if (location.protocol !== 'https:') return 'This connection is not encrypted, so a secret cannot be sent over it.';
+    return null;
+}
+
 function secretCard(ask) {
     const card = el('div', { class: 'secret-ask', 'data-id': ask.id, role: 'group',
         'aria-label': `The agent asks for the secret ${ask.name}` });
@@ -74,13 +83,15 @@ function secretCard(ask) {
         + 'in Bash and never sees it; it is not written to the conversation.'));
 
     const deny = el('button', { class: 'perm-btn deny', type: 'button' }, 'Deny');
-    if (state.remote) {
-        card.append(el('div', { class: 'perm-why' }, 'A secret can only be entered at the computer it is stored on.'));
+    const blocked = remoteBlock(ask);
+    if (blocked) {
+        card.append(el('div', { class: 'perm-why' }, blocked));
         card.append(el('div', { class: 'perm-btns' }, deny));
         deny.addEventListener('click', () => send(card, 'deny'));
         return card;
     }
 
+    if (state.remote) card.append(el('div', { class: 'perm-why' }, `Sent over HTTPS via ${location.hostname}.`));
     const input = el('input', { class: 'sudo-pw', type: 'password', autocomplete: 'off',
         spellcheck: 'false', 'aria-label': `The value of ${ask.name}`, placeholder: 'Value' });
     const save = el('button', { class: 'perm-btn allow', type: 'submit' }, 'Save ', el('kbd', {}, '⏎'));

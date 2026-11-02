@@ -300,9 +300,11 @@ function sessionSettings({ node = process.execPath } = {}) {
  * to the store; the waiting tool is told only that it was saved.
  */
 class SecretAsks extends EventEmitter {
-    constructor({ now = Date.now } = {}) {
+    /** @param {{now?: () => number, allowRemote?: () => boolean}} [opts] */
+    constructor({ now = Date.now, allowRemote = () => false } = {}) {
         super();
         this.now = now;
+        this.allowRemote = allowRemote;
         this.asks = new Map();
     }
 
@@ -330,6 +332,7 @@ class SecretAsks extends EventEmitter {
             project: ask.root,
             exists: has(ask.root, ask.name),
             askedAt: ask.askedAt,
+            remoteAnswer: !!this.allowRemote(),
         };
     }
 

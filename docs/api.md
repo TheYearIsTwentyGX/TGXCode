@@ -265,7 +265,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
 `POST /api/sudo/ask` (the askpass helper's route — always); `POST /api/sudo/:id/answer`
 **unless `sudo.allowRemote` is on** (`POST /api/sudo/:id/deny` and `GET /api/sudo` stay open);
-everything under `/api/secrets` except `GET /api/secrets` and `POST /api/secrets/asks/:id/deny` (§*Secrets*);
+everything under `/api/secrets` except `GET /api/secrets`, `POST /api/secrets/asks/:id/deny`, and `POST /api/secrets/asks/:id/answer` **while `secrets.allowRemote` is on** (§*Secrets*);
 `permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
@@ -2113,6 +2113,13 @@ file only**, and **applied by the bridge**:
 |---|---|---|
 | `enabled` | **boolean**, default `false` | Give each session `SUDO_ASKPASS`, so `sudo -A` raises a sudo ask. **Read when a session's process starts**: turning it on reaches sessions started (or restarted) afterwards; turning it off refuses new asks at once, from every session. |
 | `allowRemote` | **boolean**, default `false` | Let a remote caller send the password (`POST /api/sudo/:id/answer`). Off, a remote client may see and deny an ask but not approve it. |
+
+`secrets` is whether a phone may answer an agent's ask for a secret — §*Secrets*.
+**User file only**, and **applied by the bridge**:
+
+| Key | Type | |
+|---|---|---|
+| `allowRemote` | **boolean**, default `false` | Let a remote caller answer an ask with a value (`POST /api/secrets/asks/:id/answer`). Off, a remote client may see and deny an ask but not answer it. **Read on every request.** `PUT /api/prefs` is refused remotely, so it can only be changed at the desk. |
 
 `reviews` is which skills count as code reviews — what `GET /api/sessions/:id/reviews`
 picks out of a transcript. **A project may set it** (a repository that ships its own
@@ -6593,8 +6600,10 @@ change how a command runs are refused (`PATH`, `HOME`, `IFS`, `NODE_OPTIONS`, `L
 sentence. A value is a non-empty string of at most 16 KB with no NUL.
 
 **No event, list or ask ever carries a value.** Two routes return one: `reveal` and
-`resolve`, both refused to remote callers. **A remote client may list names and deny
-an ask, and nothing else** — it cannot set, change, delete, reveal or answer.
+`resolve`, both refused to remote callers. **A remote client may list names, deny an
+ask, and, while `secrets.allowRemote` is on, answer a pending ask, and nothing else.**
+It cannot set, change, delete, reveal or fetch, and it can never replace a value that
+is already set. **`secrets.allowRemote` is off by default.**
 
 **A client that shows asks should show these.** They arrive on the live channel as
 `secret-ask` / `secret-resolved`, sit on `runner.secretAsk` of the full runner status,
@@ -6610,7 +6619,7 @@ The ask:
   "tool": "secret", "displayName": "Secret", "sessionId": "…",
   "name": "STRIPE_TEST_KEY", "why": "To run the payment tests against Stripe's test mode.",
   "cwd": "/home/me/shop/.claude/worktrees/pay", "project": "/home/me/shop",
-  "exists": false, "askedAt": 1793220157720 }
+  "exists": false, "askedAt": 1793220157720, "remoteAnswer": false }
 ```
 
 | Field | Type | |
@@ -6619,8 +6628,9 @@ The ask:
 | `name` | string | The secret's name. Draw it as the thing being asked for. |
 | `why` | string | The agent's own sentence, at most 500 characters; may be empty. |
 | `cwd`, `project` | string, string | Where the agent runs, and the project root the value will be saved under. |
-| `exists` | bool | Whether the project already has this name. Usually false: the tool answers at once when it is set. |
+| `exists` | bool | Whether the project already has this name. Usually false: the tool answers at once when it is set. It turns true when the name is set while the ask waits, and a **remote** answer is then refused: draw the ask read-only. The field is computed each time an ask is sent, so `runner.secretAsk` carries the current answer. |
 | `askedAt` | number | Epoch ms. **No expiry**: the ask lasts until it is answered, denied, or the agent's tool call goes away (`secret-resolved`, `cancelled`). |
+| **`remoteAnswer`** | bool | Whether a **remote** client may send a value — `secrets.allowRemote`, as it was when this copy of the ask was built. When false and you are remote, draw the ask read-only and point at Settings › Secrets on the desk. `secrets.allowRemote` in `GET /api/prefs` is the live answer and outranks it. |
 
 `secret-resolved` is `{id, requestId, sessionId, name, outcome, reason?}`, `outcome`
 being `"saved"`, `"denied"` or `"cancelled"`. Take the card down. Its notification row
@@ -6628,16 +6638,33 @@ is resolved `allow`, `deny` or `cancelled`.
 
 ### `GET /api/secrets?cwd=`
 
-`{project: string, secrets: [{name, createdAt, updatedAt}], asks: [ask]}` — the
-project's names (dates are epoch ms) and its open asks. **Never a value.** Open to
-remote callers. `400` without an absolute `cwd`.
+`{project: string, allowRemote: bool, secrets: [{name, createdAt, updatedAt}], asks: [ask]}`
+— the project's names (dates are epoch ms), its open asks, and `secrets.allowRemote`.
+**Never a value.** Open to remote callers. `400` without an absolute `cwd`.
 
 ### `POST /api/secrets/asks/:id/answer`
 
-`{value: string}` → `200 {ok: true}`. The value is saved under the ask's project and
-the waiting tool is told it is set. **Send it from the client that typed it; never
-relay or store it.** `400` for a value that is not allowed, `403 {remote: true}` from
-a remote caller, `409` when the ask was already answered or has gone.
+`{value: string}` → `200 {ok: true}`. The value is saved under the ask's own name and
+project, whatever else the body says, and the waiting tool is told it is set. **Send it
+from the client that typed it; never relay or store it.** `400` for a value that is not
+allowed, `409` when the ask was already answered or has gone.
+
+**From a remote caller it has conditions**, checked in this order, the first two before
+the body is read:
+
+| Refusal | When |
+|---|---|
+| `403 {error, remote: true}` | `secrets.allowRemote` is off, the default |
+| `403 {error, remote: true}` | The request did not arrive encrypted: no `X-Forwarded-Proto: https` and not a `.ts.net` name |
+| `409 {error}` | The ask was already answered or has gone |
+| `409 {error, exists: true}` | **The name is already set.** A remote answer never replaces a value. The ask stays open, for the desk or a deny |
+
+**A client must check its own transport before sending**, because by the time the
+bridge refuses a plain-HTTP request the value has already crossed the network. Send a
+value only to an `https://` origin. **HTTPS is not end-to-end on a tunnel**: at
+`https://tgxcode.com` Cloudflare terminates TLS and can read the body, which is what
+the setting exists to make a decision. See `docs/remote.md`. Clear the field before the
+request, keep the body out of logs, and do not retry automatically.
 
 ### `POST /api/secrets/asks/:id/deny`
 
