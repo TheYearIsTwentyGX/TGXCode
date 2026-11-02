@@ -25,6 +25,8 @@ const { NEXT, readJson, send } = require('../http');
 const restart = require('../restart');
 const { PERMISSION_MODES } = require('../runner');
 const tailscale = require('../tailscale');
+const shellBuild = require('../shell-build');
+const { isWsl } = require('../platform');
 
 // Handed over by server.js — see the note above ROUTES there.
 let claudeVersion = null;
@@ -47,6 +49,10 @@ function init(deps) {
 // being replaced, so there is nothing to set it back for. Two clicks would
 // otherwise be two kills and two launch.sh racing for one port.
 let handedOver = false;
+
+// GET /api/shell-build runs git four times; the page asks on load and while a
+// build runs, so ten seconds of memory is plenty.
+let shellBuildCache = null;
 
 async function handle(req, res, url, pathname, seg, who) {
     // --- health / meta ----------------------------------------------------
@@ -259,6 +265,36 @@ async function handle(req, res, url, pathname, seg, who) {
         markClaudeVersionSent(JSON.stringify(summary));
         broadcast('claude-version', summary);
         return send(res, 200, { ok: out.ok === true, output: out.output || '', summary });
+    }
+
+    // --- the desktop shell's build -----------------------------------------
+    // What a shell built from this checkout would be (bridge/shell-build.js),
+    // for the page to compare with the shell it is running in, and a build of
+    // one into the updates feed. Both local only — see remoteRefusal(): the
+    // shell being compared is on this desktop, and the build runs on it.
+    if (pathname === '/api/shell-build' && req.method === 'GET') {
+        const now = Date.now();
+        if (!shellBuildCache || now - shellBuildCache.at > 10_000) {
+            shellBuildCache = { at: now, info: shellBuild.buildInfo(cfg.ROOT) };
+        }
+        return send(res, 200, {
+            ...shellBuildCache.info,
+            canRelease: isWsl() && !cfg.IS_DEV,
+            release: shellBuild.releaseState(),
+        });
+    }
+
+    if (pathname === '/api/shell-build/release' && req.method === 'POST') {
+        if (!isWsl()) {
+            return send(res, 409, { error: 'the Windows installer is built from WSL; on Linux, npm run build' });
+        }
+        // A dev bridge serves a branch, and the feed is what the everyday window
+        // installs from. `npm run release:local -- --feed …` is the way to try one.
+        if (cfg.IS_DEV) return send(res, 409, { error: 'a dev bridge does not publish to the updates feed' });
+        const r = shellBuild.startRelease({ root: cfg.ROOT, logFile: path.join(cfg.CACHE_DIR, 'shell-release.log') });
+        if (r.error) return send(res, 409, { error: r.error, release: shellBuild.releaseState() });
+        shellBuildCache = null;
+        return send(res, 202, r);
     }
 
     // --- pairing -----------------------------------------------------------

@@ -269,7 +269,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/commands-config*`;
-`/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`; `/api/preview/*`;
+`/api/shutdown`; `/api/restart` (both methods); `/api/shell-build*` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`; `/api/preview/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
 `POST /api/worktrees/remove`;
@@ -5524,6 +5524,41 @@ own turn-in-flight guard is still armed on every invocation, so a turn starting 
 the route's check and the script's own means it exits without restarting — this process
 lives, no `pid` changes, nothing drops, and the only record is that file. Whichever
 bridge is up serves it.
+
+### `GET /api/shell-build`
+
+`→ {version, shellHash, commit, branch, dirty, canRelease, release}`. **Local callers
+only.** What a desktop shell built from this bridge's checkout would be, for the page to
+compare with the shell it is running in — `web/` is live and `app/` is packaged, so the two
+drift. A phone has no shell and no use for this; the updater itself lives in the Windows
+shell and is not visible through the bridge at all.
+
+- `version` string: what a build would carry. `<major>.<minor>.<commit count>` on a clean
+  `main`, `<major>.<minor>.<count+1>-dev.<UTC YYYYMMDDHHmm>` otherwise. It changes on every
+  commit, including ones that do not touch the shell, so **do not compare it to decide
+  whether a shell is out of date** — compare `shellHash`.
+- `shellHash` string: sha256 hex of every file under `app/` (except the build's own
+  `config.json` and `build-info.json`) and package.json's `main`, `build`, `devDependencies`.
+- `commit` string or null (short hash), `branch` string or null, `dirty` boolean — whether
+  `app/` or package.json differ from the commit; other files do not count.
+- `canRelease` boolean: whether `POST /api/shell-build/release` could run — a WSL host and
+  not a dev bridge.
+- `release` object or null: the last build this bridge process started, `{running: boolean,
+  startedAt: ms, finishedAt: ms or null, exitCode: number or null, tail: string}`, where
+  `tail` is up to the last 40 non-empty lines of output. Forgotten when the bridge restarts.
+
+Answers are remembered for ten seconds, except `release`, which is always current.
+
+### `POST /api/shell-build/release`
+
+`{}` → `202 {release}`, with `release` as above. **Local callers only.** Runs
+`scripts/release.js`: packages the Windows shell and publishes it to the updates folder,
+without closing or installing anything. A minute or two; poll `GET /api/shell-build`.
+
+`409 {error}` on a host that is not WSL, on a dev bridge (the feed is what the everyday
+window installs from), and for a second call while one runs (that one also carries
+`release`). Being accepted does not mean it will publish: the script refuses a dev build —
+`app/` dirty, or not on `main` — and that surfaces as `exitCode: 3` with the reason in `tail`.
 
 ### `POST /api/sessions/:id/handoff`
 

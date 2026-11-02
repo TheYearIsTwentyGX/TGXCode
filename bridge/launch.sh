@@ -9,6 +9,8 @@
 #
 #   bridge/launch.sh            start the bridge
 #   bridge/launch.sh --check    print the node version and exit (used by install.ps1)
+#   bridge/launch.sh --node …   run node with these arguments instead (install.ps1
+#                               asks scripts/release.js for a build's version this way)
 
 set -uo pipefail
 
@@ -65,6 +67,11 @@ fi
 if [ "${1:-}" = "--check" ]; then
     printf '%s %s\n' "$(command -v node)" "$(node --version)"
     exit 0
+fi
+
+if [ "${1:-}" = "--node" ]; then
+    shift
+    exec node "$@"
 fi
 
 exec node bridge/server.js "$@"

@@ -109,6 +109,8 @@ const HOME = os.homedir();
     // could pull a checkout it is refused the restart of.
     check('restart', (await call('POST', '/api/restart', { headers: PHONE, body: {} })).status, 403);
     check('restart journal', (await call('GET', '/api/restart', { headers: PHONE })).status, 403);
+    check('the shell build', (await call('GET', '/api/shell-build', { headers: PHONE })).status, 403);
+    check('building a shell', (await call('POST', '/api/shell-build/release', { headers: PHONE, body: {} })).status, 403);
     check('devservers stop', (await call('POST', '/api/devservers/stop', { headers: PHONE, body: { port: 1 } })).status, 403);
     check('devbrowser status', (await call('GET', '/api/devbrowser/status', { headers: PHONE })).status, 403);
     check('reveal', (await call('POST', '/api/sessions/abc/reveal', { headers: PHONE, body: {} })).status, 403);

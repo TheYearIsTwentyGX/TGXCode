@@ -431,6 +431,11 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/restart') {
         return 'the bridge can only be restarted from the machine it runs on';
     }
+    // Both methods: the GET names paths on this machine and compares against a
+    // shell on its desktop, and the POST builds an installer there.
+    if (pathname === '/api/shell-build' || pathname.startsWith('/api/shell-build/')) {
+        return 'the desktop shell is only built and compared on the machine it runs on';
+    }
     if (pathname === '/api/devservers/stop') {
         return 'dev servers can only be stopped from the machine they run on';
     }

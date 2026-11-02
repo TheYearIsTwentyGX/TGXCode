@@ -20,7 +20,7 @@
 // port-reclaim logic, the window, the single-instance lock — is the same on
 // both and does not know which it is on.
 
-const { app, BrowserWindow, shell, Menu, screen, ipcMain, clipboard, webContents, session } = require('electron');
+const { app, BrowserWindow, shell, Menu, screen, ipcMain, clipboard, webContents, session, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -28,6 +28,8 @@ const { spawn, execFile } = require('child_process');
 const titlebar = require('./titlebar');
 const { PreviewCdp } = require('./preview-cdp');
 const { PreviewGrants, originOf } = require('./preview-grants');
+const { Updater } = require('./updater');
+const { Readable } = require('stream');
 
 // ── the rename ───────────────────────────────────────────────────────────
 //
@@ -69,6 +71,37 @@ for (const key of Object.keys(process.env)) {
         });
     } catch (err) {
         console.error(`[tgxcode] could not copy the old profile: ${err.message}`);
+    }
+})();
+
+// **The bridge's location, kept in the profile.** install.ps1 bakes
+// `app/config.json` into the install directory, and an update replaces that
+// directory — with whatever the build it came from baked, which for a GitHub
+// release is nothing at all. The profile's config.json already wins over the
+// baked one (loadConfig), so the first launch of a build that can update itself
+// copies the baked one there, and from then on no update can move the bridge.
+// install.ps1 writes the profile copy itself when given an explicit -BridgeDir.
+(function carryConfigIntoProfile() {
+    try {
+        const baked = path.join(__dirname, 'config.json');
+        const kept = path.join(app.getPath('userData'), 'config.json');
+        if (fs.existsSync(kept) || !fs.existsSync(baked)) return;
+        fs.mkdirSync(path.dirname(kept), { recursive: true });
+        fs.copyFileSync(baked, kept);
+    } catch (err) {
+        console.error(`[tgxcode] could not keep config.json in the profile: ${err.message}`);
+    }
+})();
+
+// What this shell was built from: version, the hash of app/ (bridge/shell-build.js)
+// and the commit, written by install.ps1. Absent from every build before the
+// updater, and from `electron .` — the page reads that as "out of date".
+const BUILD_INFO = (() => {
+    try {
+        const v = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8').replace(/^\uFEFF/, ''));
+        return v && typeof v === 'object' ? v : null;
+    } catch {
+        return null;
     }
 })();
 
@@ -895,6 +928,146 @@ ipcMain.handle('preview-copy-text', (event, text) => {
     return { ok: true };
 });
 
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+// app/updater.js holds the state machine and says what it promises; this is
+// the Electron end of it. Settings live in shell-prefs.json beside the titlebar's,
+// for the same reason: the shell does the checking, and on Windows it cannot
+// read the bridge's settings across WSL.
+
+let updater = null;
+
+const MAX_MANIFEST_BYTES = 1024 * 1024;
+
+async function fetchText(url) {
+    const res = await net.fetch(url, { cache: 'no-store' });
+    if (!res.ok) {
+        const err = new Error(`HTTP ${res.status}`);
+        err.status = res.status;
+        throw err;
+    }
+    const text = await res.text();
+    if (text.length > MAX_MANIFEST_BYTES) throw new Error('the feed is implausibly large');
+    return text;
+}
+
+async function downloadTo(url, dest, onProgress) {
+    const res = await net.fetch(url);
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    const total = Number(res.headers.get('content-length')) || null;
+    let got = 0;
+    await new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(dest);
+        const body = Readable.fromWeb(res.body);
+        body.on('data', (c) => { got += c.length; onProgress(got, total); });
+        body.on('error', reject);
+        out.on('error', reject);
+        out.on('finish', resolve);
+        body.pipe(out);
+    });
+}
+
+/**
+ * Start the installer and resolve once it is running — not once it is done,
+ * since it waits for this app to quit. Where Windows refuses to start it without
+ * elevation (an install for all users), ask through PowerShell's RunAs, and only
+ * resolve once that went through: a declined prompt rejects, and the app stays.
+ */
+function launchInstaller(file, args) {
+    return new Promise((resolve, reject) => {
+        let child;
+        try {
+            child = spawn(file, args, { detached: true, stdio: 'ignore' });
+        } catch (err) {
+            return elevate(err);
+        }
+        child.once('spawn', () => { child.unref(); resolve(); });
+        child.once('error', elevate);
+
+        function elevate(err) {
+            if (!err || !['EACCES', 'EPERM', 'UNKNOWN'].includes(err.code)) return reject(err);
+            const q = (t) => `'${String(t).replace(/'/g, "''")}'`;
+            const ps = `Start-Process -FilePath ${q(file)} -ArgumentList ${args.map(q).join(',')} -Verb RunAs`;
+            execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true },
+                (e2) => (e2 ? reject(new Error('elevation was declined or failed')) : resolve()));
+        }
+    });
+}
+
+function updaterDisabledReason() {
+    if (!VIA_WSL) return 'In-app updates are for the Windows app. On Linux, npm run build rebuilds it in place.';
+    if (!app.isPackaged) return 'This shell is running from source rather than an installed build.';
+    if (PORT !== DEFAULT_PORT) return `This is the dev window on :${PORT}. The everyday window installs updates.`;
+    return null;
+}
+
+function createUpdater() {
+    const userData = app.getPath('userData');
+    const local = process.env.LOCALAPPDATA || app.getPath('temp');
+    const reason = updaterDisabledReason();
+    const u = new Updater({
+        installedVersion: app.getVersion(),
+        platform: process.platform,
+        enabled: !reason,
+        disabledReason: reason,
+        defaultFolder: VIA_WSL ? path.join(local, 'TGXCode-updates') : '',
+        cacheDir: path.join(local, 'tgxcode-updater'),
+        getSettings: () => titlebar.readPrefs(userData).updates,
+        saveSettings: (s) => titlebar.writePrefs(userData, { updates: s }),
+        fetchText,
+        download: downloadTo,
+        launchInstaller,
+        quit: () => app.quit(),
+    });
+    u.on('state', (st) => sendToShell('updates-state', st));
+    return u;
+}
+
+const updatesView = () => ({ ok: true, state: updater.snapshot(), build: BUILD_INFO });
+
+ipcMain.handle('updates-get', (event) => {
+    if (!fromShell(event) || !updater) return { ok: false, error: 'refused' };
+    return updatesView();
+});
+ipcMain.handle('updates-set', (event, patch) => {
+    if (!fromShell(event) || !updater || !patch || typeof patch !== 'object') return { ok: false, error: 'refused' };
+    const r = updater.setSettings(patch);
+    return r.error ? { ok: false, error: r.error } : updatesView();
+});
+ipcMain.handle('updates-check', async (event) => {
+    if (!fromShell(event) || !updater) return { ok: false, error: 'refused' };
+    await updater.check();
+    return updatesView();
+});
+ipcMain.handle('updates-download', async (event, opts) => {
+    if (!fromShell(event) || !updater) return { ok: false, error: 'refused' };
+    await updater.download({ allowDowngrade: Boolean(opts && opts.allowDowngrade === true) });
+    return updatesView();
+});
+ipcMain.handle('updates-install', async (event, opts) => {
+    if (!fromShell(event) || !updater) return { ok: false, error: 'refused' };
+    const r = await updater.install({ restart: Boolean(opts && opts.restart === true) });
+    return r.ok ? updatesView() : { ok: false, error: r.error };
+});
+ipcMain.handle('updates-dismiss', (event) => {
+    if (!fromShell(event) || !updater) return { ok: false, error: 'refused' };
+    updater.dismissNotice();
+    return updatesView();
+});
+
+// Install on quit: hold the quit just long enough to check the file and start
+// the installer, then let it go. `installing` stops the second pass through here
+// — app.quit() fires before-quit again — and a Restart to update, which has
+// already started its installer, is not `ready` any more.
+let installingOnQuit = false;
+app.on('before-quit', (event) => {
+    if (installingOnQuit || !updater || !updater.wantsInstallOnQuit()) return;
+    event.preventDefault();
+    installingOnQuit = true;
+    updater.install({ restart: false }).catch(() => { /* recorded in state */ }).finally(() => app.quit());
+});
+
 app.whenReady().then(async () => {
     // Quitting before `ready` normally stops it firing at all, but not
     // dependably enough to hang a second window off — and this is the copy that
@@ -903,6 +1076,10 @@ app.whenReady().then(async () => {
     if (!isOnlyInstance) return;
     const cfg = loadConfig();
     const win = createWindow();
+    // Before the bridge: a shell that cannot reach its bridge is the one most in
+    // need of an update it can still install.
+    updater = createUpdater();
+    updater.start();
 
     const setStatus = (msg, detail) => {
         if (win && !win.isDestroyed()) win.loadURL(splash(msg, detail));

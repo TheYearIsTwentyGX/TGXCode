@@ -45,6 +45,7 @@ import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
 import { renderConvToolbarSettings, renderToolbarSettings } from './toolbar.js';
 import { windowCard, windowSettingsAvailable } from './window.js';
+import { updatesCard, updatesSettingsAvailable } from './updates.js';
 
 // Whether this window can be driven by an agent (web/preview-agent.js): the
 // desktop shell, new enough. Read here rather than imported from that module,
@@ -407,6 +408,13 @@ export const SETTINGS = [
         title: 'Window', section: 'window', category: 'workspace',
         when: () => windowSettingsAvailable(),
         card: () => windowCard(),
+    },
+    // The desktop shell's own updates, kept by the shell like the frame above —
+    // see web/settings/updates.js. Not in a browser.
+    {
+        title: 'Updates', section: 'updates', category: 'workspace',
+        when: () => updatesSettingsAvailable(),
+        card: () => updatesCard(),
     },
     {
         title: 'Snippets', section: 'snippets', category: 'input', node: 'setGSnippets',

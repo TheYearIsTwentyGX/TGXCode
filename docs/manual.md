@@ -1284,6 +1284,9 @@ place so they still take their turn in the order the table lists.
 system titlebar* belongs to the desktop app, which stores it itself, and the
 group only appears there. See *The titlebar*.
 
+**Updates** is the same again: the desktop app does the checking and keeps these
+itself. See *Updating the desktop app*.
+
 ### Test sessions
 
 A session can be marked **test**, which means only a development bridge lists it;
@@ -2189,6 +2192,110 @@ waited for — the window says what it is waiting for and how many turns — and
 port is claimed the moment that work lands. A development instance is exempt from
 the check: it is pointed at a port deliberately and serves whichever checkout
 started it, which is the entire point of having one.
+
+### Updating the desktop app
+
+The window around the page is the only installed part of TGXCode. `bridge/` and
+`web/` are read from the checkout, so they need no update; `app/` and the packaging
+fields of `package.json` do. The app can now take that update itself, instead of
+`install.ps1` closing it and running an installer wizard.
+
+**The short version.** Land the change, then either press **Build update** in
+*Settings → Updates* or run this in WSL. Neither closes anything:
+
+```bash
+npm run release:local
+```
+
+The app picks it up on its next check (or *Check now*), downloads it, and offers
+**Restart to update**. A `↑` on the Settings button says when something is waiting.
+Otherwise it installs as you quit. Live sessions are not affected either way: they
+run in the bridge, which keeps running, and the new window picks it up.
+
+**How the app knows it is behind.** Each build carries a hash of the `app/` it came
+from, and the bridge hashes the checkout's. When they differ, the card says so and
+offers the build. A version number could not answer this: it moves on every commit,
+including the ones that only touch `web/`.
+
+**Where it looks.** *Settings → Updates → Where to look*:
+
+- **Folder** — `%LOCALAPPDATA%\TGXCode-updates` unless you name another, which may be
+  a share or a synced drive. `release:local` publishes to the folder the app is set to.
+- **GitHub releases** — the latest release of a public repository. Nothing publishes
+  there yet; see below.
+- **Off.**
+
+**Versions.** `<major>.<minor>` comes from `package.json` and is yours to change. The
+patch is the commit count, worked out at build time and never committed, so a build
+of `main` is always newer than the last. A build of a branch or of uncommitted `app/`
+edits is `-dev`; `release:local` will not publish one to the real folder, because the
+everyday app would install it, unless you pass `--feed <folder>` to send it elsewhere
+or `--allow-dev` to mean it.
+
+**What is checked, and what is not.** The installer's sha512 has to match `latest.yml`
+when it lands and again right before it runs, and `latest.yml` may only name a file
+in its own folder. That catches a damaged or half-copied file. It does not make a
+hostile feed safe: builds are unsigned, so whoever can write to that folder or publish
+to that repository can run code as you. Being unsigned costs nothing day to day — an
+installer the app fetched itself carries no Mark of the Web, so SmartScreen does not
+stop it. Only one you download in a browser and open by hand gets *Windows protected
+your PC*, where *More info → Run anyway* gets past it.
+
+**Going back.** A feed older than what is installed is reported and never fetched by
+itself; *Install older version* is the only way, and it asks first. The last three
+builds stay in the folder, each with its own `latest.yml` saved as
+`TGXCode-Setup-<version>.exe.yml`; copy one over `latest.yml` to put that build on offer.
+
+**When an install does not finish.** If the installer cannot start, or Windows asks for
+elevation and you say no, the app stays open on the version it was and says so. If it
+started and the version did not change, the next launch says the update did not finish.
+The case nothing here can cover is the installer failing partway through: it removes the
+old copy before it writes the new one, so the app may not start. The installer is still in
+`%LOCALAPPDATA%\tgxcode-updater`, and running it, or `install.ps1`, puts things right. Your
+profile is untouched either way, and so is anything in the bridge.
+
+**Your settings survive.** localStorage is in `%APPDATA%\tgxcode`, which an install
+leaves alone. So is `config.json` there, which the first launch of an updatable build
+copies from the one baked into the app, so that no update can move the bridge. To
+move it, edit that file, or run `install.ps1 -BridgeDir …`, which writes it.
+
+**A dev window** (`npm run dev`) shows the card and installs nothing, and a dev bridge's
+*Build update* is not offered. To try the flow on a branch, publish somewhere else:
+`npm run release:local -- --feed 'D:\try'`. On Linux the card says to use `npm run
+build`, which rebuilds in place.
+
+**Getting onto it the first time** takes one last `npm run build` (or `.\install.ps1`),
+which closes the app and runs the wizard as it always did, because a shell with no
+updater cannot fetch one. `install.ps1` keeps working after that.
+
+**Publishing to GitHub releases** is not set up, but the pieces are in place:
+`build.publish` already names the repository, and `latest.yml` is the same file. A
+workflow would look like this:
+
+```yaml
+on: { push: { tags: ['v*'] } }
+permissions: { contents: write }
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install --no-audit --no-fund
+      - run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
+      - run: npx electron-builder --win --publish always
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+```
+
+Three things to settle first: such a build needs a step writing `app/build-info.json`
+(`node scripts/release.js --info` has the fields), or every shell from it reads as out
+of date; tag versions and the commit-count versions share one ordering, so pick tags
+above the current count; and the repository's releases have to be public, because the
+app holds no token. The app would then download the whole installer each time.
+electron-updater's differential downloads are the reason to adopt it at that point. It
+reads this same feed, so that is one dependency and a config change, weighed against
+CLAUDE.md's rule about dependencies.
 
 ### Picking up new code
 

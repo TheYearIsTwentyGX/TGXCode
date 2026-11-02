@@ -59,7 +59,9 @@ async function buildOnLinux() {
         return 1;
     }
 
-    const code = await run(bin, ['--linux', ...passthrough]);
+    // `build.publish` names GitHub so electron-builder writes latest.yml; a local
+    // build never uploads anything.
+    const code = await run(bin, ['--linux', '--publish', 'never', ...passthrough]);
     if (code === 0) {
         console.log('\nBuilt into dist/. Nothing needs installing to run it:');
         console.log('    npm start');

@@ -67,7 +67,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'sx', 'sx-input', 'sx-tools', 'sx-sub', 'sx-body',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
-    'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap', 'set-notes',
+    'btn-settings', 'settings-badge', 'settings', 'set-scope', 'set-project', 'set-project-wrap', 'set-notes',
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save', 'memo-views', 'memo-body', 'memo-preview',

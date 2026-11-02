@@ -122,6 +122,7 @@ import {
     onOrchestratorEvent, onOrchestratorPaint, paintOrchestrator, saveOwnModel, toggleOrchestrator,
 } from './orchestrator.js';
 import { applyPhoneInstall, loadPhoneInstalls, showPhoneInstalls } from './phone-installs.js';
+import { initShellUpdates } from './shell-update.js';
 import { orchPageTick } from './orchestrator-page.js';
 import { STUCK_MS } from './orchestrator-model.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
@@ -4429,6 +4430,8 @@ dom.setProject.addEventListener('change', () => {
     cmds.stale = null;
     loadSettings();
 });
+
+initShellUpdates();
 
 dom.btnSched.addEventListener('click', () => showSched(!state.sched.open));
 // `schedule: true` rather than a row: a new one, so Save posts instead of
