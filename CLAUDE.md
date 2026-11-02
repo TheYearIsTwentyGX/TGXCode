@@ -303,7 +303,7 @@ The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskbo
 `templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
 `claude-docs`, `ask-result`, `commands`, `message-date`, `folded`, `live-over`,
-`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `orchestrator-models`, `worker-read`, `code-reviews`, `tool-image`, `images`, `hook-scripts`, `hook-sources`, `overview-hosts`, `session-index`, `session-title`, `tool-name`, `keepawake`, `startup`, `viewers`, `spend`, `pr-reviews`, `worktree-branch`, `bar-fit`, `phone-installs`, `brief`, `titlebar`, `preview-cdp`, `preview-grants`, `preview-open`, `preview-mcp` and `sudo` on their own — no bridge needed
+`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `orchestrator-models`, `worker-read`, `code-reviews`, `tool-image`, `images`, `hook-scripts`, `hook-sources`, `overview-hosts`, `session-index`, `session-title`, `tool-name`, `keepawake`, `startup`, `viewers`, `spend`, `pr-reviews`, `worktree-branch`, `bar-fit`, `phone-installs`, `brief`, `titlebar`, `preview-cdp`, `preview-grants`, `preview-open`, `preview-mcp`, `sudo`, `update-feed`, `updater` and `shell-build` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an
 unpaired remote device sees before and after pairing, and what the nightly restart
@@ -510,6 +510,14 @@ packaged, and if one of those has to ship, say so and let the user run it.
 
 Two agents packaging at once will also pull the executable out from under each
 other, since the staging directory is wiped and rebuilt.
+
+**`npm run release:local` is the exception that closes nothing.** It stages in its
+own directory, runs no installer, and publishes to the updates folder — but that
+folder is what the everyday app installs from, and it auto-downloads. So it refuses
+a build of a branch or of uncommitted `app/` edits unless you name a folder
+(`--feed <dir>`), which is how to try one. Do not pass `--allow-dev` unasked. Applying
+an update replaces the user's app, so that part is still theirs: leave **Restart to
+update** to them. See docs/manual.md §Updating the desktop app.
 
 **On a Linux host the rule is the same and the reason is weaker.** There is no
 staging directory and no file lock on a running executable, so `npm run build`

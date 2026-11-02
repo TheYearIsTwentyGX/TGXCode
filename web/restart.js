@@ -114,7 +114,7 @@ function arrived(started) {
     if (!p.changed || !p.changed.length) return 'Already up to date.';
     const n = `${p.changed.length} file${p.changed.length === 1 ? '' : 's'}`;
     const reach = started.reach || {};
-    if (reach.shell) return `${n} — app/ or package.json changed, so the shell needs a rebuild.`;
+    if (reach.shell) return `${n} — app/ or package.json changed, so the shell has an update to build: Settings → Updates.`;
     if (reach.bridge) return `${n}, bridge/ among them.`;
     if (reach.web) return `${n}, UI only.`;
     return n;

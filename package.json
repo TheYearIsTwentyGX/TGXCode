@@ -14,8 +14,9 @@
     "dev:headless": "node scripts/dev.js --no-window",
     "bridge": "node bridge/server.js",
     "build": "node scripts/build.js",
+    "release:local": "node scripts/release.js",
     "icon": "node app/make-icon.js --preview",
-    "dist": "electron-builder"
+    "dist": "electron-builder --publish never"
   },
   "dependencies": {},
   "devDependencies": {
@@ -29,6 +30,11 @@
       "app/**/*",
       "package.json"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "TheYearIsTwentyGX",
+      "repo": "TGXCode"
+    },
     "win": {
       "icon": "app/icon.ico",
       "target": [
@@ -40,7 +46,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "linux": {
       "icon": "app/icon.png",

@@ -1414,3 +1414,18 @@
 .settings-origins li:last-child { border-bottom: 0; }
 .settings-origins code { font-size: var(--fs-sm); }
 .settings-origins-empty { margin: 0; color: var(--text-3); font-size: var(--fs-sm); }
+
+/* Settings → Updates (web/settings/updates.js). */
+.upd-actions { flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-3); }
+.upd-progress { display: block; width: 100%; max-width: 340px; height: 6px; margin-top: var(--sp-3); accent-color: var(--blue); }
+.upd-log {
+    margin: var(--sp-3) 0 0;
+    padding: var(--sp-4);
+    max-height: 200px;
+    overflow: auto;
+    white-space: pre-wrap;
+    background: var(--s2);
+    border-radius: var(--r-sm);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
+    color: var(--text-3);
+}

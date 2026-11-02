@@ -332,6 +332,7 @@ are easier to read than to infer.
 | `npm run restart` | Restart the everyday bridge to pick up new code. Turns in the session host survive it; refuses only while a turn is running outside the host. |
 | `npm run land` | From a worktree: merge its pull request, delete the remote branch (not `main`/`staging`; `-- --keep-branch` to keep it), fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
 | `npm run build` | Package the app — electron-builder on Linux, `install.ps1` from WSL. |
+| `npm run release:local` | Build a shell update for the installed app to pick up; closes nothing. See docs/manual.md §Updating the desktop app. |
 
 Two rules worth knowing before you send a patch:
 
@@ -463,6 +464,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/preview-agent.js` | An agent driving the preview, the bridge's half: the endpoint a window registered (a 0600 file per port) and the `preview-open` handshake |
 | `bridge/preview-mcp.js` | The `preview` MCP server: Playwright MCP, run against a relay that finds the window's current endpoint on every connection |
 | `bridge/phone-installs.js` | APKs filed for the phone: the copy and its sha256, the state the phone reports, the first-`downloading` claim, progress heartbeats, `stalled` and the 3-minute release of a claim gone quiet, retry, and the 24h retention |
+| `bridge/shell-build.js` | What a shell built from this checkout would be — the hash of what gets packaged, the version — and running that build for the page |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
@@ -474,6 +476,7 @@ Two rules worth knowing before you send a patch:
 | `scripts/start.js` | `npm start` — finds the built app and launches it, on WSL or Linux |
 | `scripts/setup.sh` | A new machine from bare Ubuntu to a built app — packages, Node on both sides, Claude Code, `.wslconfig`, the build |
 | `scripts/build.js` | `npm run build` — `install.ps1` from WSL, electron-builder on Linux |
+| `scripts/release.js` | `npm run release:local` — build the Windows shell without closing the app, and publish it to the updates folder; `--info` prints what a build would be |
 | `scripts/win.js` | Helpers for reaching the Windows side from WSL |
 | `scripts/restart-bridge.sh` | `npm run restart` — restart the everyday bridge onto new code, and the nightly cron's entry point |
 | `scripts/land.sh` | `npm run land` — merge a worktree's PR, fast-forward the main checkout, restart the bridge if `bridge/` changed |
@@ -505,6 +508,7 @@ Two rules worth knowing before you send a patch:
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
 | `web/search.js` | Search transcripts — the full-text panel (Ctrl+Shift+F, or Enter in the bar's filter), results grouped by session, and the jump that opens a session at a hit's turn |
 | `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit, Send to orchestrator and Delete on a card |
+| `web/shell-update.js` | The desktop shell's updates as the page sees them: the updater's state, the build's hash against the checkout's, the badge on the Settings button and its toasts |
 | `web/phone-installs.js` | The phone-installs pill in the bar and its popover (state, progress, Retry/Cancel/Copy), and one toast per APK rewritten in place from the `phone_install` events |
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
@@ -522,6 +526,7 @@ Two rules worth knowing before you send a patch:
 | `web/hooks/editor.js` | The hooks editor on that page — a draft of one file's `hooks` block, its review and the save |
 | `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
 | `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
+| `web/settings/updates.js` | The Updates group — where the shell looks for a build, what it found, Restart to update, and Build update |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
 | `web/settings/brief.js` | The Agent brief group — the switches, each text as a draft with Reset to default, and a preview with what is left out struck through |
@@ -626,6 +631,8 @@ Two rules worth knowing before you send a patch:
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, the preview's two clipboard writes, the titlebar's colours, drag and frame setting, and agent control of the preview |
 | `app/titlebar.js` | The top bar as the window's titlebar: native caption-button overlay (traffic lights on macOS) coloured from the page's theme and resized with the zoom, the window drag a bar button carries, dragging out of maximised, and the *Use system titlebar* way back (`shell-prefs.json` in the shell's profile) |
+| `app/update-feed.js` | The updater's pure half: electron-builder's `latest.yml`, semver order, settings validation, the installer's arguments, sha512 |
+| `app/updater.js` | The updater's state machine: check, download, verify, install on quit or with a restart, and what the next launch says about it |
 | `app/preview-cdp.js` | The CDP endpoint an agent's Playwright drives the preview through — a pretend browser over each preview guest's own debugger, with nothing else in it |
 | `app/preview-grants.js` | Which sites a preview guest may show and an agent may open: loopback, Allow once, Always, Deny, and the asks that wait for the user |
 | `app/make-icon.js` | Generates the packaged shell's icon |

@@ -29,6 +29,11 @@
 // Two of these are pushed rather than asked for: the endpoint's state, for the
 // toolbar's banner, and a new ask, for the notification.
 
+// And the updater (app/updater.js): read its state and settings, change a
+// setting, check, download, install. The state is pushed too, for the progress
+// bar and the pill. Every argument is reduced to the type it should be here, and
+// main.js validates the settings again.
+
 // A preload is a hole in the wall between the page and the shell, and each door
 // here is sized to the single thing on the other side of it. Anything the page
 // can already do, it keeps doing itself. The main process checks every call
@@ -60,6 +65,16 @@ contextBridge.exposeInMainWorld('claudeShell', {
         },
         getSetting: () => ipcRenderer.invoke('titlebar-get'),
         setSystem: (on) => ipcRenderer.invoke('titlebar-set-system', on === true),
+    },
+    updates: {
+        get: () => ipcRenderer.invoke('updates-get'),
+        set: (patch) => ipcRenderer.invoke('updates-set', JSON.parse(JSON.stringify(patch || {}))),
+        check: () => ipcRenderer.invoke('updates-check'),
+        download: (opts) => ipcRenderer.invoke('updates-download',
+            { allowDowngrade: Boolean(opts && opts.allowDowngrade === true) }),
+        install: (opts) => ipcRenderer.invoke('updates-install', { restart: Boolean(opts && opts.restart === true) }),
+        dismissNotice: () => ipcRenderer.invoke('updates-dismiss'),
+        onState: (fn) => { ipcRenderer.on('updates-state', (_e, st) => fn(st)); },
     },
     previewAgent: {
         set: (on, origins) => ipcRenderer.invoke('preview-agent-set', {
