@@ -1074,6 +1074,7 @@ app.whenReady().then(async () => {
     // must not start one, having just handed the click to the copy that already
     // has one.
     if (!isOnlyInstance) return;
+    console.log(`TGXCode shell ${app.getVersion()}`);
     const cfg = loadConfig();
     const win = createWindow();
     // Before the bridge: a shell that cannot reach its bridge is the one most in
