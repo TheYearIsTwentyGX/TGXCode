@@ -90,6 +90,7 @@ Its \`tgxcode\` MCP tools give you:
 {{#if worker}}
 - report_to_orchestrator: questions, progress and "done" go to your orchestrator.
 {{/if}}
+- request_secret: get a credential without seeing it, then use it as $NAME in Bash.
 
 Attached files arrive as paths under attached_assets/. Scratch files belong in your session scratchpad, which the user can see in the app.
 {{#if sudo}}
@@ -172,6 +173,21 @@ TGXCode notices servers you start: it asks the kernel which process holds a port
 - Run a long-lived server in the background so your turn can end while it keeps serving, and give the URL in your reply.
 - Pick a free port rather than the framework default, and never take one an app the user is running already holds.
 - Stop servers you no longer need; a chip for a dead port is noise.`,
+    },
+    {
+        id: 'secrets',
+        title: 'Secrets',
+        summary: 'using credentials you never see',
+        requires: [],
+        text: `## Secrets
+
+When a command needs a credential, ask for it with request_secret({name, why}): the user types the value into a card, and you are told only that it is set. list_secrets shows the names this project already has; every worktree of a repository shares them.
+
+Use one by writing \`$NAME\` or \`"\${NAME}"\` in a Bash command. TGXCode then runs that command in a child shell with the value in its environment, and replaces the value with \`[secret:NAME]\` in what it prints (also its URL-encoded, base64 and hex forms). Because it is a child shell, a \`cd\` inside it does not carry over to your next command. To pass a secret to a script, mention it in the command: \`API_KEY="$API_KEY" ./deploy.sh\`.
+
+- Never echo, log, print or write a secret to a file, and never ask the user to paste one into the conversation.
+- A command that names a secret that is not set is not run; ask for it first.
+- The store is outside the repository and you cannot read it; do not try.`,
     },
     {
         id: 'commands',

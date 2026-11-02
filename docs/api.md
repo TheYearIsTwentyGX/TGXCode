@@ -265,6 +265,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
 `POST /api/sudo/ask` (the askpass helper's route — always); `POST /api/sudo/:id/answer`
 **unless `sudo.allowRemote` is on** (`POST /api/sudo/:id/deny` and `GET /api/sudo` stay open);
+everything under `/api/secrets` except `GET /api/secrets` and `POST /api/secrets/asks/:id/deny` (§*Secrets*);
 `permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
@@ -2430,7 +2431,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`prs[]`** | **array of objects** — `{number, url, repo}`, as on a session summary; empty `[]` if none, never null. Part of `sig`. **Status is not here** — colour it from `prs-changed` / `GET /api/prs`, keyed by `sessionId`, which do not move `sig`. The web board draws the glyph on `recent` and `pinned` cards only |
 | **`live`** | **object or null** — the registry entry, as on a session summary |
 | **`runner`** | **object or null — eight fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind, stalled}`. `stalled` is a bool — see §*`runner-status`*. `lastActivityAt` is deliberately not here: the card's signature would change on every line the turn streams |
-| **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request`. **Or a sudo ask** (`runner.sudoAsk`, `kind: "sudo"`) when that is all the session is waiting on — answered with `POST /api/sudo/:id/…`, never with `/permission`. A sudo ask's `askFor` is always `"you"`: an orchestrator has no password to give |
+| **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request`. **Or a sudo ask** (`runner.sudoAsk`, `kind: "sudo"`) when that is all the session is waiting on — answered with `POST /api/sudo/:id/…`, never with `/permission`. A sudo ask's `askFor` is always `"you"`: an orchestrator has no password to give. **Or a secret ask** (`runner.secretAsk`, `kind: "secret"`), answered with `POST /api/secrets/asks/:id/…` (§*Secrets*), `askFor` always `"you"` |
 | **`askFor`** | **`"you"`, `"orchestrator"` or null** — null exactly when `ask` is. `"orchestrator"` only on a worker card whose orchestrator is carrying it (`orchestratorId` set) and is still handling its asks; it becomes `"you"` once the ask is *stuck* — the orchestrator paused, or not working (not `busy`/`starting`, or itself waiting on an ask) and the ask's `askedAt` at least 3 minutes old. The orchestrator page's rule (`needsYou`). It moves with the clock alone, and moves `sig` when it does. Either way the ask is answerable from the card; the first answer wins and the orchestrator is told |
 | **`orchestratorId`** | **string or null** — on a worker card, the orchestrator whose card it is drawn inside (that card's `workers.ids` lists it). Null for every other card, including a worker whose orchestrator is not on the board, archived or gone — that one is an ordinary card |
 | **`workers`** | **object or null** — on an orchestrator's card when it carries workers, null otherwise: `{ids: string[], queued: [{id, title, at}], idle: number, finished: number, own: boolean, paused: boolean, quiet: [{id, title, state, at, standing}]}`. Set on an orchestrator card in `sessions` that carries active workers or queued spawns, **and** on any orchestrator card — in `sessions` or in `recent` — that has quiet workers (below); the second kind has `ids: []`, `queued: []` and `own: true`. `ids` are the session ids of its *active* open workers — a reason of `ask`, `here`, `error` or `elsewhere` — whose cards are elsewhere in `sessions`, ordered asks that are yours first, then errors, then asks the orchestrator has, then by when each was started. `queued` are spawns waiting behind the orchestrator's `maxRunning` and have no session yet (`title` a string or null, `at` epoch ms, or 0 when the spawn recorded none). **`quiet`** is an array of objects, its *quiet* workers — open ones with no active reason, and closed ones — which have **no card of their own anywhere on the board**: `id` string (a session id), `title` string or null, `state` `"idle"` (open) or `"finished"` (closed), `at` epoch ms or null (the session's last activity, `lastTs` else file mtime), `standing` string or null (the session's `standing.text`). Idle first, then finished, newest first within each, **at most 20**. `idle` and `finished` are the uncapped counts of those same two kinds, so `idle + finished - quiet.length` is how many were left off the list. A *pinned* worker, or one whose session is missing (deleted, or a test session the bridge is not listing), is in neither the list nor the counts — see below. An archived one is listed: closing a worker archives its session by default, so most `finished` rows are archived sessions, which still open. `own` is false when the orchestrator is on the board only because of its workers — it has no reason of its own, or only `pinned`, which does not count. Part of `sig`, and so are the worker cards it lists: a change on any of them, or on a `quiet` row, moves this card's `sig`. (Until this release `quiet` did not exist, `idle` counted pinned workers too, and the quiet workers were also cards in `recent`.) |
@@ -3436,7 +3437,7 @@ sum of `counts`. All times are epoch ms unless the field says ISO.
 
 | Group | Item shape | |
 |---|---|---|
-| `waiting` | `{sessionId, title: string\|null, project: string\|null, kind: "tool"\|"plan"\|"question"\|"sudo", tool: string\|null, requestId: string\|null, askedAt: number\|null}` | **Live, not "since"**: every ask pending *now*, whenever it was raised. An ask raised and answered while you were away is not here; one raised before you left still is. Answer it with `POST /api/sessions/:id/permission` (a `"sudo"` row: §*Approving sudo*, and watch `sudo-resolved`); watch `permission-resolved` and `runner-status` to drop a row the moment it is answered elsewhere |
+| `waiting` | `{sessionId, title: string\|null, project: string\|null, kind: "tool"\|"plan"\|"question"\|"sudo"\|"secret", tool: string\|null, requestId: string\|null, askedAt: number\|null}` | **Live, not "since"**: every ask pending *now*, whenever it was raised. An ask raised and answered while you were away is not here; one raised before you left still is. Answer it with `POST /api/sessions/:id/permission` (a `"sudo"` row: §*Approving sudo*, and watch `sudo-resolved`; a `"secret"` row: §*Secrets*, and watch `secret-resolved`); watch `permission-resolved` and `runner-status` to drop a row the moment it is answered elsewhere |
 | `failed` | `{id, sessionId: string\|null, title, project: string\|null, type, summary: string\|null, at, anchorId: string\|null}` | Notification rows of type `failed`, `stalled`, `schedule-failed`, `schedule-missed`, `later-failed`, `later-missed`. `id` and `anchorId` are the notification row's, so a client can open it exactly as it opens a History row. **`sessionId` may be null** (a schedule that never produced a session) |
 | `finished` | `{sessionId, title, project: string\|null, turns: number, lastAt: number, standing: {text, source: "model"\|"extract", at}\|null}` | `finished` notification rows grouped **one entry per session**; `turns` is how many, `lastAt` the newest. `standing` is the session's current standing line, as on `/api/sessions` rows. A finish re-emitted by a bridge adopting a turn after a restart (two within 5 s) is counted once |
 | `prs` | `{repo, number, url, title: string\|null, change: "opened"\|"merged"\|"closed", at: number, approx: boolean}` | From the PR cache, so only repositories some session has touched. `opened` is GitHub's `createdAt`. For `merged`/`closed`, `at` is GitHub's `mergedAt`/`closedAt` when the cache has it; otherwise it is **when this bridge noticed** the PR had settled, and `approx` is `true` — draw that as approximate, it can be well after the fact |
@@ -3979,6 +3980,8 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `sudo-ask` | a **sudo ask**, the object in §*Approving sudo* (`kind: "sudo"`, `id` = `requestId`). Ungated: every stream gets it. **Never carries a password**, and there is no event that does. Also files a `notification` row and pushes a `runner-status` for that session, whose `sudoAsk` is this object |
 | `sudo-resolved` | `{id, requestId, sessionId, outcome, reason?}` — `outcome` is `"approved"` (a password was handed to sudo — not necessarily the right one; a wrong one comes back as a new `sudo-ask` with `attempt` one higher), `"denied"` or `"cancelled"` (sudo exited, the Bash call was stopped or timed out; `reason` says which). Take the card down. Its notification row is resolved `allow`, `deny` or `cancelled` |
+| `secret-ask` | a **secret ask**, the object in §*Secrets* (`kind: "secret"`, `id` = `requestId`): an agent asked for a secret by name. Ungated: every stream gets it. **Never carries a value**, and there is no event that does. Also files a `notification` row and pushes a `runner-status` for that session, whose `secretAsk` is this object |
+| `secret-resolved` | `{id, requestId, sessionId, name, outcome, reason?}` — `outcome` is `"saved"` (the value is stored; the agent is told it is set), `"denied"` or `"cancelled"` (the agent's tool call went away; `reason` says so). Take the card down. Its notification row is resolved `allow`, `deny` or `cancelled` |
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred` and `session_moved`, which are `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `session_moved` and `move_failed` (a move queued for the end of an orchestrator's turn was made, or dropped because its directory had gone — see `POST …/orchestrator/move`), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
@@ -4008,6 +4011,7 @@ down from:
 
 | **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
 | **`sudoAsk`** | **object or null** — a `sudo -A` waiting on a password, same shape as `sudo-ask` (§*Approving sudo*). Separate from `pendingPermission`, and both can be set at once |
+| **`secretAsk`** | **object or null** — a secret the agent asked for with `request_secret`, same shape as `secret-ask` (§*Secrets*). Separate from `pendingPermission` and `sudoAsk` |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
 | `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
@@ -5833,6 +5837,11 @@ The ask shape (`permission-request`, and `runner.pendingPermission`):
 form (`mcp__tgxcode__set_summary` → `TGXCode: Set Summary`), whatever the CLI
 sent; for anything else it is the CLI's own label, usually the same as `tool`.
 
+**`secretNames`** — **array of strings, present only on a Bash ask the secrets hook
+wrapped** (§*Secrets*). `input.command` is then the command that runs, unwrapped, and
+these are the secrets it runs with in its environment. Say so on the card. An
+`updatedInput.command` sent with an `allow` is wrapped again by the bridge.
+
 **An ask does not expire.** There is no deadline to count down and no
 `expiresAt` — a card waits as long as you do, and a client that attaches later
 finds it on `runner.pendingPermission`. `askedAt` is there so a client can say how
@@ -6564,6 +6573,112 @@ client author knows it is not for them. It does **not** take the bridge token: i
 reads and verifies everything else in `/proc`. `401` without a valid key; `403` from a
 remote caller, when `sudo.enabled` is off, or when the pid is not a sudo child carrying
 that key. `200 {password}` or `200 {denied: true, reason}`.
+
+## Secrets
+
+Values an agent uses without being shown them: an API key, a token, a password. An
+agent asks for one **by name** with the `request_secret` MCP tool, which raises a
+**secret ask**: a card where the user types the value or denies it. The agent is told
+only that it is set. It then writes `$NAME` in a Bash command; a hook the bridge gives
+every session wraps that command so the value is put into its environment and
+redacted from its output. The design, what was measured and the honest limits are in
+`docs/manual.md` §*Secrets*; this is the contract.
+
+**Secrets belong to a project**, keyed by the main repository's root, so every
+worktree of a repository shares one set. Every route takes a `cwd` (an absolute path
+anywhere in the project) and answers about that project; the answer's `project` is
+the root it resolved to. Names are **`^[A-Z][A-Z0-9_]{0,63}$`**, and names that would
+change how a command runs are refused (`PATH`, `HOME`, `IFS`, `NODE_OPTIONS`, `LD_*`,
+`BASH_*`, `CLAUDE_*`, `TGXCODE_*`, `SUDO_*`, `LC_*` and a few more): `400` with a
+sentence. A value is a non-empty string of at most 16 KB with no NUL.
+
+**No event, list or ask ever carries a value.** Two routes return one: `reveal` and
+`resolve`, both refused to remote callers. **A remote client may list names and deny
+an ask, and nothing else** — it cannot set, change, delete, reveal or answer.
+
+**A client that shows asks should show these.** They arrive on the live channel as
+`secret-ask` / `secret-resolved`, sit on `runner.secretAsk` of the full runner status,
+and on a board card's `ask` (and a digest `waiting` row) when nothing else is pending,
+with `ask.kind === "secret"`. **Answer only with the routes below** — the `requestId`
+means nothing to `/permission`. An orchestrator is never asked: `askFor` is always
+`"you"`. Raised while no client is watching, an ask is denied at once.
+
+The ask:
+
+```json
+{ "id": "q1Yv3kE7xRzA", "requestId": "q1Yv3kE7xRzA", "kind": "secret",
+  "tool": "secret", "displayName": "Secret", "sessionId": "…",
+  "name": "STRIPE_TEST_KEY", "why": "To run the payment tests against Stripe's test mode.",
+  "cwd": "/home/me/shop/.claude/worktrees/pay", "project": "/home/me/shop",
+  "exists": false, "askedAt": 1793220157720 }
+```
+
+| Field | Type | |
+|---|---|---|
+| `id` = `requestId` | string | Use it in the routes below. |
+| `name` | string | The secret's name. Draw it as the thing being asked for. |
+| `why` | string | The agent's own sentence, at most 500 characters; may be empty. |
+| `cwd`, `project` | string, string | Where the agent runs, and the project root the value will be saved under. |
+| `exists` | bool | Whether the project already has this name. Usually false: the tool answers at once when it is set. |
+| `askedAt` | number | Epoch ms. **No expiry**: the ask lasts until it is answered, denied, or the agent's tool call goes away (`secret-resolved`, `cancelled`). |
+
+`secret-resolved` is `{id, requestId, sessionId, name, outcome, reason?}`, `outcome`
+being `"saved"`, `"denied"` or `"cancelled"`. Take the card down. Its notification row
+is resolved `allow`, `deny` or `cancelled`.
+
+### `GET /api/secrets?cwd=`
+
+`{project: string, secrets: [{name, createdAt, updatedAt}], asks: [ask]}` — the
+project's names (dates are epoch ms) and its open asks. **Never a value.** Open to
+remote callers. `400` without an absolute `cwd`.
+
+### `POST /api/secrets/asks/:id/answer`
+
+`{value: string}` → `200 {ok: true}`. The value is saved under the ask's project and
+the waiting tool is told it is set. **Send it from the client that typed it; never
+relay or store it.** `400` for a value that is not allowed, `403 {remote: true}` from
+a remote caller, `409` when the ask was already answered or has gone.
+
+### `POST /api/secrets/asks/:id/deny`
+
+No body → `200 {ok: true}`, `409` as above. **Open to remote callers**: refusing grants
+nothing. The agent is told not to ask again unless the user says to.
+
+### `PUT /api/secrets/:NAME`
+
+`{cwd, value}` → `200 {ok: true, secret: {name, createdAt, updatedAt}}`. Adds or
+replaces. Local only.
+
+### `DELETE /api/secrets/:NAME?cwd=`
+
+`200 {ok: true}`, or `404` when it is not set. Local only.
+
+### `POST /api/secrets/:NAME/reveal`
+
+`{cwd}` → `200 {name, value}`, `404` when it is not set. Local only. For a person
+pressing Reveal; drop the value from memory when it is hidden again.
+
+### `POST /api/secrets/ask` — the MCP tool's route, not a client's
+
+`{sessionId, name, why, cwd}`, held open until the ask is settled; `200 {saved: true,
+name, existed?}` or `200 {denied: true, reason}`. Local only.
+
+### `POST /api/secrets/resolve` — the wrapper's route, not a client's
+
+`{cwd, names: [string], sessionId}` → `200 {values: {NAME: value}}`, or `404 {error,
+missing: [names]}` when any is not set. Local only, token required like every route.
+Called by `bridge/secret-exec.js`; the bridge logs which names were used by which
+session, never a value.
+
+### What the transcript shows
+
+A Bash `tool_use` keeps the command the model wrote, `$NAME` and all. The hook's
+rewrite is recorded beside it, as
+`'<node>' '<bridge>/secret-exec.js' NAME -- '<the command>'`. Neither carries a value.
+**A permission ask for a wrapped command arrives unwrapped**: `input.command` is the
+command that runs inside the wrapper, and a `secretNames` array (present only then)
+says which secrets it gets. An `updatedInput.command` sent back with the answer is
+re-wrapped by the bridge.
 
 ## Phone installs
 

@@ -26,6 +26,12 @@
 //                           which installs it itself. See bridge/phone-installs.js.
 //   phone_install_status  — look in on one later, rather than guess or file it again.
 //
+// Two that let an agent use a credential without being shown it:
+//
+//   request_secret  — ask you for a secret by name; you type it into a card, and
+//                     the agent is told only that it is set. See bridge/secrets.js.
+//   list_secrets    — the names this project has. Never a value.
+//
 // And one that is about the app itself:
 //
 //   tgxcode_guide  — read a section of the agent brief, the longer half of the
@@ -608,6 +614,36 @@ const PHONE_INSTALL_STATUS = {
     },
 };
 
+const REQUEST_SECRET = {
+    name: 'request_secret',
+    title: 'Ask the user for a secret',
+    description: [
+        'Ask the user for a secret — an API key, a token, a password — by name. They type',
+        'the value into a card in TGXCode; you never see it. Once it is set, write it as',
+        '$NAME (or "${NAME}") in a Bash command and TGXCode puts the value into that',
+        'command\'s environment, and replaces it with [secret:NAME] in what the command',
+        'prints. Never echo, log or write a secret to a file, and never ask the user to',
+        'paste one into the conversation. Waits until the user answers. If the secret is',
+        'already set this returns at once. Secrets belong to the project (every worktree',
+        'of a repository shares them).',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            name: { type: 'string', description: 'Upper-case letters, digits and _, e.g. STRIPE_TEST_KEY.' },
+            why: { type: 'string', description: 'One sentence the user reads: what it is for, and where to find it.' },
+        },
+        required: ['name', 'why'],
+    },
+};
+
+const LIST_SECRETS = {
+    name: 'list_secrets',
+    title: 'List this project\'s secrets',
+    description: 'The names of the secrets set for this project, usable as $NAME in Bash. Never the values.',
+    inputSchema: { type: 'object', properties: {} },
+};
+
 const GUIDE = {
     name: 'tgxcode_guide',
     title: 'Read the TGXCode guide',
@@ -996,7 +1032,7 @@ const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WO
     READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_AUTO_RESUME, SET_SUMMARY, MOVE_SESSION];
 
 const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
-    WAKE_ME_UP, INSTALL_ON_PHONE, PHONE_INSTALL_STATUS,
+    WAKE_ME_UP, INSTALL_ON_PHONE, PHONE_INSTALL_STATUS, REQUEST_SECRET, LIST_SECRETS,
     ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
     ...(ROLE === 'worker' ? [REPORT] : []),
     ...(PREVIEW ? [OPEN_IN_PREVIEW] : [])];
@@ -1802,6 +1838,49 @@ async function callReport(id, args) {
         : 'Filed in your orchestrator\'s inbox.');
 }
 
+// The secrets tools — bridge/secrets.js. Neither result can carry a value: the
+// bridge never sends one on these routes.
+const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+const SECRET_RETRY_MS = 90_000;
+
+async function callRequestSecret(id, args) {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    if (!SECRET_NAME.test(name)) {
+        return toolError(id, 'name must be upper-case letters, digits and _, starting with a letter, e.g. TEST_KEY');
+    }
+    if (!SESSION_ID) return toolError(id, 'this session does not know its own id');
+    const body = { sessionId: SESSION_ID, name, why: String(args.why || '').slice(0, 500), cwd: process.cwd() };
+    // Held open until the user answers. A bridge that restarts drops it, and the
+    // ask is raised again on the next one — the sudo helper's rule, for its reason.
+    const started = Date.now();
+    let r;
+    for (;;) {
+        r = await api('POST', '/api/secrets/ask', body);
+        if (r.status !== 0 || Date.now() - started > SECRET_RETRY_MS) break;
+        await new Promise(res => setTimeout(res, 2000));
+    }
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+    const b = r.body || {};
+    if (b.saved) {
+        return say(id, `${name} is ${b.existed ? 'already ' : ''}set. Use it as $${name} in a Bash command; `
+            + 'its value is put into that command\'s environment and redacted from its output. '
+            + 'Do not echo it or write it to a file.');
+    }
+    return say(id, `The user did not provide ${name} (${b.reason || 'denied'}). Do not ask again `
+        + 'unless they say to; tell them what it was needed for.');
+}
+
+async function callListSecrets(id) {
+    const r = await api('GET', `/api/secrets?cwd=${encodeURIComponent(process.cwd())}`);
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+    const names = ((r.body && r.body.secrets) || []).map(s => s.name);
+    return say(id, names.length
+        ? `Secrets set for this project: ${names.join(', ')}. Use one as $NAME in a Bash command.`
+        : 'No secrets are set for this project. Ask for one with request_secret.');
+}
+
 const ROLE_CALLS = {
     orchestrator: {
         spawn_worker: callSpawnWorker, list_workers: callListWorkers, next_message: callNextMessage,
@@ -1847,6 +1926,8 @@ async function handle(msg) {
         if (name === 'wake_me_up') return callWakeMeUp(id, args);
         if (name === 'install_on_phone') return callInstallOnPhone(id, args);
         if (name === 'phone_install_status') return callPhoneInstallStatus(id, args);
+        if (name === 'request_secret') return callRequestSecret(id, args);
+        if (name === 'list_secrets') return callListSecrets(id, args);
         if (name === 'open_in_preview' && PREVIEW) return callOpenInPreview(id, args);
         const roleCall = ROLE && ROLE_CALLS[ROLE] && ROLE_CALLS[ROLE][name];
         if (roleCall) return roleCall(id, args);

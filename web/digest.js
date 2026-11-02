@@ -186,7 +186,7 @@ function when(at) {
 }
 
 const ASK_WORDS = { tool: 'wants to use', plan: 'has a plan to approve', question: 'has a question',
-    sudo: 'wants a sudo password' };
+    sudo: 'wants a sudo password', secret: 'wants a secret' };
 const FAIL_WORDS = {
     failed: 'Failed', stalled: 'Stalled', 'schedule-failed': 'Schedule failed',
     'schedule-missed': 'Schedule missed', 'later-failed': 'Send failed', 'later-missed': 'Send missed',

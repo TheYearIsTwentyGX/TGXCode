@@ -1563,6 +1563,111 @@ path's last step, sudo accepting a correct password from the helper (the helper'
 stdout is exactly the password and a newline, which is what both sudos read), and
 the cache's per-parent scope, which is from sudo-rs's and sudo's documentation.
 
+### Secrets
+
+An agent that needs an API key, a token or a password can ask for it **by name**
+instead of asking you to paste it into the chat. It calls `request_secret` with a
+name like `STRIPE_TEST_KEY` and a sentence saying what it is for. A card appears in
+the session, and on Needs you, the notification log and as a desktop notification.
+You type the value into a masked field and press **Save**, or **Deny**. The agent is
+told only that the secret is set.
+
+```
+┌ Secret — the agent asks for a value ───────────────────────┐
+│  STRIPE_TEST_KEY                                           │
+│  To run the payment tests against Stripe's test mode.      │
+│  Saved for ~/shop. The agent uses it as $STRIPE_TEST_KEY … │
+│  [ ••••••••••• ]                                           │
+│  [ Save ⏎ ]  [ Deny ]                                      │
+└────────────────────────────────────────────────────────────┘
+```
+
+From then on the agent writes `$STRIPE_TEST_KEY` in a Bash command. The command runs
+with the value in its environment, and **the value is replaced with
+`[secret:STRIPE_TEST_KEY]` in everything the command prints**. The same goes for its
+URL-encoded, base64 and hex forms, so `curl -v` echoing an `Authorization:` header,
+or a `Basic` credential built from it, comes back redacted too.
+
+**Settings › Secrets** lists a project's secrets by name, with **Reveal** (shown to
+you for 30 seconds), **Update**, **Delete**, and a row to add one yourself before an
+agent asks.
+
+**Where they are kept.** One file per project in
+`~/.local/share/tgxcode/secrets/`, readable only by you (`0600` in a `0700`
+directory). The project is the main repository, so every worktree of it shares one
+set. It is kept outside the repository on purpose. A file inside it, however well
+ignored, is one `git add -f`, one `git clean -fdx`, one zip of the checkout or one
+Read call away from somewhere it should not be. Nothing is written to your checkout.
+
+**How it works.** Every session TGXCode starts is given a `PreToolUse` hook on Bash
+(`bridge/secret-hook.js`, through `claude --settings`). When a command mentions
+`$NAME` for a secret the project has, the hook rewrites it to
+
+```
+'<node>' '<bridge>/secret-exec.js' STRIPE_TEST_KEY -- 'npm test'
+```
+
+That wrapper (`bridge/secret-exec.js`) fetches the value from the bridge over
+loopback with the token. It runs the original command in `bash -c` with the value
+exported, and redacts what comes back as it streams. If a name is not set, or the
+bridge cannot be reached, it **refuses to run the command** rather than run it with
+`$NAME` empty.
+
+**What the agent and the transcript see.** The model's own tool call is kept as it
+wrote it, `$STRIPE_TEST_KEY` and all. The rewrite is recorded beside it, carrying
+names only. Neither ever contains the value, so nothing in
+`~/.claude/projects` does unless the command printed it in a form the redaction does
+not recognise.
+
+**What changes for the agent.** A command that uses a secret runs in a child shell.
+A `cd` inside it does not carry over to the next Bash call, and shell functions
+Claude Code's snapshot defined are not there. A script is given a secret by
+mentioning it in the command (`API_KEY="$API_KEY" ./deploy.sh`), or in a comment on
+it.
+
+**Permissions are unchanged.** The hook rewrites a command and never approves one. A
+command that would have raised a card still does, showing the command as the agent
+wrote it and which secrets it gets. One side effect, in the safe direction: an allow
+rule like `Bash(npm test:*)` does not match the wrapped command, so a secret-using
+`npm test` asks where a plain one would not.
+
+From the phone you can see the names and deny an ask. Entering, changing or revealing
+a value is the desk's alone.
+
+#### What this protects against, and what it does not
+
+**It stops a secret ending up in a transcript, a tool result or a command by
+accident.** That is the common failure: a key pasted into chat, echoed while
+debugging, or printed by a verbose tool. Each of those now lands as `[secret:NAME]`
+or never happens.
+
+**It does not stop an agent that sets out to get the value.** An agent runs as you.
+It can read the bridge token (`~/.local/share/tgxcode/token`) and call the routes
+with it. It can print the value in a form the redaction does not know (reversed, one
+character per line, XORed, compressed), or send it off the machine in a request. The
+agent's Read and Edit tools are denied the store directory, and Bash commands that
+name it are refused. Both are there to catch a mistake, and neither survives an
+agent trying. **Give a secret only to a session you would trust with it in plain
+sight**, and prefer keys that are scoped and revocable: a test-mode key, a token
+with one permission.
+
+Values shorter than 8 characters are redacted only in their raw form; their encoded
+forms would match too much ordinary output. In a base64 form, the four-character
+groups that mix the value with what surrounds it are left as they are, so the first
+and last byte or two of the value can still be recovered from them —
+`printf %s "user:$KEY" | base64` comes back as `dXNlcjpl[secret:KEY]Ug==`. And a value that is a common word will
+be redacted wherever that word appears.
+
+**What was verified, on CLI 2.1.312.** A hook given through `--settings` fires on
+a session started with `-p`. Its `updatedInput`, with no `permissionDecision`, is what
+runs. It still goes through the permission flow, evaluated against the rewritten
+command: a command outside the working directory was denied with no rule for it,
+and denied when the only allow rule named the original command. The transcript kept
+the model's original `tool_use` and recorded the hook's output beside it.
+`test/secrets.test.js` covers the rest on every run: names, file modes, the shared
+store, the hook's rewrite and its quoting, redaction across reads and encodings, the
+wrapper refusing to run, and the routes' local/remote split.
+
 ### Plans and questions
 
 Two of the things that come down that same channel are not permissions at all —

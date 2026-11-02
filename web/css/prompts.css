@@ -15,7 +15,7 @@
    outlined and warm-tinted, because unlike a tool block it is asking you
    something and the turn does not move until you answer. */
 
-.perm, .sudo-ask {
+.perm, .sudo-ask, .secret-ask {
     /* Left-aligned with event bodies: the gutter is for timestamps, and this
        has no time of its own until the transcript records the outcome. */
     margin: var(--sp-5) 0 var(--sp-3) calc(var(--gutter) + var(--sp-7));
@@ -27,7 +27,7 @@
     animation: perm-in var(--dur-base) var(--ease-out);
 }
 .perm:focus-visible { box-shadow: 0 0 0 var(--focus-w) var(--focus-colour); }
-.perm[data-pending], .sudo-ask[data-pending] { opacity: 0.55; }
+.perm[data-pending], .sudo-ask[data-pending], .secret-ask[data-pending] { opacity: 0.55; }
 
 @keyframes perm-in {
     from { opacity: 0; transform: translateY(var(--sp-2)); }

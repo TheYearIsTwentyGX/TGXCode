@@ -59,7 +59,7 @@ const STUCK_MS = 180_000;
 
 // What a session is blocked on: the CLI's own ask, or a `sudo -A` waiting on a
 // password (bridge/sudo.js). A board treats the two alike; the card says which.
-const askOf = (runner) => (runner && (runner.pendingPermission || runner.sudoAsk)) || null;
+const askOf = (runner) => (runner && (runner.pendingPermission || runner.sudoAsk || runner.secretAsk)) || null;
 
 // A worker with one of these is doing something, or blocked on somebody — the
 // reasons that would have given it a card of its own.
@@ -239,8 +239,8 @@ function hostWorkers({ summaries, reasons, orchs, statuses, now = Date.now() }) 
         for (const a of active) {
             workerOf.set(a.w.id, o.id);
             if (a.ask) {
-                // A sudo password is never the orchestrator's to give.
-                const stuck = !!o.paused || a.ask.kind === 'sudo'
+                // A sudo password or a secret is never the orchestrator's to give.
+                const stuck = !!o.paused || a.ask.kind === 'sudo' || a.ask.kind === 'secret'
                     || (!working && now - (a.ask.askedAt || now) >= STUCK_MS);
                 a.who = stuck ? 'you' : 'orchestrator';
                 askFor.set(a.w.id, a.who);

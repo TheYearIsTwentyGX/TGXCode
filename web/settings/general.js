@@ -40,6 +40,7 @@ import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderClaudeDocs } from './memory.js';
 import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
+import { secretsCard } from './secrets.js';
 import { briefCard } from './brief.js';
 import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
@@ -633,6 +634,12 @@ export const SETTINGS = [
     {
         title: 'Project commands', section: 'commands', category: 'projects', tocTitle: 'Commands',
         card: () => renderCmdConfig(),
+    },
+    // Per project, like the commands above it, and drawn by a component of its
+    // own for the same reason: what it shows is a store only the bridge reads.
+    {
+        title: 'Secrets', section: 'secrets', category: 'projects',
+        card: () => secretsCard(),
     },
     {
         title: 'Notifications', section: 'notify', category: 'connect', card: () => notifyCard(),

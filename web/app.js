@@ -79,6 +79,7 @@ import {
     resolveAsk, setPlanAside,
 } from './transcript/approvals.js';
 import { refreshSudo, resolveSudo } from './transcript/sudo.js';
+import { refreshSecret, resolveSecret } from './transcript/secret.js';
 import {
     closeDiff, collapseChanges, fetchDiff, jumpFromDiff, loadChanges, renderChanges,
     resetChanges, setDiffOpt, showChanges,
@@ -855,6 +856,7 @@ function clearCurrent() {
     state.agents = [];
     state.ask = null;
     state.sudoAsk = null;
+    state.secretAsk = null;
     clearPendingSend();   // the conversation it was drawn in is gone
     leaveAgent();
     clearInterval(state.busyTimer);
@@ -3092,6 +3094,30 @@ function connect() {
         resolveSudo(p);
     });
 
+    // An agent asking for a secret by name — bridge/secrets.js. The sudo ask's
+    // rules: announced and counted, never deferred to an orchestrator, and the
+    // payload names the secret but never carries a value.
+    es.addEventListener('secret-ask', (e) => {
+        const p = JSON.parse(e.data);
+        announceAsk(p);
+        state.waiting.add(p.sessionId);
+        paintLiveBadge();
+        paintTaskboardBadge();
+        if (state.current && p.sessionId === state.current.sessionId) refreshSecret(p);
+    });
+
+    es.addEventListener('secret-resolved', (e) => {
+        const p = JSON.parse(e.data);
+        clearAsk(p.sessionId);
+        digestOnResolved(p);
+        if (!(state.ask && state.current && state.current.sessionId === p.sessionId)) {
+            state.waiting.delete(p.sessionId);
+        }
+        paintLiveBadge();
+        paintTaskboardBadge();
+        resolveSecret(p);
+    });
+
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
         // Rate limits belong to the pill. `rate_limit_event` arrives on every
@@ -3319,6 +3345,8 @@ export function applyRunner(s) {
     refreshAsk(ask);
     // And a `sudo -A` waiting on a password, which has a card of its own.
     refreshSudo((s && s.sudoAsk) || null);
+    // And a secret the agent asked for, which has one too.
+    refreshSecret((s && s.secretAsk) || null);
 
     // Approving a plan changes the mode out from under the selector, so a change
     // the bridge reports outranks a mode picked here and not yet sent: what the

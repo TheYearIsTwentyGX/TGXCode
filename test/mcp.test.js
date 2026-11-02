@@ -95,7 +95,7 @@ const TASK = {
         assert.deepStrictEqual(list.result.tools.map(t => t.name), [
             'tgxcode_guide', 'suggest_session', 'list_sessions', 'message_session',
             'find_tasks', 'start_task', 'set_task_status', 'schedule_session', 'wake_me_up',
-            'install_on_phone', 'phone_install_status',
+            'install_on_phone', 'phone_install_status', 'request_secret', 'list_secrets',
         ]);
         for (const t of list.result.tools) {
             const modes = t.inputSchema.properties.permissionMode;
@@ -361,6 +361,26 @@ const TASK = {
         assert.strictEqual(r.isError, true);
         assert.match(r.text, /No phone install with id nope/);
         ok('phone_install_status reads one by id, or this session\'s latest, and says where it got to');
+
+        // The secrets tools: a bad name never reaches the bridge, the ask carries
+        // the session and where it runs, and neither answer has a value to repeat.
+        r = await mcp.call('request_secret', { name: 'test_key', why: 'x' });
+        assert.strictEqual(r.isError, true);
+        assert.strictEqual(seen.length, 0);
+        answers.set('POST /api/secrets/ask', { status: 200, body: { saved: true, name: 'TEST_KEY' } });
+        r = await mcp.call('request_secret', { name: 'TEST_KEY', why: 'for the tests' });
+        assert.strictEqual(r.isError, false, r.text);
+        assert.deepStrictEqual(seen[0].body, { sessionId: 'me', name: 'TEST_KEY', why: 'for the tests',
+            cwd: process.cwd() });
+        assert.match(r.text, /^TEST_KEY is set\. Use it as \$TEST_KEY in a Bash command/);
+        answers.set('POST /api/secrets/ask', { status: 200, body: { denied: true, reason: 'denied' } });
+        r = await mcp.call('request_secret', { name: 'TEST_KEY', why: 'x' });
+        assert.match(r.text, /did not provide TEST_KEY \(denied\)/);
+        answers.set('GET /api/secrets', { status: 200, body: { secrets: [{ name: 'A_KEY' }, { name: 'B_KEY' }] } });
+        r = await mcp.call('list_secrets', {});
+        assert.strictEqual(seen[0].query.get('cwd'), process.cwd());
+        assert.match(r.text, /A_KEY, B_KEY/);
+        ok('request_secret and list_secrets talk names, never values');
 
         // set_summary, as an orchestrator: the brief's structured fields are in the
         // schema, and only the ones the model passed reach the bridge — a field
