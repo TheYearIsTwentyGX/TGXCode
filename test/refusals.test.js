@@ -127,6 +127,10 @@ const HOME = os.homedir();
     check('publishing to GitHub', (await call('POST', '/api/github/publish', {
         headers: PHONE, body: { cwd: HOME, owner: 'x', name: 'x' },
     })).status, 403);
+    // Cloning is publish's mirror: it writes a repository onto this disk.
+    check('cloning from GitHub', (await call('POST', '/api/github/clone', {
+        headers: PHONE, body: { repo: 'a/b', parent: HOME },
+    })).status, 403);
     // Opening a path is the mkdir clause with a window on the end of it, and the
     // path comes out of a transcript rather than out of the app.
     check('opening a path', (await call('POST', '/api/fs/open', {

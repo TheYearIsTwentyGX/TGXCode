@@ -1589,7 +1589,8 @@
         <input id="new-cwd" type="text" spellcheck="false">
         <div class="note">The agent runs here. Pick one below, or type a path —
           <code>~</code> works, and Enter browses to it.
-          <button id="new-gh" class="link-btn" type="button" hidden>Publish to GitHub…</button></div>
+          <button id="new-gh" class="link-btn" type="button" hidden>Publish to GitHub…</button>
+          <button id="new-clone" class="link-btn" type="button">Clone from GitHub…</button></div>
       </div>
       <div class="field">
         <div class="picker-tabs" role="tablist" aria-label="Pick a working directory">
@@ -2364,6 +2365,24 @@
     <div class="modal-foot">
       <span class="spacer"></span>
       <button class="btn quiet" data-close-orch-pick type="button">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Clone from GitHub: the other direction from the dialog above, and stacked
+     the same way, over Start-a-session. Drawn by web/github/clone.js. -->
+<div id="gc-scrim" class="scrim" hidden>
+  <div class="modal gh gc" role="dialog" aria-modal="true" aria-labelledby="gc-title">
+    <div class="modal-head">
+      <span id="gc-title">Clone from GitHub</span>
+      <button class="modal-close" data-close-gc type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="gc-body" class="modal-body"></div>
+    <div class="modal-foot">
+      <span id="gc-foot-note" class="gh-foot-note"></span>
+      <span class="spacer"></span>
+      <button class="btn quiet" data-close-gc type="button">Cancel</button>
+      <button id="gc-go" class="btn primary" type="button">Clone</button>
     </div>
   </div>
 </div>

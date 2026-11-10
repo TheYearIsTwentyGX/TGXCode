@@ -483,6 +483,12 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/github/publish') {
         return 'a repository can only be published from the machine it lives on';
     }
+    // Cloning writes a repository onto this machine's disk, under whatever
+    // account gh is logged in as — the same direction of travel as publish, and
+    // the same exact-equality match. `repos`, `resolve` and `clone-target` read.
+    if (pathname === '/api/github/clone') {
+        return 'a repository can only be cloned onto the machine it will live on';
+    }
     // Exact equality, not a prefix: GET /api/fs stays readable remotely.
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';

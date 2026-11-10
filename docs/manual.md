@@ -1287,6 +1287,41 @@ group only appears there. See *The titlebar*.
 **Updates** is the same again: the desktop app does the checking and keeps these
 itself. See *Updating the desktop app*.
 
+### Cloning a repository from GitHub
+
+**Clone from GitHub…** sits under the working-directory box in *Start a session*, beside
+*Publish to GitHub…*, which goes the other way. Take the repository either of two ways:
+
+- **Type it.** `owner/repo`, `owner\repo`, `https://github.com/owner/repo` (with or
+  without `.git`), `git@github.com:owner/repo.git`, or a link to a branch
+  (`…/tree/<branch>`, which fills in the Branch box). Half a second after you stop typing it
+  is looked up with `gh repo view`, and the line under the box says what it found — private or
+  public, the default branch, the description — or that the repository was not found *or*
+  that your GitHub account cannot see it (GitHub does not say which, and neither does
+  this). A URL on another host (GitLab, Bitbucket, your own server) is cloned with plain
+  `git`, over https or ssh only, with git's own credentials rather than gh's.
+- **Pick it.** The list holds every repository the logged-in `gh` account can reach: its own, ones
+  it collaborates on, and every organisation's, private ones included, newest push first,
+  with visibility, description and when it was last pushed to. It loads fifty at a time as
+  you scroll. The search box looks at names and descriptions across the whole account,
+  not only what has loaded. The first search on a very large account reads every page from GitHub and
+  takes a few seconds; the next one is instant.
+
+**Where it goes** is a parent folder and a folder name. The parent starts as the folder you last
+cloned into, else `~/Projects` (or the first of a few similar names that exists, else your home
+directory); the name starts as the repository's. It has to be inside the allowed roots. The
+bridge refuses a folder that already holds files, and refuses a parent that is inside another
+repository's working tree — a checkbox appears to say you meant it, because it is occasionally
+right (vendoring a project) and usually a mistake.
+
+**Clone** runs `gh repo clone`, so private repositories use gh's login, and lists what it did: found,
+cloned, checked out. A failure shows git's own message and leaves no half-made folder behind. *Use this folder* then makes it Start's
+working directory. A project here is just a directory a session has run in, so there is
+nothing else to register; start the session and it appears in the rail.
+
+Cloning writes to this machine's disk, so it is refused to a phone or any other remote caller,
+as publishing is. Listing and looking up repositories is not.
+
 ### Test sessions
 
 A session can be marked **test**, which means only a development bridge lists it;

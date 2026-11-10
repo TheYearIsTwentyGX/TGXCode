@@ -768,3 +768,49 @@
 }
 .img-bar .icon-btn { color: var(--text-2); font-size: 15px; }
 .img-bar .icon-btn.done { color: var(--green); }
+
+/* ── Clone from GitHub (web/github/clone.js) ─────────────────────────────── */
+
+.modal.gc { width: min(640px, 100%); }
+.gc-list {
+    margin-top: var(--sp-4);
+    max-height: 240px;
+    overflow-y: auto;
+    border-radius: var(--r);
+    background: var(--bg);
+}
+.gc-repo {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    width: 100%;
+    padding: var(--sp-4) var(--sp-6);
+    text-align: left;
+    color: var(--text-2);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+}
+.gc-repo:hover { background: var(--s3); }
+.gc-repo[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--blue); background: var(--s2); }
+.gc-repo-top { display: flex; align-items: baseline; gap: var(--sp-4); min-width: 0; }
+.gc-repo-name { color: var(--text); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-vis {
+    flex: none;
+    padding: 0 var(--sp-3);
+    border-radius: var(--pill);
+    background: var(--s3);
+    font-size: var(--fs-sm);
+    color: var(--text-3);
+}
+.gc-vis[data-vis="private"], .gc-vis[data-vis="internal"] { color: var(--yellow); }
+.gc-when { margin-left: auto; flex: none; font-size: var(--fs-sm); color: var(--text-4); }
+.gc-repo-desc { font-size: var(--fs-sm); color: var(--text-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-msg { padding: var(--sp-5) var(--sp-6); font-size: var(--fs-sm); color: var(--text-4); }
+.gc-msg.bad { color: var(--yellow); }
+.gc-more { display: block; margin: var(--sp-4) auto; }
+.gc-slash { padding-top: 0; }
+.gh-row > input.gc-name { flex: 0 1 200px; }
+.gh-row > input#gc-parent { flex: 1; min-width: 0; }
+.gc-use { margin: 0 var(--sp-4) 0 0; }
+#gc-input-note[data-kind="bad"], #gc-dest-note[data-kind="bad"] { color: var(--yellow); }
+#gc-input-note[data-kind="ok"], #gc-dest-note[data-kind="ok"] { color: var(--green); }
+.field label.check[hidden] { display: none; }

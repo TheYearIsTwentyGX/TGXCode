@@ -145,6 +145,7 @@ import {
 } from './new-session/dialog.js';
 import { showNewMenu, wireNewMenu } from './new-session/recent.js';
 import { openPublish, wirePublish } from './github/publish.js';
+import { wireClone } from './github/clone.js';
 import { openWorktrees, wireWorktrees } from './worktrees.js';
 import {
     drSave, drToOrchestrator, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
@@ -4104,6 +4105,7 @@ wireAttachments(newC);
 wireWispr();
 wireNewDialog();
 wirePublish();
+wireClone();
 wireWorktrees();
 
 // ✕, Cancel and a whole click outside — no Escape; see modalUp().

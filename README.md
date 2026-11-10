@@ -369,7 +369,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
 | `bridge/routes/analytics.js` | `/api/analytics` and `/api/analytics/sessions/:id` |
 | `bridge/routes/search.js` | `/api/search` — full text across every transcript, with the same test/temp filtering as the list |
-| `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
+| `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish; repos, resolve, clone-target, clone |
 | `bridge/routes/worktrees.js` | `/api/worktrees*`: the worktree janitor's listing, and the removal refused to remote callers |
 | `bridge/routes/pr-reviews.js` | `/api/pr-review` (the nightly review's findings) and `/api/pr-review/fix` (a session on the PR's branch to fix them) |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
@@ -395,6 +395,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/scratchpad.js` | A session's scratchpad directories under `/tmp/claude-<uid>/` (one per worktree it entered), listed and read with containment |
 | `bridge/pulls.js` | Everything this app asks GitHub about a pull request, what its status *is*, and the review it leaves behind |
+| `bridge/github-clone.js` | Cloning an existing repository: reading `owner/repo` / `owner\repo` / URL forms, the logged-in account's repo list, resolving with `gh repo view`, destination checks, `gh repo clone` |
 | `bridge/github.js` | Publishing a directory to GitHub: who gh is logged in as, `git init`, starter files, a first commit, `gh repo create --source --push` and `gh repo edit` |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
@@ -576,6 +577,7 @@ Two rules worth knowing before you send a patch:
 | `web/new-session/dialog.js` | Opening and closing it, the working-directory box, the values Start and Save send, and its first-message box (`newC`) |
 | `web/new-session/picker.js` | The Recent and Browse tabs over one directory, and the New-folder row |
 | `web/github/publish.js` | The Publish to GitHub dialog, opened from the project ⋮ menu and from Start-a-session |
+| `web/github/clone.js` | The Clone from GitHub dialog, opened from Start-a-session |
 | `web/worktrees.js` | The worktree janitor dialog, opened from the project ⋮ menu and a dashboard project heading. Removing one safe row takes one click; Remove all safe asks first, in the dialog |
 | `web/new-session/templates.js` | The template picker, its placeholder boxes, Save as…, and the dialog's edit-a-template mode |
 | `web/new-session/recent.js` | The recent-directories menu on the New button's split half |
