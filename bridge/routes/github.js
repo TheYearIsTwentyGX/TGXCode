@@ -1,12 +1,14 @@
 'use strict';
 
-// Publishing a directory to GitHub: `/api/github/*`. The work is in
-// bridge/github.js. This file does the checks every directory-taking route does
+// Publishing a directory to GitHub, and cloning a repository from it:
+// `/api/github/*`. The work is in bridge/github.js and bridge/github-clone.js. This file does the checks every directory-taking route does
 // (allowed roots) and turns a `Refusal` into its status code.
 //
-// Only the POST writes anything, and it is refused to remote callers in
-// server.js's `remoteRefusal`: it creates a repository under your account and
-// pushes from this machine. The GETs stay open because they only read.
+// Only the two POSTs write anything, and both are refused to remote callers in
+// server.js's `remoteRefusal`: publish creates a repository under your account
+// and pushes from this machine, clone writes a repository onto its disk. The
+// GETs stay open because they only read — the repository list included, which
+// is what `gh` already shows to anyone holding the token.
 //
 // One of the route modules server.js's `api()` asks in turn — see the note above
 // ROUTES there for the contract.
@@ -15,6 +17,7 @@ const path = require('path');
 
 const cfg = require('../config');
 const github = require('../github');
+const clone = require('../github-clone');
 const { NEXT, send, readJson } = require('../http');
 
 function dirParam(raw) {
@@ -65,6 +68,44 @@ async function handle(req, res, url, pathname) {
         if (!cwd) return send(res, 403, OUTSIDE);
         try {
             return send(res, 200, await github.publish(cwd, body));
+        } catch (err) {
+            if (err instanceof github.Refusal) return send(res, err.status, { error: err.message });
+            throw err;
+        }
+    }
+
+    // --- cloning -----------------------------------------------------------
+
+    if (pathname === '/api/github/repos' && req.method === 'GET') {
+        return send(res, 200, await clone.repos({
+            q: q.get('q') || '',
+            offset: q.get('offset'),
+            limit: q.get('limit'),
+            refresh: q.get('refresh') === '1',
+        }));
+    }
+
+    if (pathname === '/api/github/resolve' && req.method === 'GET') {
+        return send(res, 200, await clone.resolve(q.get('input') || '', { branch: q.get('branch') }));
+    }
+
+    if (pathname === '/api/github/clone-target' && req.method === 'GET') {
+        const parent = q.get('parent');
+        const base = clone.defaultParent();
+        if (!parent) return send(res, 200, { defaultParent: base });
+        const t = await clone.checkDestination({
+            parent, name: q.get('name') || '', allowNested: q.get('allowNested') === '1',
+        });
+        return send(res, 200, {
+            defaultParent: base, parent: t.parent, name: t.name, path: t.path,
+            problem: t.problem, nested: t.nested, exists: t.exists,
+        });
+    }
+
+    if (pathname === '/api/github/clone' && req.method === 'POST') {
+        const body = await readJson(req);
+        try {
+            return send(res, 200, await clone.clone(body));
         } catch (err) {
             if (err instanceof github.Refusal) return send(res, err.status, { error: err.message });
             throw err;

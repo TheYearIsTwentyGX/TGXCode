@@ -96,6 +96,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-tpl-row', 'new-tpl', 'new-tpl-edit', 'new-tpl-del', 'new-tpl-fill', 'new-tpl-save',
     'new-tpl-save-row', 'new-tpl-name', 'new-tpl-scope', 'new-tpl-save-go', 'new-tpl-save-cancel',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
+    'gc-scrim', 'gc-body', 'gc-go', 'gc-foot-note', 'new-clone',
     'wt-scrim', 'wt-title', 'wt-body', 'wt-foot',
     'orch-pick-scrim', 'orch-pick-body', 'new-orch-send',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
@@ -224,6 +225,8 @@ export function modalUp() {
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
         || isUp(dom.ghScrim)
+        // Clone from GitHub: a half-filled form, and up over Start-a-session too.
+        || isUp(dom.gcScrim)
         // The worktree janitor holds no work either, and is here for the
         // plan/question review's reason.
         || isUp(dom.wtScrim)

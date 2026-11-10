@@ -476,5 +476,6 @@ async function runSteps(cwd, o, before, who) {
 module.exports = {
     repoNameProblem, suggestName, createArgs, editArgs, topicsOf, fillLicense, parseRemotes,
     account, templates, teams, nameTaken, repoState, publish, Refusal,
+    ghJson, QUIET_ENV,
     VISIBILITIES, SQUASH_MESSAGES,
 };

@@ -36,6 +36,7 @@ import {
 } from './picker.js';
 import { describeCronSoon, paintGateFields, paintNewAttach, paintNewSend, setWhen } from './trigger.js';
 import { openPublish } from '../github/publish.js';
+import { openClone } from '../github/clone.js';
 import { prepareTemplates } from './templates.js';
 
 // ── new session ──────────────────────────────────────────────────────────
@@ -553,6 +554,21 @@ export function publishFromNew(cwd) {
     openPublish(cwd, { onDone: () => paintNewGh() });
 }
 
+/**
+ * Open Clone from GitHub over this dialog. A finished clone becomes the working
+ * directory, the way a New folder does: walking into it is what selects it.
+ */
+export function cloneFromNew() {
+    openClone({
+        browseDir: state.browse.dir || null,
+        onDone: async (dir) => {
+            await browseTo(dir);
+            toast(`Cloned into ${homely(dir)}.`, 'ok');
+            dom.newPrompt.focus();
+        },
+    });
+}
+
 export function closeNew() {
     closeModal(dom.newScrim);
     // Hiding the scrim does not blur the box inside it, so the blur-to-close
@@ -738,6 +754,7 @@ export function wireNewDialog() {
     });
 
     dom.newGh.addEventListener('click', () => publishFromNew(dom.newCwd.value.trim()));
+    dom.newClone.addEventListener('click', cloneFromNew);
 
     // The worktree row. The prompt writes the name until somebody types in the
     // name box; clearing that box hands it back to the prompt's next edit, and

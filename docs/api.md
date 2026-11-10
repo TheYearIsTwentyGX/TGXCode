@@ -272,7 +272,7 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/commands-config*`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/shell-build*` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`; `/api/preview/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
-`POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
+`POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`; `POST /api/github/clone`;
 `POST /api/worktrees/remove`;
 the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
@@ -6988,7 +6988,9 @@ says not to retry), anything else as an error result with the bridge's sentence.
 
 ## Publishing to GitHub
 
-Turning a directory into a GitHub repository: `git init` if needed, starter files,
+Two directions. **Publish** turns a directory into a GitHub repository; **clone**
+(§*Cloning* at the end of this section) turns a repository into a directory. The
+desktop opens clone from Start-a-session. Publish: `git init` if needed, starter files,
 a first commit, `gh repo create --source --push`, then `gh repo edit` for what
 create cannot set. The desktop opens it from the project ⋮ menu (when there is no
 origin) and from Start-a-session. Everything goes through the `gh` CLI on the
@@ -6996,8 +6998,8 @@ bridge's machine, logged in as whoever ran `gh auth login` there. There is no
 token of its own.
 
 All of these need the token, and the POST needs `X-TGXCode-Client: 1` like every
-write. **`POST /api/github/publish` is refused to remote callers** (`403 {error,
-remote: true}`). The GETs are allowed remotely.
+write. **`POST /api/github/publish` and `POST /api/github/clone` are refused to remote
+callers** (`403 {error, remote: true}`). The GETs are allowed remotely.
 
 ### `GET /api/github/account[?refresh=1]`
 
@@ -7116,6 +7118,147 @@ Otherwise **200**, whatever happened:
   gets 120 seconds.
 - Afterwards `/api/origin` and the pull-request refresher see the new origin
   straight away.
+
+### Cloning a repository
+
+`gh repo clone owner/repo <dir>` into a folder you choose, so gh's login is used and
+private repositories work. A repository on another host gets a plain `git clone`,
+restricted to https and ssh, with git's own credentials. The desktop's **Clone from
+GitHub** dialog uses the four routes below. A project is just a directory a session
+has run in, so there is nothing to register: start a session in `path` afterwards.
+
+#### `GET /api/github/repos[?q=<text>&offset=<n>&limit=<n>&refresh=1]`
+
+The repositories the logged-in gh account can reach, **its own, other people's it
+collaborates on, and every organisation's it belongs to, private ones included**
+(`gh api user/repos`, `affiliation=owner,collaborator,organization_member`), newest
+push first.
+
+```
+{ repos: [{fullName, owner, name, description: string|null,
+           visibility: "public"|"private"|"internal", private: bool,
+           fork: bool, archived: bool,
+           pushedAt: string|null, updatedAt: string|null,   // ISO 8601
+           defaultBranch: string|null, language: string|null}],
+  more: bool,           // another slice exists: ask again with offset += repos.length
+  truncated: bool,      // a search stopped at 3000 repositories without reaching the end
+  authed: bool, installed: bool, error: string|null }
+```
+
+- `limit` is 1–100, default 50. `offset` counts matches, not GitHub pages.
+- **Without `q`** only as many GitHub pages (100 each) are fetched as the slice
+  reaches into, so the first slice of a large account is one request.
+- **With `q`** every page is read, because a match could be on any of them, and the
+  rest of the work is memoised: a second search costs nothing. Every
+  whitespace-separated term has to appear, in any order, in the full name or the
+  description, case-insensitively. The first search on a large account is slow.
+- Pages are memoised for five minutes per account. `refresh=1` drops them and the
+  account memo.
+- Always **200**. Not logged in is `authed: false` with `repos: []`, and a GitHub
+  failure is `error` with `repos: []`.
+
+#### `GET /api/github/resolve?input=<text>[&branch=<name>]`
+
+Reads what a person typed and asks the host whether it exists and is visible to this
+account. Accepted forms: `owner/repo`; `owner\repo` (a backslash is read as a
+separator); `github.com/owner/repo`; `https://github.com/owner/repo`, optionally with
+`.git`, a trailing slash, `?query`, `#fragment`, or a page of the repository such as
+`/pull/12`; `/tree/<branch>` (the branch, slashes allowed, is taken from it);
+`git@github.com:owner/repo.git`; `ssh://git@github.com/owner/repo.git`. A URL on any
+**other host** (`https://` or `ssh://`, or `git@host:path`) is accepted as a plain git
+clone. Refused: a bare name, `a/b/c`, local paths, `file:`, `ext::` and any other
+scheme, `http://` and `git://` outside github.com, anything starting with `-`, a
+user or host that could be read as an ssh option.
+
+Always **200**:
+
+```
+{ ok: true, kind: "github"|"other",
+  fullName: string,        // GitHub's own capitalisation; "host/path" for kind "other"
+  name: string,            // the suggested folder name
+  branch: string|null,     // from /tree/<branch> or `branch`, confirmed to exist
+  url: string, private: bool|null, visibility: string|null, description: string|null,
+  defaultBranch: string|null, archived: bool, empty: bool, fork: bool,
+  permission: string|null, sizeKb: number|null }       // gh's viewerPermission, diskUsage
+| { ok: false, reason: "invalid"|"not-found"|"access"|"auth"|"no-gh"|"no-branch"|"error",
+    error: string }
+```
+
+- `not-found` covers both a repository that does not exist and one this account
+  cannot see; GitHub does not distinguish them and neither does this.
+- A `/tree/main/src/lib` link has a branch of `main/src/lib` until it is checked, and
+  is shortened from the right until a branch that exists is found.
+- For `kind: "other"` the check is `git ls-remote --heads`; `private`, `visibility`,
+  `description`, `defaultBranch` and `sizeKb` are null.
+
+#### `GET /api/github/clone-target[?parent=<dir>&name=<folder>&allowNested=1]`
+
+Is this destination usable? Not cached. With no `parent` it only reports
+`{defaultParent: string|null}`: the first of `~/Projects`, `~/projects`, `~/Code`,
+`~/code`, `~/dev`, `~/src`, `~/repos`, `~/Repos`, `~/workspace` that exists, else the
+home directory (the first of those inside the allowed roots; null if none is).
+
+```
+{ defaultParent: string|null,
+  parent: string|null,     // resolved, `~` expanded
+  name: string, path: string|null,   // parent/name
+  problem: string|null,    // the sentence to show; null when a clone may go ahead
+  nested: string|null,     // root of the repository `parent` is inside, if any
+  exists: bool }           // the folder is already there (and empty, or `problem` says why not)
+```
+
+`problem` is set for: no `parent`; a `parent` or the resolved target outside the
+allowed roots (a symlink leading out of them counts); a `name` that is empty, `.`,
+`..`, contains a slash or backslash, a NUL, `< > : " | ? *`, starts with `-` or `.`,
+or is over 255 bytes; a `parent` that is not a directory; a target that exists and is
+not an empty directory; and a `parent` inside another repository's working tree
+**unless `allowNested=1`**. `nested` is reported in that last case either way, so a
+client can ask before the user presses Clone.
+
+#### `POST /api/github/clone`
+
+Body:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `repo` (or `input`) | string | | anything `/api/github/resolve` accepts |
+| `parent` | string | | the directory to clone into; roots-scoped, `~` works |
+| `name` | string | the repository's name | the new folder, inside `parent` |
+| `branch` | string | the `/tree/` branch, else the default | passed to `git clone --branch` |
+| `allowNested` | bool | `false` | permit a `parent` that is inside another repository |
+
+Resolution and every check above run again before anything is executed, so the
+refusals are decided with nothing changed:
+
+- `400 {error}`: unreadable reference, bad folder name or branch, a parent that is
+  not a directory, gh not logged in, `no-gh`.
+- `403 {error}`: `parent` (or the resolved path) outside the allowed roots.
+- `404 {error}`: the repository is not found or not visible to this account, or
+  the branch does not exist.
+- `409 {error}`: the folder exists and is not empty (or is a file), `parent` is
+  inside another repository and `allowNested` is not set, or that folder is already
+  being cloned into.
+
+Otherwise **200**, whatever git said:
+
+```
+{ ok: bool, fullName: string, url: string, path: string,
+  steps: [{step: string, ok: bool, skipped?: true, detail: string|null}],
+  branch?: string|null, empty?: bool }     // the last two only when ok
+```
+
+- `steps` in order: `find repository`, an optional skipped `note` (archived),
+  `clone`, `check out`. They stop at the first failure.
+- On failure the `clone` step carries git's message. A folder the clone created is
+  removed; an empty folder that was already there is left alone.
+- `branch` is `git branch --show-current` afterwards; null with `empty: true` for a
+  repository with no commits.
+- `git` and `gh` run with `GIT_TERMINAL_PROMPT=0` and `GH_PROMPT_DISABLED=1`, so a
+  clone that wants credentials fails with a message instead of hanging. Other hosts
+  also get `GIT_ALLOW_PROTOCOL=https:ssh`. The clone is given ten minutes.
+- Afterwards `/api/origin` and the pull-request refresher see the new checkout
+  straight away.
+
 
 ## The worktree janitor
 
