@@ -2,7 +2,7 @@
 
 // Sessions as a collection: the list, `/api/projects`, who an agent could hand
 // work to (`/api/sessions/addressable`), starting one (`POST /api/sessions`), and
-// `/api/slash-commands` for the composer. One session's own routes are
+// `/api/slash-commands` and `/api/file-search` for the composer. One session's own routes are
 // session.js and session-workspace.js.
 //
 // **Asked before session.js, and that order is load-bearing.**
@@ -31,6 +31,7 @@ const { draftsPayload } = require('./drafts');
 const { resolveAttachments } = require('./files');
 const { createWorktree } = require('../worktree');
 const { cleanTitle } = require('../flags');
+const fileSearch = require('../file-search');
 
 // Handed over by server.js — see the note above ROUTES there.
 let CREATE_LIMIT = null;
@@ -342,6 +343,41 @@ async function handle(req, res, url, pathname, seg, who) {
         // and it lets the menu say so quietly instead of raising an error at
         // somebody who only pressed a key.
         return send(res, 200, slashCommands.for(cwd));
+    }
+
+    // --- file search (composer `@` completion) ------------------------------
+    //
+    // Same addressing as slash-commands, for the same two callers. A read, and
+    // open to a remote caller like the listing beside /api/fs: it names files
+    // under the allowed roots and reads none of them. The session form is checked
+    // against the roots too — a session whose directory has since moved outside
+    // them is not somewhere to enumerate. Bounded in bridge/file-search.js.
+    if (pathname === '/api/file-search' && req.method === 'GET') {
+        const session = url.searchParams.get('session');
+        let cwd;
+        if (session) {
+            const summary = index.summary(session);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            cwd = sessionCwd(summary);
+        } else {
+            cwd = cfg.expandHome(url.searchParams.get('cwd') || '');
+            if (!cwd) return send(res, 400, { error: 'session or cwd is required' });
+        }
+        if (!cfg.withinRoots(cwd)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: path.resolve(cwd),
+                roots: cfg.ALLOWED_ROOTS,
+            });
+        }
+        cwd = path.resolve(cwd);
+        try {
+            const r = await fileSearch.search(cwd, url.searchParams.get('q') || '', limitOf(url, 50, 100));
+            return send(res, 200, { cwd, ...r });
+        } catch {
+            // Gone, or not a directory: a menu has nothing to say about it.
+            return send(res, 404, { error: 'directory not found', path: cwd });
+        }
     }
 
     return NEXT;

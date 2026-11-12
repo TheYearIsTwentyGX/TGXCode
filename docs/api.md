@@ -380,6 +380,10 @@ subagent transcripts filed under its id.
 terms as `…/tool-image`: they read only that session's transcript and its subagents',
 and serve the same four raster types.
 
+`GET /api/file-search` is readable remotely as well — it names files under the
+allowed roots and reads none of them — and is roots-scoped for the session form
+too, not only for `?cwd=`.
+
 `GET /api/slash-commands` is readable remotely for the same reason, and is a
 different route from `GET /api/commands` despite the name — one is what the CLI
 will accept in the composer, the other is what the repository declares in
@@ -3584,6 +3588,51 @@ have no file.
 (read back from disk at startup), `fallback` (another directory's list, with
 `exact: false`) or `none`. An unknown directory is `commands: []` and 200, never
 a 404: the caller pressed a key, and an empty list is a real answer.
+
+### `GET /api/file-search?session=<id>&q=<text>` · `GET /api/file-search?cwd=<path>&q=<text>`
+
+Files and directories under a working directory that match what was typed after
+an `@`, for a composer that completes them. Response:
+
+```
+{ cwd: string,                 // the directory searched, absolute
+  git: boolean,                // true: listed with git, so .gitignore was honoured
+  truncated: boolean,          // the listing was cut at a cap; deep paths may be missing
+  results: [ { path: string,       // relative to cwd, "/"-separated, no leading "./"
+               name: string,       // the last segment
+               parent: string,     // the rest of path, "" at the top level
+               isDirectory: boolean } ] }
+```
+
+`q` is optional. Rows are best-first: a basename that is the query, then one that
+starts with it, then one that contains it, then a path segment that does, then a
+fuzzy (subsequence) match — a directory ranks with the files in it, shallower
+before deeper, and modification time breaks ties. **An empty `q` is the top of
+the tree** (entries directly under `cwd`, directories first), and **a `q` ending in
+`/` that names a directory is that directory's direct children** in the same order,
+which is how a client drills in. A `q` containing `/` is matched against the whole
+path. Case is ignored. `limit` defaults to 50 and is capped at 100.
+
+What is listed: inside a git work tree, `git ls-files --cached --others
+--exclude-standard` (so every ignore rule applies, and files deleted from disk are
+dropped), plus the directories that hold them. Outside one, a breadth-first walk that
+skips `node_modules`, `.git`, `Library`, `Temp`, caches and similar, does not follow
+symlinks (a symlink to a directory is listed as an entry and not entered), and stops
+at 20,000 directory entries or 1.5 s — `truncated: true` then. A listing is cached
+per directory for about five seconds, so a file created a moment ago may not appear
+until the next keystroke after that.
+
+Addressed by session or by directory, like `GET /api/slash-commands`, and for the
+same reason. **Both forms are roots-scoped**: a `cwd` — or a session's directory —
+outside `TGXCODE_ROOTS` is `403 {error, path, roots}` for every caller. A read, so
+**open to a remote caller**, like `GET /api/fs`. Refusals: `400` with neither
+`session` nor `cwd`; `404` for an unknown session, or a directory that does not
+exist or is a file (`{error, path}`).
+
+What a client should insert for a chosen row is the CLI's own `@` syntax, relative
+to `cwd`: `@<path> ` for a file, `@"<path>" ` when the path has whitespace in it,
+and `@<path>/` for a directory (the CLI reads `@dir/`; a client keeps its menu open
+on it and sends a further query ending in `/`).
 
 ### `GET /api/quota`
 
