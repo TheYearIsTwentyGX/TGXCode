@@ -358,7 +358,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/settings.js` | `/api/prefs`, `/api/keymap`, `/api/spinner/groups`, and Claude Code's own settings and memory files |
 | `bridge/routes/notifications.js` | The notification history, marking it read, clearing it |
 | `bridge/routes/digest.js` | `GET /api/digest` — gathers the inputs for bridge/digest.js |
-| `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
+| `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`, `/api/file-search`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
 | `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume, moving it (Move to main checkout, Move to…, a move queued for the end of its turn) and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
@@ -470,6 +470,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/shell-build.js` | What a shell built from this checkout would be — the hash of what gets packaged, the version — and running that build for the page |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
+| `bridge/file-search.js` | Files and directories under a working directory for the composer's `@` menu: git or bounded walk, cached, ranked |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
@@ -563,7 +564,8 @@ Two rules worth knowing before you send a patch:
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/composer/` | The message boxes — the one under a conversation and the Start-a-session dialog's — and everything that sends from them. Like `transcript/`, none may read an imported binding at top level; load-time listeners are in a `wire*()` that app.js calls |
 | `web/composer/slash.js` | `makeComposer`, the live composer (`live`), the popover machinery `/` and `@` share — selection, paging, the capture-phase keyboard map — and `/` completion |
-| `web/composer/mentions.js` | `@` completion over the other running sessions, and inserting a mention |
+| `web/composer/mentions.js` | `@` completion over files and the other running sessions, and inserting a mention |
+| `web/composer/mention-parse.js` | What is under the caret after an `@`, and the text a chosen file inserts — pure, so `test/mention-parse.test.js` can load it |
 | `web/composer/find.js` | Find and replace in the live composer (Ctrl+H, Ctrl+Alt+F): the bar above the box, the marks in a mirror behind its text, and replacing through `insertAt` so each replace is one undo step |
 | `web/composer/find-match.js` | The matching under it — compiling the query, Whole word, the 10 000 cap, `$1`/`$<name>` expansion and the Replace all splice. Pure; `test/composer-find.test.js` |
 | `web/composer/caret.js` | Scrolling a composer to its caret after an insertion from code — a mirror measures the line, `revealTop` (pure, `test/caret.test.js`) decides the scroll |

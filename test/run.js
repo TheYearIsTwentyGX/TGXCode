@@ -43,8 +43,9 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'brief.test.js', 'titlebar.test.js', 'preview-cdp.test.js', 'preview-grants.test.js',
     'preview-open.test.js', 'preview-mcp.test.js', 'preview-pages.test.js', 'sudo.test.js',
     'update-feed.test.js', 'updater.test.js', 'shell-build.test.js',
-    'secrets.test.js'];
-const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
+    'secrets.test.js', 'file-search.test.js', 'mention-parse.test.js'];
+const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js',
+    'file-search-route.test.js'];
 
 const given = Number(process.argv[2]);
 if (given === 45888) {

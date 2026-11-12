@@ -8,6 +8,13 @@
 import { el } from './dom.js';
 
 export const ICON = {
+    // The `@` menu's file and folder: a page with a folded corner, and a tab-topped
+    // folder, both outlined like everything else here.
+    file: '<path d="M6.5 3.5h7l4 4v13h-11v-17Z" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linejoin="round"/><path d="M13.5 3.5v4h4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linejoin="round"/>',
+    folder: '<path d="M3.5 6.5a1 1 0 0 1 1-1h4.2l2 2.3h8.8a1 1 0 0 1 1 1v9.2a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1V6.5Z" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
     pin: '<path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M12 13v8" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linecap="round"/>',

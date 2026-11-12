@@ -185,16 +185,34 @@ conversation visible, which it was not. (It does build one transport of its own,
 the case `SendMessage` cannot cover at all — a session that is not running. That is
 the next section, and it goes nowhere near this socket.)
 
-- **`@` in the composer** lists the sessions that are actually running, from
-  Claude Code's own process registry, and inserts the one you pick as
-  `@[name]`. The name is the whole address — there is no separate addressing
-  syntax — so getting the exact one into the message is the entire job. Rows
-  show the title you know the session by and the name that gets inserted, since
-  those are often not the same thing.
+- **`@` in the composer** opens a menu with two groups, **Files** first and
+  **Sessions** under it. Files are searched in the session's working directory (in
+  the Start-a-session dialog, the directory typed above the box) and sessions are
+  the ones actually running, from Claude Code's own process registry. A row picked
+  from Sessions is inserted as `@[name]`. The name is the whole address — there is no
+  separate addressing syntax — so getting the exact one into the message is the
+  entire job. Rows show the title you know the session by and the name that gets
+  inserted, since those are often not the same thing.
+- **Files** are matched as you type after the `@`: a file whose *name* matches
+  comes before one that only has the text in its folder names, and a fuzzy match
+  (`mnts` finds `mentions.js`) comes last. Each row shows the file's name and, dimmed
+  beside it, the folder it is in. A bare `@` shows the top of the tree. Picking a file
+  inserts `@relative/path ` — relative to the session's directory, which is what
+  Claude Code resolves by itself and reads into the message — and a path with a
+  space in it goes in as `@"my folder/a file.txt" `, the quoted form Claude Code
+  also parses. **Picking a folder inserts `@folder/` and keeps the menu open on what
+  is inside it**, so you can walk down a tree with the arrow keys and Enter.
+  Inside a git repository the list is what git knows about, so `.gitignore` is
+  honoured and `node_modules` and build output never appear; in a plain folder the
+  list skips `node_modules`, `.git`, `Library` and caches, and stops at twenty
+  thousand entries (the menu says nothing about it — type more of the name).
+- **Type `@[`** to ask for sessions only, and `@"` to ask for files only. An `@`
+  in the middle of a word — an email address — opens nothing, and the menu ends at
+  the first space after a plain `@word`; to search sessions by a title that has a
+  space in it, use `@[`.
 - **The brackets are ours, not the CLI's.** Nothing parses them; the agent reads
   them as prose. They exist so a session mention cannot be mistaken for
-  `@path/to/file`, which the CLI *does* resolve on its own — which is what keeps
-  the file half of that menu free for later.
+  `@path/to/file`, which the CLI *does* resolve on its own.
 - **A message that arrives now renders.** It used to render as nothing at all:
   Claude Code delivers one as a user message flagged `isMeta`, and
   `bridge/transcript.js` skipped those wholesale, so a session that had been

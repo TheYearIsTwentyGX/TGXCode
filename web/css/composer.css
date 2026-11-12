@@ -718,6 +718,28 @@
     flex: none;
 }
 
+/* A file or directory: icon, name, then the directory it is in, dimmed. Unlike a
+   session row the directory is the part that gets long, so it is the part that
+   shrinks and takes the ellipsis, and the name keeps its room. */
+.slash-menu.mention .picker-row.file-row .file-icon {
+    flex: none;
+    display: inline-flex;
+    color: var(--text-4);
+}
+.slash-menu.mention .picker-row.file-row .name {
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    flex: 0 1 auto;
+}
+.slash-menu.mention .picker-row.file-row .desc {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.slash-menu .picker-row[aria-selected="true"] .file-icon { color: inherit; }
+
 /* ── a popover that cannot be clipped ─────────────────────────────────────
    The anchored menu above hangs off `.input-row`, which works because the
    composer sits in open page. Inside the new-session dialog it cannot: `.modal`
