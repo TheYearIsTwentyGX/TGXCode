@@ -13,6 +13,7 @@
     "dev": "node scripts/dev.js",
     "dev:headless": "node scripts/dev.js --no-window",
     "bridge": "node bridge/server.js",
+    "screenshots": "node scripts/screenshots/index.js",
     "build": "node scripts/build.js",
     "release:local": "node scripts/release.js",
     "icon": "node app/make-icon.js --preview",

@@ -44,6 +44,8 @@ snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model
 (`Shift` for backwards), `Esc` leave a subagent or close whatever is on top,
 `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
 
+![The command palette: a session, a view and two searches for one word](screenshots/palette.png)
+
 Every one of those but the last three can be remapped — see *Settings*. The last
 three belong to the Electron shell rather than the page, which is why they
 cannot.
@@ -917,6 +919,8 @@ groups that are not in that file: **Notifications**, which is per-browser, and
 **Connect a phone**, which is a task rather than a setting. Both used to be
 buttons in the top bar.
 
+![Settings, on the Orchestrators group](screenshots/settings.png)
+
 The file stayed the only interface for a long time and that was defensible while
 there were three keys in it. At sixteen, across six blocks, with a precedence
 chain of four files and validators that silently drop what they do not like,
@@ -1736,6 +1740,8 @@ wrapper refusing to run, and the routes' local/remote split.
 
 Two of the things that come down that same channel are not permissions at all —
 they are Claude talking to you — and each gets a card of its own.
+
+![A plan waiting for approval: Approve, Approve with auto-accept, Approve with feedback, Keep planning](screenshots/plan.png)
 
 **A plan** arrives when a session in plan mode is ready to start. The plan is
 rendered as the document it is, and approving it decides two things at once:
@@ -2595,6 +2601,87 @@ Two other things that trip agents up here:
 - **One build at a time.** `install.ps1` wipes and rebuilds its staging
   directory, so two agents packaging at once will pull the executable out from
   under each other.
+
+## Screenshots
+
+The pictures in the README and a few in this manual are made by a script, not taken
+by hand, so they can be remade when the interface changes:
+
+```bash
+npm run screenshots                         # all of them, into docs/screenshots/
+npm run screenshots -- --only hero,preview  # some
+npm run screenshots -- --out /tmp/shots     # somewhere else; nothing in the repo changes
+npm run screenshots -- --keep               # leave the demo bridge up and print its URL
+```
+
+**Nothing of yours is in them, and nothing of yours can be.** The script starts a
+bridge of its own on a free port (never 45888) with a temporary `HOME`, state, cache
+and settings directory under `/var/tmp` — not `/tmp`, because the session list hides
+anything that ran there — and a token of its own, then fills it from
+`scripts/screenshots/seed.js`: two invented projects (a to-do list and a weather
+board) as real git repositories with worktrees, the conversations that would have
+produced them, an orchestrator with four workers, and the pull requests a bridge
+would have cached from GitHub. **Every conversation is made up.** The files and
+git history are real, because the Changes drawer, the dashboard and dev-server
+detection read a working tree; the transcripts apply their edits to those files for
+the same reason.
+
+**No `claude` is started.** `TGXCODE_CLAUDE_BIN` points at
+`scripts/screenshots/stub-claude.js`, which speaks just enough stream-json to leave
+three workers where a picture needs them: one in the middle of a tool call, one
+blocked on a permission, one waiting for a plan to be approved. Those states are
+produced by the bridge's real runner against the stub; the cards you see are the
+real cards. What is faked, in full: the transcripts, the quota percentages (written
+as the status line would have), the pull requests' statuses (written into the
+bridge's cache — the demo repositories have no remote), and the answers from the stub.
+
+Three guards stand between the demo and a public repository, and a hit in any of
+them stops the run rather than writing a picture:
+
+1. `seed.js` scans every file it writes for other users' home directories, email
+   addresses and token-shaped strings, and for whatever you have excluded — see
+   below.
+2. Before a picture is kept, the text actually on the page — what is inside the
+   viewport, and what is typed into a field — is scanned for the same patterns, and
+   for the running user's name, home directory and the temporary directory the demo
+   lives in.
+3. The temporary directory's name never reaches the page to begin with: the paths
+   the UI prints are rewritten in the DOM to the demo user's (`/home/demo/…`) before
+   any script of the page runs.
+
+**Excluding what is yours.** A project, a hostname or a name that must never appear
+in a picture goes in `TGXCODE_SHOTS_EXCLUDE` (comma-separated) or in
+`~/.cache/tgxcode/screenshots/exclude.txt` (one per line, `#` for comments) — not in
+the repository, which is public and would then name them. They are matched
+case-insensitively, as whole words, by the first two guards. Your own username and
+home directory are always checked for on the page.
+
+`test/screenshots.test.js` runs the first of these against planted violations, so a
+guard that has stopped firing fails a test rather than a review.
+
+**Setup.** Capturing needs Playwright, which this repository does not depend on and
+will not — `dependencies` is empty on purpose. It is found as `$PLAYWRIGHT_PATH`,
+as an installed package, or under `~/.cache/tgxcode/screenshots`;
+`npm run screenshots -- --setup` installs `playwright-core` and Chromium's headless
+shell there, writing nothing into the checkout. If Chromium then reports a missing
+shared library — on WSL and in containers it is usually `libnspr4`, `libnss3` or
+`libasound2` — and you have no root, fetch them without installing:
+
+```bash
+mkdir -p ~/.cache/tgxcode/chromium-libs && cd ~/.cache/tgxcode/chromium-libs
+apt-get download libnspr4 libnss3 libasound2     # or libasound2t64 on newer Ubuntu
+for f in *.deb; do dpkg -x "$f" .; done
+LD_LIBRARY_PATH=$PWD/usr/lib/x86_64-linux-gnu npm run screenshots
+```
+
+`TGXCODE_SHOTS_CHROME` names a Chromium executable outright.
+
+**Adding a picture** is an entry in `scripts/screenshots/shots.js`: a name, and a
+function that drives the page to the state worth showing and returns a PNG.
+Captures are 1440×900 at 2× and scaled down to the published width, so text stays
+sharp; each is re-encoded losslessly and, only if it is still over 380 KB,
+reduced to 256 colours. There is no phone picture on purpose — the phone is a
+native app, and the web UI has no mobile variant.
 
 ## Notes and limits
 

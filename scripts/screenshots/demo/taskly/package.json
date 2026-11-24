@@ -1,0 +1,11 @@
+{
+  "name": "taskly",
+  "version": "1.3.0",
+  "description": "A small, fast to-do list with tags and filters",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {}
+}

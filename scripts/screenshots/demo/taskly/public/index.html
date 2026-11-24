@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Taskly</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <main>
+        <header>
+            <h1>Taskly</h1>
+            <p id="summary"></p>
+        </header>
+        <form id="add">
+            <input id="title" placeholder="What needs doing?" autocomplete="off">
+            <button>Add</button>
+        </form>
+        <nav id="filters">
+            <button data-status="all" class="on">All</button>
+            <button data-status="open">Open</button>
+            <button data-status="done">Done</button>
+        </nav>
+        <ul id="list"></ul>
+    </main>
+    <script src="/app.js"></script>
+</body>
+</html>
