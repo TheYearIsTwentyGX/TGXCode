@@ -1,0 +1,8 @@
+{
+  "name": "weather-board",
+  "version": "0.4.0",
+  "description": "A tiny weather dashboard",
+  "private": true,
+  "scripts": { "start": "node src/server.js", "test": "node --test" },
+  "dependencies": {}
+}
