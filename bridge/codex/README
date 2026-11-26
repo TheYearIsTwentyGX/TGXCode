@@ -1,0 +1,114 @@
+bridge/codex/ — talking to `codex app-server`
+=============================================
+
+Tested Codex versions: >=0.172.0 <0.173.0
+
+That range is also TESTED in protocol.js, and test/codex-rpc.test.js fails when
+the two disagree. A Codex outside it may work; it has not been looked at. The
+plan (docs/plans/23-codex.md) has the bridge show a banner in that case rather
+than refuse.
+
+What is here (Phase 0 of the plan — nothing in the bridge calls it yet):
+
+  rpc.js       JSON-RPC 2.0 over a readable and a writable. Newline-delimited
+               JSON, an id → promise map, a handler table for server requests,
+               and log-once-and-drop for notifications this build does not know.
+               Knows nothing about processes, so it works over the session
+               host's relayed socket as well as over a child's stdio.
+  client.js    Spawns `codex app-server --listen stdio://` (CODEX_BIN, which is
+               TGXCODE_CODEX_BIN or `codex`) and does the initialize /
+               initialized handshake with experimentalApi on.
+  protocol.js  The tested range, and the ServerNotification / ServerRequest
+               method lists copied from the schema for that version.
+
+Only Node built-ins, like everything else under bridge/.
+
+Upgrading Codex
+---------------
+
+1. `npm i -g @openai/codex@<new>` and `codex --version`.
+2. Regenerate the schema beside the old one, both variants:
+
+     codex app-server generate-json-schema --experimental --out /tmp/s-exp
+     codex app-server generate-json-schema --out /tmp/s-stable
+     mkdir -p docs/codex-schema/<new>/{experimental,stable}
+     cp /tmp/s-exp/codex_app_server_protocol.schemas.json    docs/codex-schema/<new>/experimental/
+     cp /tmp/s-stable/codex_app_server_protocol.schemas.json docs/codex-schema/<new>/stable/
+
+   Only the combined bundle is committed. The generator also writes one file
+   per type (about 6 MB more), all of which is in the bundle.
+3. `diff` the two versions' bundles. Renamed or removed methods are the ones
+   that break us; new notifications are harmless until we want them.
+4. Update TESTED and the two lists in protocol.js, and the range above.
+5. Re-record the fixtures (test/fixtures/codex/record.js --list), read them
+   before committing (the repo is public; the recorder scrubs what it knows
+   about), and run `node test/codex-rpc.test.js`.
+6. Re-check the plan's *Measured on* table, and move what changed into it.
+
+Fit with the runtime contract
+-----------------------------
+
+Phase 1 put the process contract in the header of
+bridge/runtimes/claude/process.js. Checked against it on 0.172.0, the
+Codex adapter (Phase 3) can be written inside it except where noted.
+
+Fits as it is:
+
+  - Framing. The runner splits lines and parses them; Codex is
+    newline-delimited JSON both ways. So the adapter takes parsed objects,
+    and rpc.js's stream handling is not used for a conversation.
+  - Correlated requests. The runner mints string ids (`req_<tag>_<n>`), and
+    Codex's RequestId is `string | integer`. `request(id, verb, payload)` is
+    `{id, method: verb, params: payload}`, and a message with `id` and no
+    `method` is a `response` event.
+  - Unknown messages give an empty event list. Use protocol.js's
+    KNOWN_NOTIFICATIONS for "unknown" and log once, as rpc.js does.
+  - Server requests are asks: requestApproval becomes `ask`, and
+    `serverRequest/resolved` becomes `ask-withdrawn`, but only for an ask still
+    unanswered, because Codex sends it after every answer. Anything not
+    handled becomes `request`, and `refuse()` writes a -32601.
+  - Lifecycle. `turn/start` and `turn/steer` take `clientUserMessageId`, and
+    the userMessage item has a `clientId` field, so `lifecycle` should be able
+    to name the runner's `uuid`. This is unmeasured: the fixtures send no
+    clientUserMessageId, and `clientId` is null in all of them.
+  - setPermissionMode needs no request; it settles at once and the adapter
+    sends the new settings on the next turn/start (D5). withdraw() is always
+    false, since Codex cannot take back a steered message.
+
+Needs a contract change:
+
+  1. The handshake has to gate the queue. The runner calls handshake(),
+     ignores a rejection and flushes the queue straight away. Codex refuses
+     everything before `initialize` with -32600 "Not initialized", and a turn
+     also needs `thread/start` or `thread/resume` answered first, because
+     turn/start needs the threadId. The runner should wait for handshake() to
+     settle before its first flush. Claude's resolves at once, so it loses
+     nothing. For Codex a rejection is fatal, not "an older build".
+  2. A new session's id is minted by Codex. The thread id comes back from
+     thread/start, and the runner reads an `init` whose sessionId differs from
+     its own as a fork (it emits `forked`). The contract needs a way to say
+     "this is the id of a new session": an `init` field, or an isNew rule in
+     the runner.
+  3. Nothing sends `init` on its own. Claude prints system/init when it
+     starts; Codex says nothing until asked. The adapter has to build `init`
+     from the initialize and thread/start responses. It can, but those are
+     responses to requests the adapter made, not the runner (see 4).
+  4. turn() returns a line, but turn/start and turn/steer are requests that
+     need an id, and their answers carry the turn id that interrupt() and the
+     next steer need. The adapter can mint ids from its own space (say
+     `codex_<n>`) and keep those responses to itself, with no `response`
+     event. That works only if the runner ignores a response it is not
+     waiting on, and the contract should say it does.
+  5. A refused steer has to be sent again, not dropped. A message handed over
+     just as the turn ends gets -32600 "no active turn to steer". The
+     `lifecycle` states either keep a turn or drop it (`cancelled`,
+     `discarded`), and read() cannot write. So the contract needs a state, or
+     an event, meaning "not taken: queue it again as a turn of its own".
+  6. answer() is too narrow for Codex's decisions. `{behavior, allowSession}`
+     covers `accept` and `decline`. A command request's `availableDecisions`
+     can instead hold `{acceptWithExecpolicyAmendment}`, a persistent rule,
+     and `cancel`, which also ends the turn. The ask needs to carry the list,
+     and the answer a decision chosen from it.
+  7. requestUserInput is answered with `{answers: {<id>: {answers: [...]}}}`
+     and does not fit `{behavior, updatedInput}` cleanly. Treat it like (6),
+     an answer shape per ask kind, rather than squeezing it into updatedInput.
