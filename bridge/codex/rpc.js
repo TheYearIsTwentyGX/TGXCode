@@ -9,10 +9,18 @@
 // what we ask, a handler table for what it asks us, and a policy for what we do
 // not recognise.
 //
-// It is deliberately ignorant of processes. It takes a readable and a writable
-// and nothing else, so the same object works over a child's stdio today and over
-// the session host's relayed socket once the adapter exists (bridge/host.js
-// carries bytes and nothing more — that is the point of keeping it boring).
+// It is deliberately ignorant of processes: it takes a readable and a writable
+// and nothing else.
+//
+// **The conversation's own process does not go through this.** Since Phase 1
+// (bridge/runtimes/claude/process.js, whose header is the contract) the runner
+// owns line framing and mints the ids of its correlated `rpc`, and an adapter
+// only turns parsed objects into events and back. So a Codex adapter uses
+// protocol.js and the message rules written down here, not a Connection. What
+// a Connection is for is everything outside a conversation: the recorder and the
+// replay test, and the short-lived app-server that model/list, account/read,
+// account/rateLimits/read and config/read need for Settings and the quota meter.
+// bridge/codex/README §Fit lists where the contract and Codex disagree.
 //
 // Decisions worth knowing before changing it:
 //

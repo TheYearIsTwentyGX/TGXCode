@@ -4,9 +4,11 @@
 // thread: spawn, wrap its stdio in a Connection, do the handshake.
 //
 // This is Phase 0 of docs/plans/23-codex.md, so nothing in the bridge calls it
-// yet. It exists so the client can be tested against real recordings before the
-// runner's adapter seam (Phase 1) lands, and so the adapter, when it does, has a
-// process wrapper to call rather than one to write.
+// yet. A conversation's process will not be spawned here: the runner spawns it
+// from the adapter's `bin` and `argv`, through the session host. This is for an
+// app-server outside any conversation (the recorder, the replay test, and the
+// account and model queries Phases 4 and 5 need), and the `-c` / `--listen`
+// argv it builds is what the adapter's `argv()` should return.
 //
 //   - **CODEX_BIN** is `TGXCODE_CODEX_BIN` or `codex`, read once at load the way
 //     CLAUDE_BIN is in bridge/config.js. A test sets it before the require and

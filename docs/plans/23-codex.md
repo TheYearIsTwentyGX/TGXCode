@@ -268,7 +268,13 @@ reads correctly, with no Codex process started by the bridge.
 
 ### Phase 3 — Driving Codex
 
-These are the `runner.js` behaviours, one by one, mapped onto the app-server:
+These are the `runner.js` behaviours, one by one, mapped onto the app-server.
+Phase 1's process contract (the header of `bridge/runtimes/claude/process.js`)
+holds for most of them. `bridge/codex/README` §Fit lists the seven places it
+does not: the handshake has to gate the queue, Codex mints the new session's
+id, there is no unsolicited `init`, turns are requests, a refused steer has to
+be queued again, and approvals and questions have answers richer than
+allow/deny.
 
 | Ours | Codex |
 |---|---|
