@@ -753,15 +753,21 @@ async function handle(req, res, url, pathname, seg, who) {
             const r = pool.get(sessionId);
             if (!r) return send(res, 404, { error: 'no live process for this session' });
             const body = await readJson(req);
+            // `choice` names one of the ask's own `decisions` (a runtime that
+            // offers a list, rather than allow and deny) and says the decision by
+            // itself; `decision` is still required without one, and still works
+            // with one of those asks — the runner maps it onto the list.
+            const choice = typeof body.choice === 'string' && body.choice ? body.choice : null;
             const decision = String(body.decision || '');
-            if (!['allow', 'allow-always', 'deny'].includes(decision)) {
+            if (!choice && !['allow', 'allow-always', 'deny'].includes(decision)) {
                 return send(res, 400, { error: 'decision must be allow, allow-always or deny' });
             }
             // A plan and a question answer over the same route: the extras are
             // what make them more than yes or no — which mode an approved plan
             // continues in, what to tell the model when it is turned down, and
             // the answers themselves.
-            const out = r.answerPermission(String(body.requestId || ''), decision, {
+            const out = r.answerPermission(String(body.requestId || ''), choice ? null : decision, {
+                choice,
                 updatedInput: body.updatedInput && typeof body.updatedInput === 'object'
                     ? body.updatedInput : null,
                 answers: body.answers && typeof body.answers === 'object' ? body.answers : null,
@@ -769,8 +775,10 @@ async function handle(req, res, url, pathname, seg, who) {
                 mode: PERMISSION_MODES.includes(body.mode) ? body.mode : null,
             });
             // 409 rather than 500: losing the race with another window is an
-            // ordinary outcome, not a failure.
-            return send(res, out.ok ? 200 : 409, out);
+            // ordinary outcome, not a failure. 400 for an answer the ask could
+            // never take — a choice it did not offer, or a decision with no
+            // equivalent in its list.
+            return send(res, out.ok ? 200 : out.invalid ? 400 : 409, out);
         }
 
         if (tail === 'flags' && req.method === 'POST') {

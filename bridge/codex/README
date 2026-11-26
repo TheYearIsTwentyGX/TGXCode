@@ -75,40 +75,53 @@ Fits as it is:
     sends the new settings on the next turn/start (D5). withdraw() is always
     false, since Codex cannot take back a steered message.
 
-Needs a contract change:
+Needed a contract change, and now has one (Phase 3's first step; each is a
+case in test/runtime-contract.test.js, against a fake runtime that behaves like
+app-server in that respect):
 
-  1. The handshake has to gate the queue. The runner calls handshake(),
-     ignores a rejection and flushes the queue straight away. Codex refuses
-     everything before `initialize` with -32600 "Not initialized", and a turn
-     also needs `thread/start` or `thread/resume` answered first, because
-     turn/start needs the threadId. The runner should wait for handshake() to
-     settle before its first flush. Claude's resolves at once, so it loses
-     nothing. For Codex a rejection is fatal, not "an older build".
-  2. A new session's id is minted by Codex. The thread id comes back from
-     thread/start, and the runner reads an `init` whose sessionId differs from
-     its own as a fork (it emits `forked`). The contract needs a way to say
-     "this is the id of a new session": an `init` field, or an isNew rule in
-     the runner.
-  3. Nothing sends `init` on its own. Claude prints system/init when it
-     starts; Codex says nothing until asked. The adapter has to build `init`
-     from the initialize and thread/start responses. It can, but those are
-     responses to requests the adapter made, not the runner (see 4).
-  4. turn() returns a line, but turn/start and turn/steer are requests that
-     need an id, and their answers carry the turn id that interrupt() and the
-     next steer need. The adapter can mint ids from its own space (say
-     `codex_<n>`) and keep those responses to itself, with no `response`
-     event. That works only if the runner ignores a response it is not
-     waiting on, and the contract should say it does.
-  5. A refused steer has to be sent again, not dropped. A message handed over
-     just as the turn ends gets -32600 "no active turn to steer". The
-     `lifecycle` states either keep a turn or drop it (`cancelled`,
-     `discarded`), and read() cannot write. So the contract needs a state, or
-     an event, meaning "not taken: queue it again as a turn of its own".
-  6. answer() is too narrow for Codex's decisions. `{behavior, allowSession}`
-     covers `accept` and `decline`. A command request's `availableDecisions`
-     can instead hold `{acceptWithExecpolicyAmendment}`, a persistent rule,
-     and `cancel`, which also ends the turn. The ask needs to carry the list,
-     and the answer a decision chosen from it.
-  7. requestUserInput is answered with `{answers: {<id>: {answers: [...]}}}`
-     and does not fit `{behavior, updatedInput}` cleanly. Treat it like (6),
-     an answer shape per ask kind, rather than squeezing it into updatedInput.
+  1. The handshake gates the queue. An adapter that says `handshakeGates` is
+     handed the start options (`handshake(o)`, the same `o` as argv), and the
+     runner stays `starting` and writes no turn, queued or handed over, until
+     the promise resolves. A rejection is fatal: the process is ended and the
+     queue handed back as a `send-failed` with the rejection's `kind` and
+     `message`. Claude's adapter says false, and nothing about it changed.
+  2. A runtime can mint the session's id. `init` carries `minted: true` for
+     the id of the session this start created; the runner and pool re-key as
+     for a fork, but emit `minted` rather than `forked`. What the runner was
+     created with is a placeholder. NOT yet done: the pool emits `minted` and
+     nothing listens, so the create route still answers with the placeholder,
+     and `index.note(id)` is not called for the minted id. That is the route
+     half of Phase 3's first row, and it is a wire change (docs/api.md).
+  3. `init` may be built from replies. Events still come only from read(),
+     which is the point: an `init` said from read() of the thread/start reply
+     is rebuilt by the adoption replay, and one pushed from a promise would
+     not be. The adapter learns which reply is which from request(id, verb),
+     or from the reply's shape on a replay. `raw` may be null.
+  4. Turns are requests. turn(entry, {handOver}) may return a request with an
+     id from the adapter's own space (`turn/start` when handOver is false,
+     `turn/steer` when true), and the runner drops a `response` for any id it
+     did not mint — always true, now written down and tested. Never mint an id
+     that could be `req_<tag>_<n>`.
+  5. A refused steer is re-sent. A new lifecycle state, `returned`: the entry
+     goes back to unhanded at the front of the queue and is flushed as a turn of
+     its own once nothing is running. The adopt replay knows it too.
+  6. An ask may carry `decisions`, {id, label, behavior, scope:
+     once|session|always, endsTurn, raw}. A client answers with `choice: id`
+     (POST /permission), and the old allow / allow-always / deny body still
+     works, mapped onto the list or refused 400 where the list has no
+     equivalent. Every answer the bridge gives by itself (stop, auto-deny,
+     supersede) picks the nearest entry, so answer() always gets a `choice` on
+     such an ask; `raw` never leaves the bridge. The amendment is
+     `scope: "always"`, and is not remembered as a session allow of ours.
+     NOT yet done: web/ cards still draw allow / deny, so a Codex command card
+     works through the mapping until they draw from the list.
+  7. A question's answers reach answer() as `[{id, question, answers:
+     [string]}]`, and the adapter says them in its runtime's shape. A client
+     may key `answers` by a question's `id` as well as its text, and give
+     several strings. Claude's adapter builds the same updatedInput the runner
+     used to.
+
+Still the adapter's to do, with nothing more needed from the runner: integer
+server-request ids (the runner holds `ask.id` as a string; keep the integer and
+answer with it), and withdrawing a card on `serverRequest/resolved` only while
+it is unanswered.
