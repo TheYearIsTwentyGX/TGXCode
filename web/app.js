@@ -47,6 +47,7 @@ export { paintDashBadge, renderLive };
 import { del, get, patch, post, put } from './api.js';
 import { PREFS_FALLBACK, BOOT_PREFS, BOOT_HOST, pairToken } from './boot.js';
 import { DEFAULT_PERM, state } from './state.js';
+import { can } from './capabilities.js';
 import { dom, closeModal, closeOnClickOutside, el, modalUp, openModal, toast } from './dom.js';
 import { ago, clip, dur, noteHome, setClock, shortPath } from './format.js';
 import { loadChannels, renderChannels } from './channels.js';
@@ -2390,8 +2391,8 @@ export function showStripMenu(s, btn) {
         row('Rename', startRename),
         row(s.pinned ? 'Unpin' : 'Pin to the top', (x) => setFlags(x, { pinned: !x.pinned })),
         row(s.archived ? 'Restore from archive' : 'Archive', (x) => setFlags(x, { archived: !x.archived })),
-        el('div', { class: 'sep' }),
-        row('Delete permanently', askDelete, 'danger'),
+        // Not on a session whose transcript is not ours to remove (`delete`).
+        ...(can('delete', s) ? [el('div', { class: 'sep' }), row('Delete permanently', askDelete, 'danger')] : []),
     );
     placeProjMenu(btn);
     dom.projMenu.querySelector('.picker-row').focus();

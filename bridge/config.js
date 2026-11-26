@@ -12,6 +12,25 @@ const HOME = os.homedir();
 const PROJECTS_DIR = process.env.TGXCODE_PROJECTS_DIR
     || path.join(HOME, '.claude', 'projects');
 
+// Codex keeps its own home, `CODEX_HOME` (default ~/.codex), and one rollout file
+// per thread under its `sessions/YYYY/MM/DD/`. Read-only to us, like ~/.claude:
+// bridge/sessions.js indexes the rollouts beside Claude's transcripts, and reads a
+// thread's name out of `session_index.jsonl` next to them. See
+// bridge/runtimes/codex/transcript.js.
+//
+// A bridge whose Claude directory was pointed elsewhere with TGXCODE_PROJECTS_DIR
+// is a sandbox — a test, a probe — and it does not get the real Codex threads
+// mixed into it unless it asks for some: null here means "no Codex sessions".
+// CODEX_HOME or TGXCODE_CODEX_SESSIONS_DIR is how it asks.
+const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, '.codex');
+const CODEX_SESSIONS_DIR = process.env.TGXCODE_CODEX_SESSIONS_DIR
+    || (process.env.CODEX_HOME || !process.env.TGXCODE_PROJECTS_DIR
+        ? path.join(CODEX_HOME, 'sessions') : null);
+// Titles. Beside `sessions/` rather than inside it, so it follows that directory
+// when only that one was overridden.
+const CODEX_SESSION_INDEX = CODEX_SESSIONS_DIR
+    ? path.join(path.dirname(CODEX_SESSIONS_DIR), 'session_index.jsonl') : null;
+
 // And one file per *running* session here, named for its pid. Read-only to us,
 // like everything else under ~/.claude — see bridge/registry.js.
 const REGISTRY_DIR = process.env.TGXCODE_REGISTRY_DIR
@@ -359,6 +378,7 @@ const VERSION = '1.0.0';
 
 module.exports = {
     HOME, PROJECTS_DIR, REGISTRY_DIR, CACHE_DIR, PORT, HOST, VERSION,
+    CODEX_HOME, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX,
     ROOT, IS_WORKTREE,
     STATE_DIR, TOKEN_FILE,
     TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,

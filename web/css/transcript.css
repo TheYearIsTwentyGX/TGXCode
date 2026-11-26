@@ -1592,3 +1592,6 @@ select.flash { animation: flash-select var(--dur-flash) var(--ease); }
     overflow: hidden;
     pointer-events: none;
 }
+
+/* "codex · read-only" in the header of a session this bridge cannot run. */
+.conv-sub .runtime-chip { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); }

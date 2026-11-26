@@ -8,6 +8,7 @@
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 
+import { can } from '../capabilities.js';
 import { el, toast } from '../dom.js';
 import { clip, clockOf, dateOf, dur } from '../format.js';
 import { escapeHtml } from '../highlight.js';
@@ -77,12 +78,18 @@ function evHead(ev, label, ...more) {
 // transcript, and branching this session from an id that is not in it is a 400
 // at best — so the subagent pane and the inline peek render without them.
 
-/** The actions a turn offers, as menu items. Shared by the buttons and the menu. */
+/**
+ * The actions a turn offers, as menu items. Shared by the buttons and the menu.
+ * Each needs a capability of the open session: resending is a send, and branching
+ * is `branchFromTurn` as well. A session that can do neither offers neither.
+ */
 function turnActions(ev) {
+    if (!can('send')) return [];
     return [
         { label: 'Edit and resend', icon: 'pencil', onClick: () => editAndResend(ev) },
-        { label: 'Edit and branch', icon: 'branch', onClick: () => editAndBranch(ev) },
-    ];
+        can('branchFromTurn')
+            ? { label: 'Edit and branch', icon: 'branch', onClick: () => editAndBranch(ev) } : null,
+    ].filter(Boolean);
 }
 
 function turnButtons(ev) {
@@ -254,7 +261,7 @@ export function renderEvent(ev, opts = {}) {
 export function renderUser(ev, { actions = false } = {}) {
     const body = [];
     // No id is the row drawn at Send, which has nothing on disk to branch from yet.
-    const acts = actions && ev.id;
+    const acts = actions && ev.id && turnActions(ev).length > 0;
     body.push(evHead(ev, 'You', ...(acts ? turnButtons(ev) : [])));
     if (ev.command) {
         body.push(el('div', { class: 'prose', html:
@@ -308,9 +315,16 @@ function attachCards(ev) {
     )));
 }
 
+/** Who wrote a reply: the open session's CLI by name, Claude when it says none. */
+const AGENT_NAME = { claude: 'Claude', codex: 'Codex' };
+function agentName() {
+    const rt = state.current && state.current.runtime;
+    return AGENT_NAME[rt] || (rt ? rt[0].toUpperCase() + rt.slice(1) : 'Claude');
+}
+
 function renderAssistant(ev) {
     return row(ev, 'assistant',
-        evHead(ev, 'Claude'),
+        evHead(ev, agentName()),
         el('div', { class: 'prose', html: renderMarkdown(ev.text) }),
     );
 }

@@ -33,6 +33,16 @@
 // - **A plan or question's offset is the turn it belongs to,** not its own line,
 //   so every offset in the index is a place a window can begin without starting
 //   halfway through a turn.
+//
+// - **A Codex turn begins at its `turn_context` line** (docs/plans/23-codex.md,
+//   Phase 2). That is the line Codex writes when a turn starts, ahead of the
+//   message that started it, so a window opened there holds the whole turn and
+//   the model it ran on. The mark's id and text are still the message's, so the
+//   rail names it the way it names a Claude turn. A message steered into a turn
+//   already running is a mark too, as a folded message is for Claude, but at the
+//   offset of the turn it joined — a window never starts halfway through one.
+//   The Codex reader does the parsing, through its own `buildEvents`, for the
+//   same one-interpretation reason as above.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -41,6 +51,7 @@ const path = require('path');
 const { CACHE_DIR } = require('./config');
 const { buildEvents } = require('./transcript');
 const runtimes = require('./runtimes');
+const codex = require('./runtimes/codex/transcript');
 
 const INDEX_DIR = path.join(CACHE_DIR, 'turns');
 // Bump when a mark's shape or derivation changes, so an old file is rebuilt
@@ -51,6 +62,8 @@ const INDEX_VERSION = 1;
 // table of asks that are a plan or a question (`tools.asks`, the same table the
 // runner draws its cards from). Claude's, while every indexed session is Claude's.
 const REVIEWABLE = runtimes.toolsOf('claude').asks;
+// Codex's, for an index built with `runtime: "codex"`.
+const CODEX_REVIEWABLE = runtimes.toolsOf('codex').asks;
 // The raw-line test for one of them, before anything is parsed: the name, quoted.
 const REVIEWABLE_NEEDLES = Object.keys(REVIEWABLE).map(name => `"${name}"`);
 // What the rail's popover shows of a message; more would be bytes on every open.
@@ -121,13 +134,13 @@ function wanted(pendingIds) {
     return want;
 }
 
-function toolMark(ev, offset) {
+function toolMark(ev, offset, table = REVIEWABLE) {
     const input = ev.input || {};
     return {
-        kind: REVIEWABLE[ev.name], id: ev.id, offset, ts: ev.ts || null, name: ev.name,
+        kind: table[ev.name], id: ev.id, offset, ts: ev.ts || null, name: ev.name,
         status: ev.status || 'pending',
         // Just what the rail says about it: toolSummary reads these two.
-        input: REVIEWABLE[ev.name] === 'plan'
+        input: table[ev.name] === 'plan'
             ? { plan: clip(input.plan, 200) }
             : { questions: (input.questions || []).map(q => ({ header: q.header || null,
                 question: clip(q.question, 200) })) },
@@ -175,6 +188,99 @@ function absorb(idx, lines) {
         }
     }
     return changed;
+}
+
+// ---------------------------------------------------------------------------
+// Codex
+// ---------------------------------------------------------------------------
+
+// The raw-line tests for a Codex rollout: a turn starting, a person's message, the
+// plan item, and the blocking question and its answer. Compact JSON, as Codex
+// writes it.
+const CODEX_NEEDLES = ['"type":"turn_context"', '"role":"user"', '"type":"Plan"',
+    '"name":"request_user_input"'];
+
+function codexWanted(pendingIds) {
+    const pending = new Set(pendingIds);
+    const want = (s) => {
+        if (CODEX_NEEDLES.some(n => s.includes(n))) return true;
+        if (s.includes('"type":"function_call_output"')) {
+            for (const id of pending) if (s.includes(id)) return true;
+        }
+        return false;
+    };
+    want.saw = (entry) => {
+        const p = entry && entry.payload;
+        if (p && p.type === 'function_call' && p.name === 'request_user_input' && p.call_id) {
+            pending.add(p.call_id);
+        }
+    };
+    return want;
+}
+
+/**
+ * Add the marks in a Codex rollout's `lines` to `idx`. Where the turn in progress
+ * began is held on the index (`turnAt`), because an incremental read can end
+ * between a `turn_context` and its message.
+ */
+function absorbCodex(idx, lines) {
+    if (!lines.length) return false;
+    let changed = false;
+    // The question tool's call can be in an earlier read than its answer.
+    const pendingAsks = new Map(idx.pending.map(id => [id, idx.asks && idx.asks[id]]).filter(([, v]) => v));
+    for (const { entry, offset } of lines) {
+        if (codex.isTurnStart(entry)) {
+            idx.turnAt = offset;
+            continue;
+        }
+        const { events } = codex.buildEvents([entry], { pendingAsks });
+        for (const ev of events) {
+            if (ev.kind === 'user') {
+                idx.marks.push({
+                    kind: 'turn', id: ev.id, offset: idx.turnAt == null ? offset : idx.turnAt,
+                    ts: ev.ts || null, text: clip(ev.text, TEXT_MAX), command: null,
+                    images: (ev.images || []).length,
+                });
+                changed = true;
+            } else if (ev.kind === 'tool' && CODEX_REVIEWABLE[ev.name]) {
+                if (idx.marks.some(m => m.id === ev.id)) continue;
+                const at = idx.turnAt == null ? offset : idx.turnAt;
+                idx.marks.push(toolMark(ev, at, CODEX_REVIEWABLE));
+                if (!ev.result) {
+                    idx.pending.push(ev.id);
+                    idx.asks = { ...(idx.asks || {}), [ev.id]: { input: ev.input } };
+                    pendingAsks.set(ev.id, { input: ev.input });
+                }
+                changed = true;
+            } else if (ev.kind === 'tool-result' && idx.pending.includes(ev.toolId)) {
+                const m = idx.marks.find(x => x.id === ev.toolId);
+                if (m) { m.status = ev.status || m.status; m.result = resultStub(ev.result); }
+                idx.pending = idx.pending.filter(id => id !== ev.toolId);
+                if (idx.asks) delete idx.asks[ev.toolId];
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+/**
+ * A rollout's bytes as `update` reads them. A `.zst` has to be decompressed whole,
+ * so its size, head and ranges are the decompressed bytes'; everything else reads
+ * the file in place, exactly as a Claude transcript is read.
+ */
+function sourceOf(file, st) {
+    if (!file.endsWith('.zst')) {
+        return { size: st.size, head: () => headOf(file, st.size), range: (a, b) => readRange(file, a, b) };
+    }
+    const buf = codex.readFile(file) || Buffer.alloc(0);
+    const nl = buf.indexOf(0x0a);
+    return {
+        size: buf.length,
+        head: () => crypto.createHash('sha1')
+            .update(nl === -1 ? buf.subarray(0, HEAD_BYTES) : buf.subarray(0, Math.min(nl, HEAD_BYTES))).digest('hex'),
+        range: (a, b) => buf.subarray(a, b),
+    };
 }
 
 function headOf(file, size) {
@@ -230,13 +336,19 @@ class TurnIndex {
     /**
      * The index for this transcript, brought up to date with the file.
      * Returns null if the file cannot be read.
+     *
+     * `runtime: "codex"` reads a Codex rollout instead (see the header). The
+     * runtime is recorded on the index, and a stored index for the other one is
+     * rebuilt rather than extended.
      */
-    update(sessionId, file) {
+    update(sessionId, file, { runtime = null } = {}) {
+        if (runtime === 'codex') return this._updateCodex(sessionId, file);
         let st;
         try { st = fs.statSync(file); } catch { return null; }
         let idx = this._load(sessionId);
         let head = null;
         const fresh = () => ({ version: INDEX_VERSION, file, head, consumed: 0, marks: [], pending: [] });
+        if (idx && idx.runtime) idx = null;
         try {
             if (!idx || idx.file !== file || st.size < idx.consumed) {
                 head = headOf(file, st.size);
@@ -253,6 +365,31 @@ class TurnIndex {
             const { lines, consumed } = linesFrom(buf, idx.consumed, wanted(idx.pending));
             if (idx.consumed === 0 && !idx.head) idx.head = head;
             absorb(idx, lines);
+            idx.consumed += consumed;
+        } catch { return null; }
+        this._save(sessionId, idx);
+        return idx;
+    }
+
+    _updateCodex(sessionId, file) {
+        let st;
+        try { st = fs.statSync(file); } catch { return null; }
+        let idx = this._load(sessionId);
+        if (idx && idx.runtime !== 'codex') idx = null;
+        const fresh = (head) => ({ version: INDEX_VERSION, runtime: 'codex', file, head, consumed: 0,
+            marks: [], pending: [], asks: {}, turnAt: null });
+        try {
+            const src = sourceOf(file, st);
+            if (!idx || idx.file !== file || src.size < idx.consumed) {
+                idx = fresh(src.head());
+            } else if (src.size === idx.consumed) {
+                return idx;
+            } else if (src.head() !== idx.head) {
+                idx = fresh(src.head());
+            }
+            const buf = src.range(idx.consumed, src.size);
+            const { lines, consumed } = linesFrom(buf, idx.consumed, codexWanted(idx.pending));
+            absorbCodex(idx, lines);
             idx.consumed += consumed;
         } catch { return null; }
         this._save(sessionId, idx);

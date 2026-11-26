@@ -489,6 +489,8 @@ project filter on `GET /api/sessions?project=`.
 | **`orchestrator`** | **object or null** — `{inbox: number, workers: number, paused: boolean}` on a session marked as an orchestrator: unread inbox items, open workers, and whether the usage cutoff stopped it. Null otherwise. See §*Orchestrators* |
 | **`worker`** | **object or null** — `{orchestratorId: string, title: string\|null, closed: boolean}` on a session an orchestrator started. Null otherwise. A worker whose orchestrator is gone keeps the field; draw it as an ordinary session |
 | `prs` | array of `{number, url, repo}`, empty if none |
+| `runtime` | string — the CLI that wrote this conversation: `"claude"`, or `"codex"` for a Codex thread this bridge reads and does not run. See §*`runtime` and `capabilities`* |
+| **`capabilities`** | **object** of booleans — what a client may offer on this session, **on every row whether or not a process is live**. Same object as on `GET /api/sessions/:id`. Absent from a bridge older than Codex sessions, where every flag is true |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — six fields plus `runtime` and `capabilities`, see below |
 
@@ -544,7 +546,8 @@ reply, and `web/app.js` hides it then.
 
 `titleSource` says where `title` came from: `user` (a name set through
 `POST /api/sessions/:id/flags`, which beats everything below), `custom-title`,
-`agent-name`, `ai-title` (Claude Code's own entries), `schedule` (composed as above), `prompt` (the first line
+`agent-name`, `ai-title` (Claude Code's own entries), `thread-name` (a Codex thread's
+name, from Codex's `session_index.jsonl`, last rename wins), `schedule` (composed as above), `prompt` (the first line
 of the first user message, with a slash-command invocation unwrapped to
 `/name args` rather than left as its `<command-message>` tags), `registry` (the live
 process's label), or `none`.
@@ -702,6 +705,14 @@ end of the file, and adds two fields. `K` is at least 1. It takes precedence ove
   - `offset` is a byte position that a window may start at. **A plan's or question's
     `offset` is that of the turn it belongs to,** not its own line, so no window starts
     halfway through a turn.
+  - **On a Codex session** a turn's `offset` is its `turn_context` line, which Codex
+    writes as the turn starts and ahead of the message that started it. A message
+    steered into a running turn is a `turn` of its own (as a folded message is for
+    Claude) with the **same `offset` as the turn it joined**. A plan is `name: "plan"`
+    and a question `name: "request_user_input"`, with the same `input` and `result`
+    shapes as above; `command` is always null. A forked Codex thread's index holds
+    only its own turns: the history it inherited arrives in the window that starts at
+    0.
 - **`window {start, startTurn}`** — `start` is the byte offset `events` begins at (0
   when the whole transcript was returned) and `startTurn` is the index into the turns
   (`kind: "turn"` entries only) of the first one included.
@@ -716,10 +727,20 @@ is milliseconds rather than a full parse. The desktop opens with `?turns=8`.
 
 ### `runtime` and `capabilities`
 
-Every session runs on one agent CLI, its **`runtime`**: a string, and today always
-`"claude"` (Claude Code). It is fixed for the life of a session. The bridge is being
-taught a second runtime (`"codex"`), and these two fields are how a client stays
-correct across that without asking which one it is looking at.
+Every session was written by one agent CLI, its **`runtime`**: a string, fixed for the
+life of a session. Two values exist:
+
+- **`"claude"`** — Claude Code. Every feature in this document.
+- **`"codex"`** — an OpenAI Codex thread, read from its rollout file under
+  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`). **Read-only**: the bridge
+  lists it, draws its transcript, tails it while a terminal `codex` writes to it, and
+  **starts no Codex process for it, ever** — so every capability below is `false`,
+  including the two that only Codex sends (`send`, `delete`). Driving Codex from the
+  bridge is a later change; when it lands, its flags turn true and a client written
+  against this section needs nothing new.
+
+These two fields are how a client stays correct across both without asking which one
+it is looking at.
 
 **`capabilities`** is an object of booleans saying which features a session on that
 runtime supports. **Hide a control whose capability is false; do not branch on
@@ -739,20 +760,35 @@ written today, as long as the client reads the flags.
 | `steer` | a message sent while a turn runs is handed to that turn (`handed` on a queue entry) rather than waiting for it to end |
 | `images` | images attached to a turn reach the model inline |
 | `allowForSession` | the "allow always" answer on a tool ask (`decision: "allow-always"`) |
+| `send` | **any message at all**: the composer, `POST …/send`, `…/later`, `…/wake`, `…/handoff`, `…/attachments`. False means the session can only be read — draw no composer, no Edit-and-resend, no queue, no mode or model picker |
+| `delete` | `DELETE /api/sessions/:id`. False for a runtime whose transcripts are another program's store (a Codex rollout has projections in Codex's own databases) |
 
-- **Every flag is `true` for `"claude"`.** Every feature in this document was built
-  for Claude Code, so a session today can do all of them.
+- **Every flag is `true` for `"claude"`**, and **every flag is `false` for
+  `"codex"`**. Claude's object does not yet carry `send` and `delete` — they arrived
+  with Codex — and by the next rule that means true, which is Claude's answer.
 - **A flag a client does not recognise is ignored**, and **a flag that is missing
   means `true`** — an older bridge sends no `capabilities` at all, and everything it
   offers works. New flags will be added; none will be renamed.
-- **Where they appear:** top level on `GET /api/sessions/:id`; and on every `runner`
-  object that has a process behind it — the whole `runner-status` payload and the
-  narrow `runner` on `GET /api/sessions` and `GET /api/dashboard` rows. A row with no
-  `runner` has no live process and its runtime is not on the row; open the session to
-  read it. (The overview and task-board cards' eight-field `runner` does not carry
-  them.)
+- **Where they appear:** top level on `GET /api/sessions/:id`; on **every session
+  summary** (`GET /api/sessions` rows, and `summary` on `GET /api/sessions/:id`); and
+  on every `runner` object that has a process behind it — the whole `runner-status`
+  payload and the narrow `runner` on `GET /api/sessions` and `GET /api/dashboard` rows.
+  (The overview and task-board cards' eight-field `runner` does not carry them.) A
+  session with a live runner has the same object in both places; read the summary's
+  when there is no runner, which for a Codex session is always.
 - **The object is the same for every session on one runtime**, so a client may cache
   it by `runtime`.
+- **A write a session cannot take is refused `409`** with
+  `{error: string, capability: string, runtime: string}` — `capability` the flag that
+  is false (`"send"` or `"delete"`), `error` a sentence fit to show. Refused this way:
+  `POST …/send`, `…/later`, `…/wake`, `…/handoff` and `…/attachments` (`send`), and
+  `DELETE /api/sessions/:id` (`delete`). The checks that come first on those routes
+  still come first — a refused mode is `403` and an unknown id `404` before this. The
+  routes that need a live process (`stop`, `restart`, `permission`, `queue`) answer
+  as they do for any session with none.
+- **A Codex session is otherwise an ordinary session**: pin, archive, rename (`flags`),
+  the terminal pane, `range`, `since`, `changes` and the `turns[]` index all work.
+  What its events look like is under *Codex sessions*, after the event kinds.
 
 ### `GET /api/sessions/:id/range?from=A&to=B`
 
@@ -878,6 +914,47 @@ description, model, isAsync, durationMs, tokens, toolUses}` from the result, plu
 `spawnDepth` and `hasTranscript: true` when a transcript for it exists on disk. Null
 for an ordinary tool call. `hasTranscript` is what says the subagent can be opened as
 its own view; see `agent` on `POST /api/subscribe`.
+
+#### Codex sessions
+
+A session with `runtime: "codex"` uses the **same event kinds** — `user`, `assistant`,
+`thinking`, `tool`, `tool-result`, `system`, `compact` — read from Codex's rollout file
+rather than Claude Code's transcript (`bridge/runtimes/codex/transcript.js`). Draw them
+with the same code. What differs is which tool `name`s appear and what their `input`
+and `result` hold; a client that draws unknown tools generically (name, first string of
+`input`, `result.text`) shows all of them legibly, and these are worth a row of their
+own:
+
+| `name` | `input` | `result` |
+|---|---|---|
+| `exec_command` — a command Codex ran | `{command: string, cwd: string\|null, actions: [{type, command, name, path}]}` — `command` is the script as typed, with Codex's `/bin/bash -lc '…'` wrapper and its quoting undone; `actions` is Codex's own reading of it (`type` `"read"`, `"search"`, `"list"` or `"unknown"`; the rest strings or null) | `{text: string, exitCode: number\|null, interrupted: bool}` — `text` the combined output. **`status` is `"error"` for a non-zero exit**, as a failing `Bash` is |
+| `apply_patch` — a patch to one or more files | **`{changes: [{path, kind, movePath, diff}]}`** — one entry per file: `path` absolute, `kind` `"add"`, `"delete"` or `"update"`, `movePath` a string or null (a rename's new path), **`diff` a unified diff string** (`@@` hunks, `+`/`-`/space lines). Not `result.patch`: there is no structured patch on a Codex row, and one call can touch several files | `{text: string}` — what the tool printed; `"Declined"` for a declined patch |
+| `plan` — a plan turn's plan | `{plan: string}` markdown | `{text: ""}`. **Nothing was approved**: a Codex plan turn ends with the plan and asks nothing, so a review of it should say "proposed", not "approved" |
+| `request_user_input` — the blocking question | `{questions: [{id, header, question, options: [{label, description}], multiSelect: false}]}` — AskUserQuestion's shape | `{text, answers}` — `answers` keyed by question text exactly as `AskUserQuestion`'s is. Its answer is a separate line on disk, so it can arrive later as a `tool-result` patch |
+| `update_plan` — the checklist | `{explanation: string\|null, plan: [{step: string, status: "pending"\|"in_progress"\|"completed"}]}` | `{text: ""}` |
+| `web_search`, `mcp_tool_call`, `dynamic_tool_call`, `view_image`, `image_generation`, `sleep`, `spawn_agent` | kind-specific objects of strings and numbers | `{text: string}` |
+
+- **An unknown Codex item kind is a `tool` named after the kind** (camelCase, e.g.
+  `"somethingNew"`), with the item's fields as `input` and `result: {text: ""}`. It is
+  never dropped and never an error.
+- **Every Codex tool row arrives finished.** Codex writes an item to disk when it
+  completes, so a `tool` on a Codex session is `"ok"` or `"error"` when it first
+  appears, and the only `tool-result` patch is a `request_user_input` answer. There is
+  no running state to draw from the file.
+- `tool.durationMs` and `tool.resultTs` are set from Codex's own start and end times.
+  `tool.agent` is null and `tool.persistedPath` absent.
+- **An interrupted turn is a `system` event**, `subtype: "interrupted"`,
+  `isError: false`, `text: "Interrupted."` — Codex records a stop as a line of its own,
+  and it can land just before the row of the command it killed.
+- `user` events have `origin: "human"`, `command: null`, `files: []` and
+  `parent: null` (a Codex turn cannot be branched from: `branchFromTurn` is false). The
+  harness's own messages — Codex's instructions and its `<environment_context>` — are
+  not events, as Claude's `<system-reminder>` is not. A question the model asked
+  without waiting for the answer is an `assistant` event.
+- **A forked thread opens with its parent's history.** Codex writes only the child's
+  own lines into a fork's rollout and points into the parent's; a read from offset 0
+  (a full read, `?turns=K` whose window starts at 0, `range?from=0`) prepends the
+  parent's events up to the fork. `offset` is always into the child's own file.
 
 **A `user` event for a slash command has bookkeeping XML in `text`.** The bridge
 strips `<system-reminder>` and `<local-command-stdout>` and nothing else, so a
@@ -4105,8 +4182,8 @@ down from:
 | Field | Type |
 |---|---|
 | `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
-| **`runtime`** | string — the CLI this session runs on, `"claude"` today. See §*`runtime` and `capabilities`* |
-| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession}`, all `true` for `"claude"`. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
+| **`runtime`** | string — the CLI this session runs on. Always `"claude"` here: a runner is a process of ours, and the bridge runs no other CLI yet (a `"codex"` session has no runner). See §*`runtime` and `capabilities`* |
+| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession}`, all `true` for `"claude"`; a missing flag (`send`, `delete`) means true. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
 | `effort` | string or null — the `--effort` the process was started with, `null` for none. **Only here**: the transcript does not record it, so no session summary carries it, and a session with no process has nothing to report |
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |

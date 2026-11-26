@@ -7,9 +7,11 @@
 `web/new-session/dialog.js`, `web/index.html`, `docs/api.md`, new
 `bridge/codex/*`, new `test/codex-*.test.js`
 
-> Roadmap. Phase 0 is done: the JSON-RPC client is in `bridge/codex/` (not wired
-> in), the schema in `docs/codex-schema/0.172.0/`, and the recordings in
-> `test/fixtures/codex/`. Nothing else is built.
+> Roadmap. Phases 0–2 are done: the JSON-RPC client is in `bridge/codex/` (not
+> wired in), the schema in `docs/codex-schema/0.172.0/`, the recordings in
+> `test/fixtures/codex/`, the runtime seam in `bridge/runtimes/`, and Codex
+> sessions are listed and read (read-only) through
+> `bridge/runtimes/codex/transcript.js`. Phase 3 onwards is not built.
 
 ## Why
 
@@ -265,6 +267,35 @@ behaviour change in disguise.
 
 **Exit check:** a Codex session started in a terminal shows up in the rail and
 reads correctly, with no Codex process started by the bridge.
+
+**As built.** What the build settled that the list above did not:
+
+- **Codex is a read-only runtime, not a second entry in `RUNTIMES`.** The
+  registry has two tables: what a session can be run on, and what can only be
+  read. `get('codex')` throws, so nothing that starts a process can be handed
+  one, and `capabilitiesOf`, `toolsOf` and `readerFor` answer for both. Phase 3
+  moves Codex across.
+- **Two new flags, `send` and `delete`, false for Codex.** No existing flag
+  covered "can take a message at all", and a rollout is Codex's store to delete,
+  not ours. Claude's object does not carry them yet (`test/runtimes.test.js`
+  pins its eleven), which the contract already reads as true. Every summary now
+  carries `runtime` and `capabilities`, because a Codex session never has a
+  runner to carry them. The write routes refuse `409 {capability}`, and
+  `pool.ensure` refuses too, as a backstop.
+- **Messages from `response_item`, tools from `item_completed`.** As the table
+  says, with two exceptions found in the fixtures: the blocking question is a
+  `function_call` (`request_user_input`) whose answer is its
+  `function_call_output`, and an async question exists only as an
+  `agentMessage` item. A plan turn's last message repeats the plan in
+  `<proposed_plan>`, which is stripped, since the `plan` item is drawn.
+- **A fork's history is cut by ordinal, not by byte offset.** The offset is only
+  true of the file Codex wrote; the scrubbed fixtures moved their bytes and kept
+  their ordinals. `end_byte_offset` is used only when lines carry no ordinal.
+- **A steered message is a turn mark** at the offset of the turn it joined, as a
+  folded message is for Claude.
+- Not done here, and harmless: search, spend, images and skill runs read a Codex
+  rollout with Claude's parsers and find nothing in it. `archived_sessions/` is
+  not indexed.
 
 ### Phase 3 — Driving Codex
 

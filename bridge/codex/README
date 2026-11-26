@@ -8,7 +8,8 @@ the two disagree. A Codex outside it may work; it has not been looked at. The
 plan (docs/plans/23-codex.md) has the bridge show a banner in that case rather
 than refuse.
 
-What is here (Phase 0 of the plan — nothing in the bridge calls it yet):
+What is here. The first three are Phase 0 of the plan, and nothing in the bridge
+calls them yet; items.js is Phase 2's, and the rollout reader uses it:
 
   rpc.js       JSON-RPC 2.0 over a readable and a writable. Newline-delimited
                JSON, an id → promise map, a handler table for server requests,
@@ -20,6 +21,14 @@ What is here (Phase 0 of the plan — nothing in the bridge calls it yet):
                initialized handshake with experimentalApi on.
   protocol.js  The tested range, and the ServerNotification / ServerRequest
                method lists copied from the schema for that version.
+  items.js     The v2 ThreadItem kinds as the bridge's `tool` events, in one
+               table. `fromRollout` turns the rollout's form of an item
+               (`item_completed`: PascalCase type, snake_case fields, a
+               `file://` cwd, argv arrays, a changes map) into the wire's
+               (`item/completed`), and everything after it reads the wire's,
+               so bridge/runtimes/codex/transcript.js and the Phase 3 adapter
+               share it. test/codex-transcript.test.js checks that each
+               recorded item reads the same from either side.
 
 Only Node built-ins, like everything else under bridge/.
 

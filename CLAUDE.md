@@ -300,7 +300,7 @@ the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskboard`, `ports`,
 `spinner`, `changes`, `restart`, `restart-process`, `move-session`, `handoff`, `drafts`, `later`, `wakes`, `snippets`, `snippet-trigger`, `caret`, `composer-find`,
-`templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `codex-rpc`, `host`, `titles`,
+`templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `codex-rpc`, `codex-transcript`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
 `claude-docs`, `ask-result`, `commands`, `message-date`, `folded`, `live-over`,
 `claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `orchestrator-models`, `worker-read`, `code-reviews`, `tool-image`, `images`, `hook-scripts`, `hook-sources`, `overview-hosts`, `session-index`, `session-title`, `tool-name`, `keepawake`, `startup`, `viewers`, `spend`, `pr-reviews`, `worktree-branch`, `bar-fit`, `phone-installs`, `brief`, `titlebar`, `preview-cdp`, `preview-grants`, `preview-open`, `preview-mcp`, `sudo`, `update-feed`, `updater`, `shell-build`, `secrets`, `screenshots`, `runtimes` and `runtime-contract` on their own — no bridge needed
