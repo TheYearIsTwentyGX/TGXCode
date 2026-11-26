@@ -474,6 +474,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/runtimes/index.js` | The runtimes a session can run on (`claude` today): each one's process adapter, transcript reader, tool tables, and the `capabilities` clients hide controls by |
 | `bridge/runtimes/claude/process.js` | The Claude process adapter — argv, the line a turn is written as, stream-json read into busy/idle/tool/ask events, the control verbs, exit classification. Its header is the contract another runtime's adapter implements |
 | `bridge/runtimes/claude/tools.js` | Claude Code's tool names as tables: which are plans and questions, which edit files, which are always allowed, and what to call one in progress |
+| `bridge/codex/` | Phase 0 of docs/plans/23-codex.md, not wired in yet: a JSON-RPC 2.0 client for `codex app-server` (`rpc.js`), the spawn and handshake (`client.js`), and the method lists and tested version range (`protocol.js`). Its README says which Codex it was tested against and how to upgrade; the schema it was written from is in `docs/codex-schema/` |
 | `bridge/host.js` | The session host: owns `claude`'s pipes so a turn outlives a bridge restart. A dumb relay, on purpose |
 | `bridge/host-client.js` | The bridge's side of it — a hosted `claude` dressed as a ChildProcess, or a plain spawn when there is no host |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |

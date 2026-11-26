@@ -1,0 +1,46 @@
+bridge/codex/ — talking to `codex app-server`
+=============================================
+
+Tested Codex versions: >=0.172.0 <0.173.0
+
+That range is also TESTED in protocol.js, and test/codex-rpc.test.js fails when
+the two disagree. A Codex outside it may work; it has not been looked at. The
+plan (docs/plans/23-codex.md) has the bridge show a banner in that case rather
+than refuse.
+
+What is here (Phase 0 of the plan — nothing in the bridge calls it yet):
+
+  rpc.js       JSON-RPC 2.0 over a readable and a writable. Newline-delimited
+               JSON, an id → promise map, a handler table for server requests,
+               and log-once-and-drop for notifications this build does not know.
+               Knows nothing about processes, so it works over the session
+               host's relayed socket as well as over a child's stdio.
+  client.js    Spawns `codex app-server --listen stdio://` (CODEX_BIN, which is
+               TGXCODE_CODEX_BIN or `codex`) and does the initialize /
+               initialized handshake with experimentalApi on.
+  protocol.js  The tested range, and the ServerNotification / ServerRequest
+               method lists copied from the schema for that version.
+
+Only Node built-ins, like everything else under bridge/.
+
+Upgrading Codex
+---------------
+
+1. `npm i -g @openai/codex@<new>` and `codex --version`.
+2. Regenerate the schema beside the old one, both variants:
+
+     codex app-server generate-json-schema --experimental --out /tmp/s-exp
+     codex app-server generate-json-schema --out /tmp/s-stable
+     mkdir -p docs/codex-schema/<new>/{experimental,stable}
+     cp /tmp/s-exp/codex_app_server_protocol.schemas.json    docs/codex-schema/<new>/experimental/
+     cp /tmp/s-stable/codex_app_server_protocol.schemas.json docs/codex-schema/<new>/stable/
+
+   Only the combined bundle is committed. The generator also writes one file
+   per type (about 6 MB more), all of which is in the bundle.
+3. `diff` the two versions' bundles. Renamed or removed methods are the ones
+   that break us; new notifications are harmless until we want them.
+4. Update TESTED and the two lists in protocol.js, and the range above.
+5. Re-record the fixtures (test/fixtures/codex/record.js --list), read them
+   before committing (the repo is public; the recorder scrubs what it knows
+   about), and run `node test/codex-rpc.test.js`.
+6. Re-check the plan's *Measured on* table, and move what changed into it.

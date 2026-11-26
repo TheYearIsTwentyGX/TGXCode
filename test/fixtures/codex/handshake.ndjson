@@ -1,0 +1,7 @@
+{"dir":"send","t":3,"msg":{"jsonrpc":"2.0","id":1,"method":"thread/list","params":{}}}
+{"dir":"recv","t":106,"msg":{"error":{"code":-32600,"message":"Not initialized"},"id":1}}
+{"dir":"send","t":106,"msg":{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"tgxcode","title":"TGXCode","version":"0.0.0-fixture"},"capabilities":{"experimentalApi":true,"optOutNotificationMethods":["remoteControl/status/changed","fuzzyFileSearch/sessionUpdated","fuzzyFileSearch/sessionCompleted","thread/realtime/started","thread/realtime/itemAdded","thread/realtime/item/started","thread/realtime/item/transcript/delta","thread/realtime/item/completed","thread/realtime/transcript/delta","thread/realtime/transcript/done","thread/realtime/outputAudio/delta","thread/realtime/sdp","thread/realtime/error","thread/realtime/closed","windows/worldWritableWarning","windowsSandbox/setupCompleted"]}}}}
+{"dir":"recv","t":133,"msg":{"id":2,"result":{"userAgent":"tgxcode/0.172.0 (Ubuntu 26.4.0; x86_64) xterm-256color (tgxcode; 0.0.0-fixture)","codexHome":"/tmp/codex-p0-home-signedout","platformFamily":"unix","platformOs":"linux"}}}
+{"dir":"send","t":133,"msg":{"jsonrpc":"2.0","method":"initialized"}}
+{"dir":"send","t":133,"msg":{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"clientInfo":{"name":"tgxcode","version":"0"}}}}
+{"dir":"recv","t":133,"msg":{"error":{"code":-32600,"message":"Already initialized"},"id":3}}
