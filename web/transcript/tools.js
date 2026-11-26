@@ -2,6 +2,12 @@
 // the body built on first expand (fillTool), including the TodoWrite repair that
 // test/tasks.test.js reads out of this file.
 //
+// Codex's rows are drawn here too, by the tool names bridge/codex/items.js gives
+// them: `exec_command` (a command, its output and exit code), `apply_patch` (one
+// unified diff per file it touched), `plan`, `request_user_input` (the blocking
+// question, in AskUserQuestion's shape) and `update_plan` (the checklist). They
+// are names, like `Bash` and `Edit` are, not a question about which CLI this is.
+//
 // This imports app.js and sibling modules here, which import it back. That is
 // safe only because nothing in this file reads an imported binding while the
 // module is evaluating — every use is inside a function called later. Keep it
@@ -103,6 +109,22 @@ export function toolSummary(ev) {
         // The recipient is a peer's name, which is its address but not always
         // what you call it — so the row shows the session's title when this app
         // knows one, and the raw name when it does not.
+        // Codex. See the header for where these names come from.
+        case 'exec_command': return i.command || '';
+        case 'apply_patch': {
+            const files = (i.changes || []).map(c => relPath(c.movePath || c.path));
+            return files.length > 2 ? `${files.slice(0, 2).join(', ')} +${files.length - 2}` : files.join(', ');
+        }
+        case 'plan': return clip(String(i.plan || '').replace(/^#+\s*/, '').split('\n')[0], 80);
+        case 'request_user_input':
+            return (i.questions || []).map(q => q.header || q.question).join(' · ');
+        case 'update_plan': {
+            const steps = i.plan || [];
+            const done = steps.filter(x => x.status === 'completed').length;
+            return `${done}/${steps.length} steps`;
+        }
+        case 'web_search': return i.query || '';
+        case 'sleep': return i.durationMs != null ? dur(i.durationMs) : '';
         case 'SendMessage': {
             const to = i.to || i.recipient || '?';
             const peer = peerByName(to);
@@ -186,8 +208,21 @@ function toolBody(ev) {
         // it was edited or approved with a note. The note exists nowhere else.
         out.push(section('Plan',
             el('div', { class: 'prose', html: renderMarkdown(r.plan || i.plan || '') })));
-    } else if (ev.name === 'AskUserQuestion') {
+    } else if (ev.name === 'AskUserQuestion' || ev.name === 'request_user_input') {
         out.push(section('Questions', questionsView(i.questions || [], r.answers)));
+    } else if (ev.name === 'exec_command') {
+        // A Codex command: the script as typed, then where it ran.
+        out.push(section('Command', codePre(i.command || '', 'bash')));
+        if (i.cwd) out.push(note(`in ${i.cwd}`));
+    } else if (ev.name === 'apply_patch') {
+        // One diff per file, headed by what happened to it. The diff is Codex's own,
+        // so the counts beside it are the ones the changes drawer adds up.
+        for (const c of i.changes || []) out.push(patchSection(c));
+    } else if (ev.name === 'plan') {
+        out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
+    } else if (ev.name === 'update_plan') {
+        if (i.explanation) out.push(section('Why', el('div', { class: 'prose' }, i.explanation)));
+        out.push(section('Steps', todoView((i.plan || []).map(x => ({ content: x.step, status: x.status })))));
     } else if (ev.name === 'SendMessage') {
         // One half of a conversation between two sessions. Rendered as prose
         // rather than as a key-value dump because it is a message somebody
@@ -209,7 +244,16 @@ function toolBody(ev) {
     }
 
     // --- output -----------------------------------------------------------
-    if (ev.name === 'Write' || (ev.name === 'Edit' && r.patch)) {
+    if (ev.name === 'exec_command') {
+        // Output, then how it ended — the exit code is the outcome, and an empty
+        // output with a non-zero code is still worth saying.
+        if (r.text) out.push(section(ev.status === 'error' ? 'Output' : 'Result', codePre(r.text, null, ev.status === 'error')));
+        if (r.exitCode != null && r.exitCode !== 0 && !r.interrupted) out.push(note(`Exited with code ${r.exitCode}.`));
+        else if (!r.text && ev.status === 'ok') out.push(note('No output.'));
+    } else if (ev.name === 'apply_patch' || ev.name === 'plan' || ev.name === 'update_plan') {
+        // The diff or the plan above is the outcome; only a failure adds anything.
+        if (ev.status === 'error' && r.text) out.push(section('Error', codePre(r.text, null, true)));
+    } else if (ev.name === 'Write' || (ev.name === 'Edit' && r.patch)) {
         // The diff above already is the outcome; don't repeat the file body.
         if (ev.status === 'error') out.push(section('Error', codePre(r.text || '', null, true)));
     } else if (r.patch && ev.name !== 'Edit') {
@@ -381,6 +425,61 @@ function langOf(path) {
         json: 'json', css: 'css', scss: 'scss', html: 'html', svelte: 'html',
         vue: 'html', py: 'py', sh: 'sh', bash: 'sh', sql: 'sql', yml: 'yaml',
         yaml: 'yaml', go: 'go', rs: 'rust', cs: 'cs', md: null })[ext] || null;
+}
+
+/** A path relative to the open session's directory, where it is under it. */
+function relPath(p) {
+    const s = String(p || '');
+    const root = state.current && state.current.cwd;
+    return root && s.startsWith(`${root}/`) ? s.slice(root.length + 1) : s;
+}
+
+const PATCH_VERB = { add: 'Added', delete: 'Deleted', update: 'Updated' };
+
+/** One file of a Codex patch: what happened to it, and its diff. */
+function patchSection(c) {
+    const verb = PATCH_VERB[c.kind] || 'Changed';
+    const title = c.movePath
+        ? `${verb} ${relPath(c.path)} → ${relPath(c.movePath)}`
+        : `${verb} ${relPath(c.path)}`;
+    const hunks = hunksOf(c.diff);
+    return section(title, hunks.length ? diffView(hunks) : note('No textual change.'));
+}
+
+/**
+ * A unified diff as the hunks `diffView` draws — the shape of Claude's
+ * `structuredPatch`. A diff with no `@@` header (a whole new file, the way some
+ * tools write one) is a single hunk of everything in it.
+ */
+export function hunksOf(diff) {
+    const lines = String(diff || '').split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const hunks = [];
+    let h = null;
+    for (const line of lines) {
+        const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+        if (m) {
+            h = { oldStart: +m[1], oldLines: m[2] === undefined ? 1 : +m[2],
+                newStart: +m[3], newLines: m[4] === undefined ? 1 : +m[4], lines: [] };
+            hunks.push(h);
+            continue;
+        }
+        if (line.startsWith('\\')) continue;   // "\ No newline at end of file"
+        if (!h) {
+            if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('diff ')
+                || line.startsWith('index ')) continue;
+            h = { oldStart: 0, oldLines: 0, newStart: 1, newLines: 0, lines: [] };
+            hunks.push(h);
+        }
+        h.lines.push(line);
+    }
+    for (const x of hunks) {
+        if (x.oldStart === 0 && x.newLines === 0) {
+            x.newLines = x.lines.filter(l => l[0] !== '-').length;
+            x.oldLines = x.lines.filter(l => l[0] !== '+').length;
+        }
+    }
+    return hunks;
 }
 
 function diffView(patch) {

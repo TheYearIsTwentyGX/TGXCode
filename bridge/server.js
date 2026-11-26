@@ -154,6 +154,24 @@ const index = new SessionIndex(flags);
 const spend = new SpendIndex();
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
+// A session whose runtime cannot take a message — a Codex thread, which this
+// bridge reads and never runs (docs/plans/23-codex.md, Phase 2) — must never get
+// a process, because the only process `ensure` knows how to start is `claude
+// --resume <id>`, and that id is not Claude's. The routes refuse first and say
+// why (`readOnly` in bridge/routes/session.js); this is the backstop for any
+// path that reaches the pool without passing one of them. Keyed on the
+// `send` capability, not on which runtime it is.
+{
+    const ensure = pool.ensure.bind(pool);
+    pool.ensure = (sessionId, opts) => {
+        const summary = pool.get(sessionId) ? null : index.summary(sessionId);
+        if (summary && summary.capabilities && summary.capabilities.send === false) {
+            throw new Error(`this ${summary.runtime} session is read-only here; `
+                + 'continue it in a terminal');
+        }
+        return ensure(sessionId, opts);
+    };
+}
 // Installed Claude Code against the registry, and which live processes predate
 // the installed one. See bridge/claude-version.js.
 const claudeVersion = new ClaudeVersion({

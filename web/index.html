@@ -788,6 +788,11 @@
 
         <div class="composer" id="composer">
           <div class="composer-inner">
+            <!-- Shown instead of everything below when the session cannot take a
+                 message (`capabilities.send` false): a Codex thread this bridge reads
+                 and does not run. Filled by paintComposerAccess in
+                 web/transcript/conversation.js. -->
+            <div id="composer-readonly" class="composer-readonly" hidden></div>
             <div id="status-line" class="status-line" data-state="idle">
               <span class="led"></span>
               <span id="status-text">Ready</span>

@@ -464,6 +464,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/search-index.js` | Per-session full-text index of what you and Claude said (and, clipped, tool calls), built incrementally like the turn index and in the background a slice at a time; the query and its snippets |
 | `bridge/transcript.js` | What the bridge imports to read a transcript: re-exports the Claude reader and the modules below, and `readerFor(runtime)` picks a reader |
 | `bridge/runtimes/claude/transcript.js` | The Claude transcript reader: `.jsonl` → session-list metadata (`scanMeta`) and render events (`buildEvents`); pairs tool calls with results; reads subagent transcripts |
+| `bridge/runtimes/codex/transcript.js` | The Codex rollout reader: `$CODEX_HOME/sessions/**/rollout-*.jsonl` (and `.jsonl.zst`) → the same metadata and the same event kinds, with the harness's own messages stripped and a fork's inherited history read out of its parent |
+| `bridge/runtimes/codex/tools.js` | Codex's tool names as the same tables: `plan` and `request_user_input` are asks, `apply_patch` edits files |
 | `bridge/places.js` | Which checkout or worktree a directory is, and its branch — read off the disk, for a session of any runtime |
 | `bridge/envelopes.js` | The wrappers the bridge writes into a turn (handoff, orchestrator nudge and message, attached-files note), both halves of each |
 | `bridge/jsonl.js` | Reading a JSONL file that is still being written |
@@ -471,10 +473,11 @@ Two rules worth knowing before you send a patch:
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | One agent process per active conversation: the queue and `inFlight`, approval cards, the stall clock, eviction, host notes and adoption. Everything about the CLI itself goes through its runtime's process adapter |
-| `bridge/runtimes/index.js` | The runtimes a session can run on (`claude` today): each one's process adapter, transcript reader, tool tables, and the `capabilities` clients hide controls by |
+| `bridge/runtimes/index.js` | The runtimes a session can run on (`claude`) and the ones it can only be read on (`codex`, for now): each one's process adapter, transcript reader, tool tables, and the `capabilities` clients hide controls by |
 | `bridge/runtimes/claude/process.js` | The Claude process adapter — argv, the line a turn is written as, stream-json read into busy/idle/tool/ask events, the control verbs, exit classification. Its header is the contract another runtime's adapter implements |
 | `bridge/runtimes/claude/tools.js` | Claude Code's tool names as tables: which are plans and questions, which edit files, which are always allowed, and what to call one in progress |
-| `bridge/codex/` | Phase 0 of docs/plans/23-codex.md, not wired in yet: a JSON-RPC 2.0 client for `codex app-server` (`rpc.js`), the spawn and handshake (`client.js`), and the method lists and tested version range (`protocol.js`). Its README says which Codex it was tested against and how to upgrade; the schema it was written from is in `docs/codex-schema/` |
+| `bridge/codex/` | Talking to Codex: a JSON-RPC 2.0 client for `codex app-server` (`rpc.js`), the spawn and handshake (`client.js`), and the method lists and tested version range (`protocol.js`) — Phase 0 of docs/plans/23-codex.md, not wired in yet. Its README says which Codex it was tested against and how to upgrade; the schema it was written from is in `docs/codex-schema/` |
+| `bridge/codex/items.js` | Codex's thread items as tool events — one table of item kinds, with the rollout's on-disk form (PascalCase, snake_case, `file://` cwd) translated to the wire's in front of it, so the rollout reader and the live adapter share it |
 | `bridge/host.js` | The session host: owns `claude`'s pipes so a turn outlives a bridge restart. A dumb relay, on purpose |
 | `bridge/host-client.js` | The bridge's side of it — a hosted `claude` dressed as a ChildProcess, or a plain spawn when there is no host |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
@@ -557,6 +560,7 @@ Two rules worth knowing before you send a patch:
 | `web/api.js` | `get`, `post`, `patch`, `put`, `del`, `postFile` — the fetch wrappers every call to the bridge goes through, and the CSRF header they send |
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
+| `web/capabilities.js` | `can(flag, summary)`: whether a session supports a feature, from its `capabilities` (a missing flag is true). Every control that a runtime may lack is hidden through this, never by asking which runtime it is |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
 | `web/models.js` | The model and effort lists from the `tgx-models` `<meta>` tag, and filling a `<select>` from them |
 | `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`, `pose`. Every call names a preset from `PRESETS` (`menu`, `dialog`, `toast`, `dock`…); durations and curves are read from `--dur-*`/`--ease-*` in base.css, and reduced motion keeps a short fade without the movement. See docs/plans/22-ui-overhaul.md |

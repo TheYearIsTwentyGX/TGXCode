@@ -437,7 +437,7 @@
 /* The three small labels a row can carry — test, orch, bg — share one shape:
    16px tall, mono 10, centred on the meta line rather than sat on its baseline
    (a chip on the baseline floats above the words beside it). */
-:is(.tag-test, .tag-orch, .tag-bg) {
+:is(.tag-test, .tag-orch, .tag-bg, .tag-runtime) {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -452,6 +452,13 @@
     background: var(--s4);
     color: var(--text-3);
     text-transform: uppercase;
+}
+/* A session this bridge reads but cannot run — a Codex thread, for now. Named by
+   its CLI, outlined rather than filled: it is real work, just not work you can
+   continue from this window. */
+.tag-runtime {
+    border: 1px solid var(--outline);
+    color: var(--text-3);
 }
 
 /* An orchestrator, with its unread inbox count — and, in the orchestrator

@@ -1,19 +1,31 @@
 'use strict';
 
-// An index over every transcript under ~/.claude/projects.
+// An index over every transcript under ~/.claude/projects, and every Codex
+// rollout under $CODEX_HOME/sessions.
 //
 // There are ~700 files totalling a few hundred MB here, so a full rescan on
 // every request is not viable. Metadata is cached keyed by (path, size, mtime) and
 // persisted to disk, making a warm start instant and a cold start a one-off
 // few-second scan. Directory watches keep the index fresh afterwards.
+//
+// **Codex sessions are read, never run** (docs/plans/23-codex.md, Phase 2). A
+// rollout is indexed by the same rules as a transcript — cached by size and
+// mtime, watched, placed in a project by its `session_meta.cwd` — and its record's
+// meta says `runtime: "codex"`, which is what every read below dispatches on to
+// pick bridge/runtimes/codex/transcript.js instead of Claude's reader. Its title is
+// the thread's name from `session_index.jsonl` when it has one. Its summary says
+// what it can do through `capabilities`, and for Codex today that is nothing that
+// starts a process: see bridge/runtimes/index.js.
 
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const { PROJECTS_DIR, CACHE_DIR } = require('./config');
+const { PROJECTS_DIR, CACHE_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity, toolResultImage, placeOf } = require('./transcript');
+const codex = require('./runtimes/codex/transcript');
+const runtimes = require('./runtimes');
 const { TurnIndex } = require('./turn-index');
 const { SkillRunIndex } = require('./skill-runs');
 const { ImageIndex } = require('./image-index');
@@ -35,6 +47,56 @@ const PENDING_TTL_MS = 5 * 60_000;
 // this bridge just started. See _probePending().
 const PROBE_MS = 200;
 const PROBE_LIMIT_MS = 60_000;
+
+// How deep under the Codex sessions directory rollouts are looked for. Codex files
+// them as YYYY/MM/DD; one more level is slack for a layout change, not a promise.
+const CODEX_DEPTH = 4;
+
+/** Whether a record is a Codex rollout's. */
+const isCodex = (rec) => !!rec && rec.meta && rec.meta.runtime === 'codex';
+
+/**
+ * A thread's name per id, from Codex's `session_index.jsonl`: append-only, one
+ * `{id, thread_name, updated_at}` per rename, last line wins. Re-read only when the
+ * file's size or mtime moves.
+ */
+class CodexNames {
+    constructor(file) {
+        this.file = file;
+        this.stamp = null;
+        this.names = new Map();
+    }
+
+    /** Re-read if the file changed. Returns true when it did. */
+    refresh() {
+        if (!this.file) return false;
+        let st = null;
+        try { st = fs.statSync(this.file); } catch { /* none yet */ }
+        const stamp = st ? `${st.size}:${st.mtimeMs}` : null;
+        if (stamp === this.stamp) return false;
+        this.stamp = stamp;
+        const names = new Map();
+        if (st) {
+            let text = '';
+            try { text = fs.readFileSync(this.file, 'utf8'); } catch { /* raced a rewrite */ }
+            for (const line of text.split('\n')) {
+                if (!line) continue;
+                let o;
+                try { o = JSON.parse(line); } catch { continue; }
+                if (!o || typeof o.id !== 'string') continue;
+                const name = typeof o.thread_name === 'string' ? o.thread_name.trim() : '';
+                if (name) names.set(o.id.toLowerCase(), name);
+                else names.delete(o.id.toLowerCase());
+            }
+        }
+        this.names = names;
+        return true;
+    }
+
+    get(id) {
+        return this.names.get(String(id || '').toLowerCase()) || null;
+    }
+}
 
 /** The two orchestration fields of a summary, both always present. */
 function orchestration(store, sessionId) {
@@ -106,6 +168,8 @@ class SessionIndex extends EventEmitter {
          * @type {Map<string, number>}
          */
         this.pending = new Map();
+        /** Codex thread names. See CodexNames. */
+        this.codexNames = new CodexNames(CODEX_SESSION_INDEX);
         /** One watcher per watched directory, keyed by path. See _watchDir(). */
         this.watchers = new Map();
         this._watching = false;
@@ -145,8 +209,11 @@ class SessionIndex extends EventEmitter {
                 .filter(e => e.isDirectory())
                 .map(e => path.join(PROJECTS_DIR, e.name));
         } catch {
-            return { scanned: 0, changed: 0 };
+            projectDirs = null;
         }
+        const codexDirs = this._codexDirs();
+        if (!projectDirs && !codexDirs.length) return { scanned: 0, changed: 0 };
+        projectDirs = projectDirs || [];
 
         // Built fresh rather than mutated in place, because which file a session
         // resolves to depends on every candidate for it having been seen — an
@@ -183,6 +250,41 @@ class SessionIndex extends EventEmitter {
                 }
                 byFile.set(file, rec);
                 chosen.set(id, conversationRecord(chosen.get(id), rec));
+            }
+        }
+
+        // Codex rollouts. The id is the thread's, out of session_meta (the file's
+        // name carries it too, and is the fallback). A thread is one file, so
+        // there is no second copy to choose between — but a rollout and its
+        // `.zst` can both exist for a moment while Codex compresses one, and
+        // conversationRecord picks between those the same way.
+        const named = this.codexNames.refresh();
+        for (const dir of codexDirs) {
+            if (this._watching) this._watchDir(dir);
+            let files;
+            try { files = fs.readdirSync(dir); } catch { continue; }
+            for (const f of files) {
+                if (!codex.ROLLOUT_RE.test(f)) continue;
+                const file = path.join(dir, f);
+                let st;
+                try { st = fs.statSync(file); } catch { continue; }
+                if (!st.isFile() || st.size === 0) continue;
+                scanned++;
+                let rec = this.byFile.get(file);
+                if (!rec || rec.size !== st.size || rec.mtimeMs !== st.mtimeMs) {
+                    const meta = codex.scanMeta(file);
+                    if (!meta || !meta.sessionId) continue;
+                    rec = { file, dir, size: st.size, mtimeMs: st.mtimeMs, meta };
+                    parsed++;
+                    if (parsed % 25 === 0) await new Promise(r => setImmediate(r));
+                }
+                // The thread's name, laid over the prompt-derived title. Done on
+                // every pass rather than in scanMeta, because the name lives in
+                // another file and can change while the rollout does not.
+                const name = this.codexNames.get(rec.meta.sessionId);
+                if (name) { rec.meta.title = name; rec.meta.titleSource = 'thread-name'; }
+                byFile.set(file, rec);
+                chosen.set(rec.meta.sessionId, conversationRecord(chosen.get(rec.meta.sessionId), rec));
             }
         }
 
@@ -227,6 +329,8 @@ class SessionIndex extends EventEmitter {
         }
         // Sessions whose files disappeared.
         for (const id of this.sessions.keys()) if (!chosen.has(id)) changed++;
+        // A Codex thread renamed: nothing about its rollout moved.
+        if (named) changed++;
 
         this.sessions = chosen;
         this.byFile = byFile;
@@ -265,6 +369,9 @@ class SessionIndex extends EventEmitter {
     _watch() {
         this._watching = true;
         this._watchDir(PROJECTS_DIR);
+        // The Codex tree, every level of it: a new day's directory is created by
+        // the first rollout of that day, and its parent's watch is what notices.
+        for (const dir of this._codexDirs()) this._watchDir(dir);
         try {
             for (const e of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
                 if (e.isDirectory()) this._watchDir(path.join(PROJECTS_DIR, e.name));
@@ -274,6 +381,25 @@ class SessionIndex extends EventEmitter {
         // A slow safety net: watches miss events under some filesystems.
         this._poll = setInterval(() => this.rescan(), 30_000);
         this._poll.unref();
+    }
+
+    /**
+     * Every directory under the Codex sessions directory, itself included, to
+     * CODEX_DEPTH. All of them rather than today's: a resumed thread appends to
+     * the rollout it was born in, which is filed under the day it began.
+     */
+    _codexDirs() {
+        if (!CODEX_SESSIONS_DIR) return [];
+        const out = [];
+        const walk = (dir, depth) => {
+            let ents;
+            try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+            out.push(dir);
+            if (depth >= CODEX_DEPTH) return;
+            for (const e of ents) if (e.isDirectory()) walk(path.join(dir, e.name), depth + 1);
+        };
+        walk(CODEX_SESSIONS_DIR, 0);
+        return out;
     }
 
     _watchDir(dir) {
@@ -501,8 +627,15 @@ class SessionIndex extends EventEmitter {
         const moved = movedPlace(this.orchestrators, m);
         const title = flags.title || fromSchedule || named.title;
         const titleSource = flags.title ? 'user' : fromSchedule ? 'schedule' : named.source;
+        const runtime = m.runtime || runtimes.DEFAULT;
         return {
             sessionId: m.sessionId,
+            // Which CLI wrote this conversation, and what a client may offer on
+            // it. On every row, not only on a live runner's, because a Codex
+            // session never has one of ours and still has to say it cannot take
+            // a message. See bridge/runtimes/index.js and docs/api.md.
+            runtime,
+            capabilities: runtimes.capabilitiesOf(runtime),
             pinned: flags.pinned,
             archived: flags.archived,
             test: flags.test,
@@ -609,6 +742,7 @@ class SessionIndex extends EventEmitter {
     read(sessionId) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
+        if (isCodex(rec)) return this._readCodex(rec, 0, null);
 
         let buf;
         try { buf = fs.readFileSync(rec.file); } catch { return null; }
@@ -622,12 +756,39 @@ class SessionIndex extends EventEmitter {
     }
 
     /**
+     * A Codex session's bytes [from, to) as {summary, events, offset}, the shape
+     * read() and readWindow() return.
+     *
+     * Read whole rather than by range, because a `.zst` rollout has to be: its
+     * offsets are into the decompressed bytes. A window that starts at 0 is the
+     * start of the conversation, so a fork's inherited history comes first — the
+     * child's own file does not hold it (see `inherited` in the Codex reader).
+     */
+    _readCodex(rec, from, to) {
+        const buf = codex.readFile(rec.file);
+        if (!buf) return null;
+        const end = to === null ? buf.length : Math.min(to, buf.length);
+        const { entries, consumed } = parseLines(buf.subarray(from, Math.max(from, end)));
+        const before = from === 0
+            ? codex.inherited(entries, { locate: (id) => this._codexFile(id) }) : [];
+        const { events } = codex.buildEvents([...before, ...entries]);
+        return { summary: this._summary(rec), events, offset: from + consumed };
+    }
+
+    /** The rollout of the Codex thread with this id, if the index has it. */
+    _codexFile(threadId) {
+        const rec = this.sessions.get(threadId);
+        return isCodex(rec) ? rec.file : null;
+    }
+
+    /**
      * The turn index for a session, brought up to date with its file. See
      * bridge/turn-index.js. Null for a session we do not know.
      */
     turns(sessionId) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
+        if (isCodex(rec)) return this.turnIndex.update(sessionId, rec.file, { runtime: 'codex' });
         return this.turnIndex.update(sessionId, rec.file);
     }
 
@@ -651,6 +812,7 @@ class SessionIndex extends EventEmitter {
     readWindow(sessionId, from, to = null) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
+        if (isCodex(rec)) return this._readCodex(rec, from, to);
         let buf;
         try {
             const size = fs.statSync(rec.file).size;
@@ -673,6 +835,15 @@ class SessionIndex extends EventEmitter {
     readSince(sessionId, offset) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
+        if (isCodex(rec)) {
+            const buf = codex.readFile(rec.file);
+            if (!buf) return null;
+            if (buf.length < offset) return { reset: true, offset: 0, events: [] };
+            if (buf.length === offset) return { reset: false, offset, events: [] };
+            const { entries, consumed } = parseLines(buf.subarray(offset));
+            const { events } = codex.buildEvents(entries);
+            return { reset: false, offset: offset + consumed, events };
+        }
 
         let st;
         try { st = fs.statSync(rec.file); } catch { return null; }

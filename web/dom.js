@@ -14,7 +14,7 @@ const $ = (id) => document.getElementById(id);
 export const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer', 'composer-readonly',
     'pins', 'btn-snippets', 'snip-menu', 'new-btn-snippets', 'new-snip-menu',
     'snip-fill-scrim', 'snip-fill-title', 'snip-fill-form', 'snip-fill-go',
     'snip-edit-scrim',

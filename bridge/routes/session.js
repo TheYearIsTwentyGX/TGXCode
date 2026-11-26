@@ -88,11 +88,32 @@ const handoffLimit = new HandoffLimit();
 /**
  * `{runtime, capabilities}` for a session, which `GET /api/sessions/:id` carries
  * whether or not a process is live. From the runner when there is one; otherwise
- * the default runtime, which today is every session the index knows about.
+ * from the index's summary, which knows a Codex rollout from a Claude transcript.
  */
-function runtimeFields(st) {
-    const runtime = (st && st.runtime) || runtimes.DEFAULT;
+function runtimeFields(st, summary = null) {
+    const runtime = (st && st.runtime) || (summary && summary.runtime) || runtimes.DEFAULT;
     return { runtime, capabilities: runtimes.capabilitiesOf(runtime) };
+}
+
+/**
+ * Refuse a write a session's runtime cannot take: true when it answered the
+ * request, false to go ahead.
+ *
+ * By capability, never by runtime name (D4): `flag` is the capability the route
+ * needs, and a runtime that says false for it gets a 409 naming the flag, so a
+ * client can tell "this session cannot" from "this request was wrong". A session
+ * the index does not know is left to the route, which has its own 404.
+ */
+function readOnly(res, sessionId, flag) {
+    const summary = index.summary(sessionId);
+    if (!summary || !summary.capabilities || summary.capabilities[flag] !== false) return false;
+    send(res, 409, {
+        error: `this ${summary.runtime} session is read-only here; continue it in a terminal`,
+        capability: flag, runtime: summary.runtime,
+    });
+    // True once answered — `send` itself returns nothing, so the caller's
+    // `if (readOnly(…)) return` must not lean on what it returns.
+    return true;
 }
 
 function sendWindowed(res, url, sessionId) {
@@ -107,7 +128,7 @@ function sendWindowed(res, url, sessionId) {
     const st = pool.statuses()[sessionId];
     return send(res, 200, {
         ...data,
-        ...runtimeFields(st),
+        ...runtimeFields(st, data.summary),
         turns: idx.marks,
         window: { start, startTurn },
         runner: st || null,
@@ -174,7 +195,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 const dropped = data.events.length - want;
                 return send(res, 200, {
                     ...data,
-                    ...runtimeFields(st),
+                    ...runtimeFields(st, data.summary),
                     events: want === 0 ? [] : data.events.slice(-want),
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
@@ -183,7 +204,8 @@ async function handle(req, res, url, pathname, seg, who) {
                 });
             }
             return send(res, 200, {
-                ...data, ...runtimeFields(st), runner: st || null, suggestions: acted, prefs: settings });
+                ...data, ...runtimeFields(st, data.summary), runner: st || null, suggestions: acted,
+                prefs: settings });
         }
 
         // Hard delete. Everywhere else in this app "remove" means archive; this
@@ -194,6 +216,7 @@ async function handle(req, res, url, pathname, seg, who) {
         if (!tail && req.method === 'DELETE') {
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
+            if (readOnly(res, sessionId, 'delete')) return;
 
             const r = pool.get(sessionId);
             if (r && (r.state === 'busy' || r.state === 'starting')) {
@@ -379,6 +402,7 @@ async function handle(req, res, url, pathname, seg, who) {
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
+            if (readOnly(res, sessionId, 'send')) return;
             const cwd = sessionCwd(summary);
 
             // Where the copy is cut, worked out here rather than taken from the
@@ -460,6 +484,7 @@ async function handle(req, res, url, pathname, seg, who) {
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
+            if (readOnly(res, sessionId, 'send')) return;
 
             const row = later.create({
                 ...v.fields,
@@ -500,6 +525,7 @@ async function handle(req, res, url, pathname, seg, who) {
             const refusal = modeRefusal(normalizeMode((st && st.permissionMode)
                 || (summary && summary.permissionMode)), who);
             if (refusal) return send(res, 403, { error: refusal, remote: true });
+            if (readOnly(res, sessionId, 'send')) return;
             const out = wakeUps.setWake(sessionId, {
                 at: body.at, in: body.in, prompt: body.prompt, reason: body.reason,
             });
@@ -564,6 +590,7 @@ async function handle(req, res, url, pathname, seg, who) {
                         + 'has to come from there, not from a name or a title.',
                 });
             }
+            if (readOnly(res, sessionId, 'send')) return;
 
             // A session held by a terminal, VS Code, or a background agent. Said
             // here rather than left to the spawn, which would fail with the same
@@ -638,6 +665,7 @@ async function handle(req, res, url, pathname, seg, who) {
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
+            if (readOnly(res, sessionId, 'send')) return;
 
             return receiveAttachment(req, res, sessionCwd(summary), name, who);
         }

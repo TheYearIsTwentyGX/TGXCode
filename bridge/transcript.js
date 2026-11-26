@@ -14,11 +14,12 @@
 //   bridge/jsonl.js                        reading a JSONL file still being written
 //
 // **The top-level reader names are Claude's.** `scanMeta`, `buildEvents` and the
-// rest below read Claude Code's format, because every session the index knows
-// about is a Claude session. Code that has a session in hand and wants *its*
-// reader asks `readerFor(runtime)`, which answers with an object carrying the
-// READER names — the same functions, for Claude — and is how a second reader is
-// reached without the caller branching on which runtime it is.
+// rest below read Claude Code's format, because nearly every caller is reading a
+// Claude transcript. Code that has a session in hand and wants *its* reader asks
+// `readerFor(runtime)`, which answers with an object carrying the READER names —
+// the same functions, for Claude; bridge/runtimes/codex/transcript.js for a Codex
+// rollout, which has `parseLines`, `scanMeta` and `buildEvents` and leaves the
+// rest out (Codex has no subagent files, no spilled tool output, no TodoWrite).
 
 const places = require('./places');
 const envelopes = require('./envelopes');
@@ -38,9 +39,12 @@ const READER = [
     'lastActivity', 'recentActivity', 'todoProgress', 'todoList', 'describeTool',
 ];
 
-/** The transcript reader for a runtime (`"claude"` when none is named). */
+/**
+ * The transcript reader for a runtime (`"claude"` when none is named) — a runtime
+ * the bridge can run or one it can only read, which is what Codex is for now.
+ */
 function readerFor(runtime) {
-    return runtimes.get(runtime).reader;
+    return runtimes.describe(runtime).reader;
 }
 
 module.exports = {

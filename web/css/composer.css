@@ -30,6 +30,20 @@
 @media (prefers-reduced-motion: reduce) { .composer { transition: none; } }
 .composer-inner { max-width: 1000px; margin: 0 auto; }
 
+/* A session that cannot take a message (`capabilities.send` false): the line
+   below stands in for the whole composer — box, queue, chips and pickers — so
+   nothing offers to send what the bridge would refuse. */
+.composer.read-only .composer-inner > :not(.composer-readonly) { display: none !important; }
+.composer-readonly {
+    padding: var(--sp-4) var(--sp-5);
+    border: 1px dashed var(--outline);
+    border-radius: var(--r-sm);
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+}
+.composer-readonly strong { color: var(--text-2); font-weight: 600; }
+
 .status-line {
     display: flex;
     align-items: center;

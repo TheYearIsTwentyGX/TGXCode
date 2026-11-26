@@ -28,8 +28,14 @@ import { present } from '../motion.js';
 // loaded, and from the rendered log after that, so a session streaming in a
 // terminal grows its rail as it goes.
 
-/** The two tool calls that are a moment in the conversation rather than work. */
-export const REVIEWABLE = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
+/**
+ * The tool calls that are a moment in the conversation rather than work: Claude's
+ * two, and Codex's `plan` item and blocking `request_user_input` (the names
+ * bridge/codex/items.js gives those rows, and bridge/runtimes/codex/tools.js marks).
+ */
+export const REVIEWABLE = {
+    ExitPlanMode: 'plan', AskUserQuestion: 'question', plan: 'plan', request_user_input: 'question',
+};
 
 export function turnText(ev) {
     if (ev.command) return `/${ev.command.name}${ev.command.args ? ' ' + ev.command.args : ''}`;

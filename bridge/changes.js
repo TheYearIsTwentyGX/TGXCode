@@ -21,6 +21,11 @@
 //   * **Which tool calls count.** Keyed on the tool's *name*, never on a result
 //     having a `filePath` — `ExitPlanMode` results carry one too (the plan file),
 //     so keying on the field lists plans as edits.
+//   * **One call, several files.** A Codex `apply_patch` row (a `fileChange`
+//     item) carries every file it touched in `input.changes`, each with the
+//     unified diff Codex computed. Its counts come from those diffs — the same
+//     rule as `structuredPatch` above, the diff the conversation shows — and each
+//     file is a row of its own. See bridge/codex/items.js.
 //   * **Subagents.** A `Task` writes its own transcript, so a session that
 //     delegates its work has no `Edit` calls of its own at all. Folding those in
 //     is the difference between "no files changed" and the truth, and it is why
@@ -31,6 +36,7 @@ const path = require('path');
 
 const { readSubagentIndex, readSubagentTranscript } = require('./transcript');
 const runtimes = require('./runtimes');
+const { countDiff } = require('./codex/items');
 
 // Everything that changes a file on disk and reports a patch for it — a table
 // the runtime supplies, because the names are the CLI's (`tools.edits` in
@@ -148,13 +154,7 @@ function fromEvents(events, {
     into = new Map(), pending = new Map(), done = new Set(), agent = null, runtime = null,
 } = {}) {
     const edits = runtime ? runtimes.toolsOf(runtime).edits : EDIT_TOOLS;
-    const record = (ev) => {
-        const file = pathOf(ev);
-        if (!file) return;
-        if (done.has(ev.id)) return;
-        done.add(ev.id);
-
-        const { added, deleted } = countEdit(ev);
+    const add = (file, id, ts, added, deleted) => {
         let row = into.get(file);
         if (!row) {
             row = { path: file, added: 0, deleted: 0, edits: [] };
@@ -162,7 +162,28 @@ function fromEvents(events, {
         }
         row.added += added;
         row.deleted += deleted;
-        row.edits.push({ toolId: ev.id, ts: ev.resultTs || ev.ts || null, added, deleted, agent });
+        row.edits.push({ toolId: id, ts, added, deleted, agent });
+    };
+    const record = (ev) => {
+        // A patch over several files: one row per file, counted off its own diff.
+        const many = ev.input && Array.isArray(ev.input.changes) ? ev.input.changes : null;
+        if (many) {
+            if (done.has(ev.id)) return;
+            done.add(ev.id);
+            for (const c of many) {
+                if (!c || !c.path) continue;
+                const { added, deleted } = countDiff(c.diff);
+                add(c.movePath || c.path, ev.id, ev.resultTs || ev.ts || null, added, deleted);
+            }
+            return;
+        }
+        const file = pathOf(ev);
+        if (!file) return;
+        if (done.has(ev.id)) return;
+        done.add(ev.id);
+
+        const { added, deleted } = countEdit(ev);
+        add(file, ev.id, ev.resultTs || ev.ts || null, added, deleted);
     };
 
     for (const ev of events || []) {
@@ -299,6 +320,9 @@ function fromSubagents(sessionId, sessionDir) {
  */
 function fromTranscript(index, sessionId) {
     const state = stateOf(sessionId);
+    // Whose tool names count as edits: the session's own runtime's.
+    const rec = index.get ? index.get(sessionId) : null;
+    const runtime = (rec && rec.meta && rec.meta.runtime) || null;
     let delta = index.readSince(sessionId, state.main.offset);
     if (delta && delta.reset) {
         state.main = holder();
@@ -310,6 +334,7 @@ function fromTranscript(index, sessionId) {
         into: state.main.files,
         pending: state.main.pending,
         done: state.main.done,
+        runtime,
     });
     state.main.offset = delta.offset;
     return state.main.files;

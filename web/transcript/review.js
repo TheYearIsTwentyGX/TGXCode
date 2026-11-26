@@ -13,7 +13,7 @@ import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
 import { closeContextMenu } from './context-menu.js';
 import { readAnswer } from './tools.js';
-import { hideTurnPop } from './turn-rail.js';
+import { hideTurnPop, REVIEWABLE } from './turn-rail.js';
 
 // ── reviewing a plan or a question ───────────────────────────────────────
 //
@@ -28,6 +28,9 @@ import { hideTurnPop } from './turn-rail.js';
 
 /** What became of an ask, in the few words a tick label and a popover have room for. */
 export function markOutcome(ev) {
+    // A Codex plan is put forward and not approved: the turn ends with it, and
+    // there was nothing to allow or deny.
+    if (ev.name === 'plan') return 'proposed';
     if (!ev.result) return 'still waiting';
     const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test(ev.result.text || '');
     if (ev.name === 'ExitPlanMode') {
@@ -79,7 +82,7 @@ export function paintReview() {
     const entry = state.nodes.get(state.review.evId);
     if (!entry) return closeReview();
     const ev = entry.ev;
-    const plan = ev.name === 'ExitPlanMode';
+    const plan = REVIEWABLE[ev.name] === 'plan';
 
     dom.reviewKind.textContent = plan ? 'Plan' : 'Question';
     dom.reviewTitle.textContent = markOutcome(ev);

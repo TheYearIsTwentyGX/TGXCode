@@ -41,6 +41,7 @@
 import { html, render } from './vendor/preact.js';
 import { state } from './state.js';
 import { dom } from './dom.js';
+import { can } from './capabilities.js';
 import { BOOT_PREFS } from './boot.js';
 import { ago, clip, hhmm, hourOpts } from './format.js';
 import { ICON, PR_ICON } from './icons.js';
@@ -406,6 +407,8 @@ function strip(s) {
                 <span class="strip-meta">
                     ${s.pinned ? html`<span class="tag-pin" title="Pinned">${icon('pin', 11)}</span>` : null}
                     ${s.test ? html`<span class="tag-test">test</span>` : null}
+                    ${can('send', s) ? null : html`<span class="tag-runtime"
+                        title=${`Read-only here: written by ${s.runtime || 'another program'}`}>${s.runtime || 'read-only'}</span>`}
                     ${orchestratorBadge(s)}
                     ${(s.live && s.live.kind === 'bg')
                         ? html`<span class="tag-bg" title="A background agent">bg</span>` : null}
@@ -454,9 +457,9 @@ function strip(s) {
                     title=${s.archived ? 'Restore from archive' : 'Archive'}
                     onClick=${(e) => { e.stopPropagation(); setFlags(s, { archived: !s.archived }); }}
                 >${icon(s.archived ? 'unarchive' : 'archive')}</button>
-                <button class="mini danger" type="button" title="Delete permanently"
+                ${can('delete', s) ? html`<button class="mini danger" type="button" title="Delete permanently"
                     onClick=${(e) => { e.stopPropagation(); askDelete(s); }}
-                >${icon('trash')}</button>`}
+                >${icon('trash')}</button>` : null}`}
             </div>
         </div>`;
 }

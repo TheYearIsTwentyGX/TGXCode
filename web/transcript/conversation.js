@@ -23,6 +23,7 @@
 // before this file runs. Do not extend the exception to any other import.
 
 import { get } from '../api.js';
+import { can } from '../capabilities.js';
 import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
 import { dom, el, toast } from '../dom.js';
@@ -456,6 +457,13 @@ export function renderHeader() {
             + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.`}
             >${`Claude ${oldClaude.version} (older)`}</span>`);
     }
+    // The CLI's name, only where it matters to what you can do here: a session
+    // that cannot take a message says which program it belongs to, so you know
+    // where to continue it. Keyed on the capability; the name is only a label.
+    if (!can('send', s) && s.runtime) {
+        bits.push(sep('runtime'), html`<span key="runtime" class="runtime-chip"
+            title="Read-only here: this bridge reads this session but does not run it">${`${s.runtime} · read-only`}</span>`);
+    }
     bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
     const spend = spendBit(sep);
     if (spend) bits.push(...spend);
@@ -478,6 +486,28 @@ export function renderHeader() {
     render(bits, dom.convSub);
     renderHeaderReview(state.prStatus ? [...state.prStatus.values()] : [], s.cwd, renderHeader);
     renderHeaderActions();
+    paintComposerAccess();
+}
+
+/**
+ * The composer, or the line that stands in for it on a session that cannot take
+ * a message (`capabilities.send` false). Nothing about the box is offered there —
+ * not the text area, not the queue, the mode chip or the model picker — because a
+ * composer that accepted a message and then 409'd would be pretending.
+ */
+export function paintComposerAccess() {
+    const s = state.current;
+    const open = !s || can('send', s);
+    dom.composer.classList.toggle('read-only', !open);
+    if (!dom.composerReadonly) return;
+    dom.composerReadonly.hidden = open;
+    if (open) { dom.composerReadonly.replaceChildren(); return; }
+    const who = s.runtime || 'another program';
+    dom.composerReadonly.replaceChildren(
+        el('strong', {}, 'Read-only here. '),
+        el('span', {}, `This conversation was written by ${who}, and this bridge reads it without running it. `
+            + 'Continue it where it was started.'),
+    );
 }
 
 /**
@@ -576,6 +606,10 @@ export function renderHeaderActions() {
     dom.btnArchive.classList.toggle('on', !!s.archived);
     dom.btnArchive.title = s.archived ? 'Restore from archive' : 'Archive this session';
     dom.btnDelete.title = `Delete “${clip(s.title, 40)}” permanently`;
+    // A runtime whose transcripts are not ours to remove says so (`delete`), and
+    // one with no checklist of its own (`tasks`) has nothing for the button to open.
+    dom.btnDelete.hidden = !can('delete', s);
+    dom.btnChecklist.hidden = !can('tasks', s);
     dom.btnChecklist.classList.toggle('on', state.checklist.on);
     dom.btnChecklist.setAttribute('aria-pressed', String(state.checklist.on));
     dom.btnChecklist.title = state.checklist.on
