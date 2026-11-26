@@ -4080,7 +4080,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `runner-status` | see below |
 | `runner-stalled` | `{sessionId: string, stalled: boolean, lastActivityAt: number\|null, busySince: number\|null, stalledAfterMs: number}` — a busy turn crossed into or out of *stalled* (rule under §*`runner-status`*). Times are epoch ms; `stalledAfterMs` is the threshold in force for that session's directory. Sent once per crossing, never repeated while it stays stalled. `stalled: false` comes from the next line on the stream **or** from the turn ending any way at all — stopped, finished, died — so a client may treat it as "take the badge and the toast down". A `runner-status` carrying the same `stalled` follows (or, on a turn ending, is the same broadcast's next message), so a client that only reads `runner-status` still draws it right; this event exists for the notification. A `stalled: true` also files a loud `stalled` notification row |
 | `permission-request` | `{sessionId, ...ask}` |
-| `permission-resolved` | `{sessionId, requestId, outcome}` |
+| `permission-resolved` | `{sessionId, requestId, outcome, choice?}` — `choice` (string) is present only when the ask carried `decisions`: the `id` of the entry it was answered with, whoever answered it. `outcome` is then still one of the usual words (`allow`, `allow-always` for a `session` or `always` scope, `deny`, …) |
 | `sudo-ask` | a **sudo ask**, the object in §*Approving sudo* (`kind: "sudo"`, `id` = `requestId`). Ungated: every stream gets it. **Never carries a password**, and there is no event that does. Also files a `notification` row and pushes a `runner-status` for that session, whose `sudoAsk` is this object |
 | `sudo-resolved` | `{id, requestId, sessionId, outcome, reason?}` — `outcome` is `"approved"` (a password was handed to sudo — not necessarily the right one; a wrong one comes back as a new `sudo-ask` with `attempt` one higher), `"denied"` or `"cancelled"` (sudo exited, the Bash call was stopped or timed out; `reason` says which). Take the card down. Its notification row is resolved `allow`, `deny` or `cancelled` |
 | `secret-ask` | a **secret ask**, the object in §*Secrets* (`kind: "secret"`, `id` = `requestId`): an agent asked for a secret by name. Ungated: every stream gets it. **Never carries a value**, and there is no event that does. Also files a `notification` row and pushes a `runner-status` for that session, whose `secretAsk` is this object |
@@ -5909,10 +5909,20 @@ The one route that answers all three kinds of ask.
 
 ```
 { requestId, decision: "allow" | "allow-always" | "deny",
-  updatedInput?, answers?, feedback?, mode? }
+  choice?, updatedInput?, answers?, feedback?, mode? }
 ```
 
 - **Tool** — `allow`, `deny`, or `allow-always` (this tool, this session only).
+  **Or `choice`**, a string: the `id` of one of the ask's `decisions` (below), for
+  an ask that carries them. A `choice` says the decision by itself, so `decision`
+  may then be left out; when both are sent, `choice` wins. A `decision` without a
+  `choice` still works on such an ask, and is mapped onto its list: `allow` is the
+  entry with `behavior: "allow"` and `scope: "once"`, `allow-always` the one with
+  `scope: "session"`, and `deny` the first `behavior: "deny"` entry that does not
+  end the turn, else the one that does. When the list has no such entry the answer
+  is refused **`400`**, rather than answered with something stronger or weaker
+  than the button said — a list with no session-scoped allow refuses
+  `allow-always`.
 - **Plan** — `allow` **plus `mode`**. This is load-bearing: the session is *in* plan
   mode while the card is up, so approving without changing mode agrees to the work
   and then blocks every edit in it. `auto` is the normal choice, `acceptEdits` the
@@ -5921,11 +5931,20 @@ The one route that answers all three kinds of ask.
   tool's error, which is where the model reads a refusal — so "too broad, do the
   parser first" produces a different plan rather than the same one again.
 - **Question** — `allow` with `answers`, an object keyed by the **exact question
-  text** from `ask.input.questions[].question`.
+  text** from `ask.input.questions[].question`, **or by the question's `id`** where
+  it has one (`ask.input.questions[].id`, a string, present when the runtime
+  answers by id). Each value is **a string, or an array of strings** for several
+  choices; blank strings are dropped. A key that names no question is ignored, and
+  an answer with nothing left in it is `409 {error: "no answers were given"}`.
+  Several strings reach a Claude session joined with `", "`, as one string.
 
 `404` means no live process. **`409` means it was already answered** — by another
 window, or the desktop's notification buttons. That is an ordinary outcome, not an
-error to shout about.
+error to shout about. **`400`** is an answer that could never be right: no valid
+`decision` and no `choice`, a `choice` the ask did not offer (any `choice` on an ask
+with no `decisions`), or an old-style `decision` the ask's list has no entry for.
+The body is `{ok: false, invalid: true, error}` for the last two, and the card is
+still up.
 
 The ask shape (`permission-request`, and `runner.pendingPermission`):
 
@@ -5941,6 +5960,23 @@ The ask shape (`permission-request`, and `runner.pendingPermission`):
 `displayName` is the label to draw: for an MCP tool it is always the friendly
 form (`mcp__tgxcode__set_summary` → `TGXCode: Set Summary`), whatever the CLI
 sent; for anything else it is the CLI's own label, usually the same as `tool`.
+
+**`decisions`** — **array of objects, present only on a tool ask whose runtime
+offers its own list of answers** instead of allow and deny (a Codex command
+approval's `availableDecisions`; see §*`runtime` and `capabilities`*). **Absent on
+every Claude ask**, so a client that ignores it keeps working there. Each entry:
+
+| Field | Type |
+|---|---|
+| `id` | string — what to send back as `choice` |
+| `label` | string — the button's text, the runtime's meaning in words |
+| `behavior` | `"allow"` or `"deny"` |
+| `scope` | `"once"`, `"session"` (for the rest of this session) or `"always"` — **a rule the runtime keeps beyond this session**, stronger than `allow-always`; the label says so, and a card should not make it look like the everyday allow |
+| `endsTurn` | bool — a refusal that also stops the turn (Codex's `cancel`) |
+
+When the list is there, draw one button per entry, in order, and answer with
+`choice`. A card that only knows allow, allow-always and deny still works through
+the mapping above, but can be refused `400` where the list has no equivalent.
 
 **`secretNames`** — **array of strings, present only on a Bash ask the secrets hook
 wrapped** (§*Secrets*). `input.command` is then the command that runs, unwrapped, and

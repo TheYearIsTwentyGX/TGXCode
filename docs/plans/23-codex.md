@@ -270,11 +270,16 @@ reads correctly, with no Codex process started by the bridge.
 
 These are the `runner.js` behaviours, one by one, mapped onto the app-server.
 Phase 1's process contract (the header of `bridge/runtimes/claude/process.js`)
-holds for most of them. `bridge/codex/README` §Fit lists the seven places it
-does not: the handshake has to gate the queue, Codex mints the new session's
-id, there is no unsolicited `init`, turns are requests, a refused steer has to
-be queued again, and approvals and questions have answers richer than
-allow/deny.
+held for most of them. `bridge/codex/README` §Fit lists the seven places it did
+not: the handshake has to gate the queue, Codex mints the new session's id,
+there is no unsolicited `init`, turns are requests, a refused steer has to be
+queued again, and approvals and questions have answers richer than allow/deny.
+**The contract has since been widened for all seven** (`handshakeGates` and
+`handshake(o)`, `init.minted`, `init` built in `read`, adapter-owned request
+ids, the `returned` lifecycle state, `decisions` with `choice`, and question
+answers as a list), with `test/runtime-contract.test.js` driving a fake runtime
+through each. What is left of them is in the README: the create route still
+answers with the placeholder id, and the cards still draw allow and deny.
 
 | Ours | Codex |
 |---|---|

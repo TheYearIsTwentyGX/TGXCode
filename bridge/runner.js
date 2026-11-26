@@ -334,6 +334,13 @@ class Runner extends EventEmitter {
         // `caps.interrupt`, which is about the build and is shared by the whole
         // pool — see stop().
         this._interruptTimedOut = false;
+        // True from the spawn until the adapter's handshake settles, for an
+        // adapter whose handshake gates the queue (`handshakeGates`). Nothing is
+        // written while it is set — see start().
+        this._handshaking = false;
+        // `{kind, message}` once a gated handshake has failed and the process is
+        // being ended for it; the close handler reads it in place of stderr.
+        this._fatal = null;
     }
 
     // -- lifecycle ---------------------------------------------------------
@@ -359,6 +366,8 @@ class Runner extends EventEmitter {
         this.errorKind = null;
         // A fresh process is not the one that was too busy to answer.
         this._interruptTimedOut = false;
+        this._fatal = null;
+        this._handshaking = false;
 
         // Ours, whichever CLI is on the other end: which part of an orchestration
         // this session plays, whether it may drive the preview, and what TGXCode
@@ -375,12 +384,16 @@ class Runner extends EventEmitter {
         const systemPrompt = [general, role && role.brief].filter(Boolean).join('\n\n');
         // `isNew`, `fork` and `branch` are facts about *this start*, not about
         // the runner — see the reset below the spawn, and the bug that reset fixes.
-        const args = this.adapter.argv({
+        // The same object goes to the handshake below: a runtime that starts or
+        // resumes its conversation by request rather than by flag needs exactly
+        // what argv is told.
+        const startOpts = {
             sessionId: this.sessionId, cwd: this.cwd, permissionMode: this.permissionMode,
             model: this.model, effort: this.effort,
             isNew: this.isNew, fork: this.fork, branch: this.branch,
             role: this.role, preview, systemPrompt: systemPrompt || null, caps: this.caps,
-        });
+        };
+        const args = this.adapter.argv(startOpts);
 
         this._setState('starting', `Starting ${this.adapter.label}…`);
 
@@ -447,11 +460,47 @@ class Runner extends EventEmitter {
         this._saveNote();
 
         // Whatever the CLI expects a client to open with; see the adapter's.
-        this.adapter.handshake().catch(() => { /* older build; the fallbacks cover it */ });
+        // Called synchronously, so whatever it writes first is written before the
+        // first turn is.
+        let shake;
+        try { shake = Promise.resolve(this.adapter.handshake(startOpts)); } catch (err) { shake = Promise.reject(err); }
 
-        // The process is ready for input immediately; `system/init` confirms it.
-        this._setState('idle', null);
-        this._flushQueue();
+        if (!this.adapter.handshakeGates) {
+            shake.catch(() => { /* older build; the fallbacks cover it */ });
+            // The process is ready for input immediately; `system/init` confirms it.
+            this._setState('idle', null);
+            this._flushQueue();
+            return;
+        }
+
+        // A runtime that refuses everything until it has been introduced, and
+        // cannot take a turn until its conversation has been opened by request
+        // (Codex: `initialize`, then `thread/start` or `thread/resume`). The
+        // runner stays `starting`, and the queue stays ours — editable, and
+        // handed back if this never finishes — until the handshake settles. A
+        // rejection is not "an older build" here: the process can do nothing, so
+        // it is ended and the reason is the session's error.
+        this._handshaking = true;
+        const proc = this.proc;
+        shake.then(() => {
+            if (this.proc !== proc || !this._handshaking) return;
+            this._handshaking = false;
+            if (this.state === 'starting') this._setState('idle', null);
+            this._flushQueue();
+        }, (err) => {
+            if (this.proc !== proc || !this._handshaking) return;
+            this._handshaking = false;
+            // `kind` is the adapter's, from docs/api.md's `send-failed` kinds; a
+            // failure it did not classify is `unknown`, said in its own words.
+            this._fatal = {
+                kind: (err && err.kind) || 'unknown',
+                message: (err && err.kind && err.message)
+                    || `${this.adapter.product} did not finish starting: ${(err && err.message) || 'no reason given'}`,
+            };
+            try { proc.stdin.end(); } catch { /* already closed */ }
+            setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, 1500).unref();
+            try { proc.kill('SIGTERM'); } catch { /* gone */ }
+        });
     }
 
     /**
@@ -517,7 +566,20 @@ class Runner extends EventEmitter {
             // as anything after this is concerned, including the next process.
             for (const q of this.queue) q.handed = false;
             this._lifecycle = false;
-            if (this._stopping) {
+            this._handshaking = false;
+            if (this._fatal) {
+                // A gated handshake failed and start() ended the process for it.
+                // Nothing was written past the handshake, so the queue — and
+                // `flight`, which is empty — goes back whole, and the reason is
+                // the adapter's rather than whatever the process said as it went.
+                const fatal = this._fatal;
+                this._fatal = null;
+                this._stopping = false;
+                this.errorKind = fatal.kind;
+                this.lastError = fatal.message;
+                this._handBack(fatal.kind, fatal.message, flight);
+                this._setState('error', null);
+            } else if (this._stopping) {
                 this._stopping = false;
                 // Stopping means stopping. `flight` is the turn the user asked to
                 // end, and `claude` writes its user entry at submission rather
@@ -625,6 +687,8 @@ class Runner extends EventEmitter {
      */
     _flushQueue() {
         if (!this.proc || !this.proc.stdin.writable) return;
+        // A gated handshake still under way: the process cannot take a turn yet.
+        if (this._handshaking) return;
         // `inFlight` is the gate, not just bookkeeping: while anything is in it
         // nothing else is written, which is what keeps one turn in flight at a
         // time. That makes a stale entry silent and total — the runner reports
@@ -654,7 +718,7 @@ class Runner extends EventEmitter {
         this._saveNote();
         // A rejected write means the process is going away. The message is still
         // ours at that point, so put it back rather than dropping it on the floor.
-        if (!this._write(this.adapter.turn(entry))) {
+        if (!this._write(this.adapter.turn(entry, { handOver: false }))) {
             this.inFlight.pop();
             this.queue.unshift(entry);
             return;
@@ -690,7 +754,7 @@ class Runner extends EventEmitter {
      */
     _handOver() {
         if (!this._lifecycle || !this._pendingTools.size) return;
-        if (!this.proc || !this.proc.stdin.writable) return;
+        if (!this.proc || !this.proc.stdin.writable || this._handshaking) return;
         const waiting = this.queue.filter(q => !q.handed);
         if (!waiting.length) return;
         for (const entry of waiting) {
@@ -698,7 +762,10 @@ class Runner extends EventEmitter {
             // between the two must leave a note saying the process has it.
             entry.handed = true;
             this._saveNote();
-            if (!this._write(this.adapter.turn(entry))) { entry.handed = false; break; }
+            // `handOver` tells the adapter this joins the running turn rather than
+            // starting one: the same line for Claude, a different request for a
+            // runtime that steers (Codex's `turn/steer`).
+            if (!this._write(this.adapter.turn(entry, { handOver: true }))) { entry.handed = false; break; }
         }
         this._queueChanged();
     }
@@ -713,6 +780,10 @@ class Runner extends EventEmitter {
      *   completed  the turn that took it ended; `result` accounts for that.
      *   cancelled  taken back — by cancel_async_message, or swept by an interrupt.
      *   discarded  the session ended with it still queued.
+     *   returned   not taken, and still wanted: the turn it was handed to had
+     *              already ended (Codex refuses a steer that loses that race). It
+     *              is ours again, unhanded, at the front of the queue, and goes out
+     *              as a turn of its own once nothing is running — never dropped.
      */
     _onLifecycle(ev) {
         this._lifecycle = true;
@@ -729,6 +800,14 @@ class Runner extends EventEmitter {
             this.queue.splice(i, 1);
             this._queueChanged();
             this._settleIfDone();
+        } else if (ev.state === 'returned') {
+            this.queue[i].handed = false;
+            this._queueChanged();
+            // Usually the turn has ended already and was only staying busy for
+            // this one; settling flushes it. If a turn is still running it waits,
+            // and the next tool call may hand it over again.
+            this._settleIfDone();
+            this._flushQueue();
         }
     }
 
@@ -862,6 +941,9 @@ class Runner extends EventEmitter {
             pendingSettings: this.pendingSettings,
             answered: this._answered,
             sessionAllow: [...this._sessionAllow],
+            // Only when it is not the default, so a Claude session's note is the
+            // one it always was. adoptHeld makes the runner from it.
+            ...(this.runtime !== runtimes.DEFAULT && { runtime: this.runtime }),
         });
     }
 
@@ -1081,8 +1163,14 @@ class Runner extends EventEmitter {
         // a plan or a question has no kind — each one is a different plan and a
         // different question, and answering the next one in advance is not
         // something anybody can mean.
-        if (kind === 'tool' && this._sessionAllow.has(ask.tool)) {
-            this._respondPermission(ask, { behavior: 'allow', allowSession: true });
+        //
+        // An ask that carries the runtime's own decisions is answered this way
+        // only when one of them is allow-for-the-session; otherwise the yes given
+        // earlier is not one this runtime can say, and the card goes up.
+        const sessionChoice = ask.decisions
+            ? choiceFor(ask, 'allow', { allowSession: true, strict: true }) : null;
+        if (kind === 'tool' && this._sessionAllow.has(ask.tool) && (!ask.decisions || sessionChoice)) {
+            this._respondPermission(ask, { behavior: 'allow', allowSession: true, choice: sessionChoice });
             return;
         }
 
@@ -1114,11 +1202,17 @@ class Runner extends EventEmitter {
     /**
      * Answer an outstanding ask. Called from the UI.
      *
+     * A `{ok: false, invalid: true}` is a request that could never be right —
+     * a choice the ask did not offer, or an old-style decision it has no
+     * equivalent for — and the route answers it 400 rather than 409.
+     *
      * @param {string} requestId
-     * @param {'allow'|'allow-always'|'deny'} decision
+     * @param {'allow'|'allow-always'|'deny'|null} decision null when `extra.choice` says it
      * @param {object} [extra]
+     * @param {string} [extra.choice] the `id` of one of the ask's `decisions`
      * @param {object} [extra.updatedInput] edited tool input to run instead
-     * @param {Record<string,string>} [extra.answers] answers, keyed by question text
+     * @param {Record<string,string|string[]>} [extra.answers] answers, keyed by
+     *   question text or by a question's `id`
      * @param {string} [extra.feedback] what to tell the model when it is turned down
      * @param {string} [extra.mode] permission mode to continue an approved plan in
      */
@@ -1129,6 +1223,24 @@ class Runner extends EventEmitter {
         // rather than silently doing nothing.
         if (ask.id !== requestId) return { ok: false, error: 'that request was already answered' };
 
+        // A choice from the runtime's own list (`decisions`, tool asks only),
+        // which says the decision itself. Without one, an ask that carries a list
+        // is answered with the entry the old word means — or refused, rather than
+        // quietly answered with something stronger or weaker than the button said.
+        let choice = null;
+        if (extra.choice != null && extra.choice !== '') {
+            choice = (ask.decisions || []).find(d => d.id === String(extra.choice)) || null;
+            if (!choice) return { ok: false, invalid: true, error: 'that is not one of this ask\u2019s decisions' };
+            decision = choice.behavior === 'deny' ? 'deny' : choice.scope === 'once' ? 'allow' : 'allow-always';
+        } else if (ask.decisions && ask.kind === 'tool') {
+            choice = choiceFor(ask, decision === 'deny' ? 'deny' : 'allow',
+                { allowSession: decision === 'allow-always', strict: true });
+            if (!choice) {
+                return { ok: false, invalid: true, error: `this ask offers no ${
+                    decision === 'allow-always' ? 'allow for the session' : decision}; choose one of its decisions` };
+            }
+        }
+
         this.lastUsedAt = Date.now();
         this._autoDenies = 0;   // somebody is here; the spin guard can reset
 
@@ -1136,10 +1248,12 @@ class Runner extends EventEmitter {
 
         if (decision === 'deny') {
             this._respondPermission(ask, {
-                behavior: 'deny', message: 'Denied from TGXCode.',
+                behavior: 'deny', message: 'Denied from TGXCode.', choice,
             });
         } else {
-            const always = decision === 'allow-always';
+            // "For the session" is ours to remember across a restart; a rule the
+            // runtime keeps for good (`scope: 'always'`) is the runtime's.
+            const always = choice ? choice.scope === 'session' : decision === 'allow-always';
             if (always) this._sessionAllow.add(ask.tool);
             let { updatedInput } = extra;
             // An edited command was edited unwrapped, as the card showed it; it
@@ -1152,9 +1266,10 @@ class Runner extends EventEmitter {
                 behavior: 'allow',
                 updatedInput: updatedInput && Object.keys(updatedInput).length ? updatedInput : null,
                 allowSession: always,
+                choice,
             });
         }
-        this._clearPermission(decision);
+        this._clearPermission(decision, choice);
         return { ok: true };
     }
 
@@ -1187,21 +1302,38 @@ class Runner extends EventEmitter {
         }
 
         if (ask.kind === 'question') {
-            // `answers` is keyed by the question text, which is what the CLI
-            // matches on; a key that names no question is dropped rather than
-            // passed through, so a stale card cannot answer a live question.
-            const asked = new Set((ask.input.questions || []).map(q => q.question));
-            const clean = {};
-            for (const [q, a] of Object.entries(answers || {})) {
-                if (asked.has(q) && String(a || '').trim()) clean[q] = String(a);
+            // `answers` is keyed by the question text, which is what Claude
+            // matches on, or by a question's `id` where the runtime gives one
+            // (Codex answers by id). A key that names no question is dropped
+            // rather than passed through, so a stale card cannot answer a live
+            // question. A value is one string or several.
+            //
+            // What reaches the adapter is a list, `[{id, question, answers:
+            // [string]}]`, and the adapter says it in its runtime's shape: Claude
+            // puts it in `updatedInput.answers` keyed by text, Codex in
+            // `{answers: {<id>: {answers}}}`. The runner no longer builds either.
+            const byKey = new Map();
+            for (const q of ask.input.questions || []) {
+                if (!q) continue;
+                if (typeof q.question === 'string') byKey.set(q.question, q);
+                if (q.id != null && !byKey.has(String(q.id))) byKey.set(String(q.id), q);
             }
-            if (!Object.keys(clean).length) {
+            const given = [];
+            const seen = new Set();
+            for (const [key, a] of Object.entries(answers || {})) {
+                const q = byKey.get(key);
+                if (!q || seen.has(q)) continue;
+                const values = Array.isArray(a)
+                    ? a.map(v => (v == null ? '' : String(v))).filter(v => v.trim())
+                    : (String(a || '').trim() ? [String(a)] : []);
+                if (!values.length) continue;
+                seen.add(q);
+                given.push({ id: q.id != null ? String(q.id) : null, question: q.question, answers: values });
+            }
+            if (!given.length) {
                 return { ok: false, error: 'no answers were given' };
             }
-            this._respondPermission(ask, {
-                behavior: 'allow',
-                updatedInput: { ...ask.input, answers: clean },
-            });
+            this._respondPermission(ask, { behavior: 'allow', answers: given });
             this._clearPermission('answered');
             return { ok: true };
         }
@@ -1265,19 +1397,29 @@ class Runner extends EventEmitter {
      * Answer an ask on the wire. `allowSession` is "allow always": the tool is
      * allowed for the rest of the session, which the adapter says in the CLI's
      * own terms.
+     *
+     * `choice` is the entry of `ask.decisions` this answer is, for a runtime
+     * that offers its own list. Every answer the bridge gives by itself — a
+     * stop, an auto-deny, a superseded card, "allowed for the session" — passes
+     * none, and the nearest entry is picked here, so no such path has to know
+     * that lists exist. `answers` is a question's, as _answerConversation built
+     * it.
      */
-    _respondPermission(ask, { behavior, message, updatedInput, allowSession = false }) {
+    _respondPermission(ask, { behavior, message, updatedInput, allowSession = false, choice, answers = null }) {
         // Before the write, for _flushQueue's reason.
         this._markAnswered(ask.id);
-        this._write(this.adapter.answer(ask, { behavior, message, updatedInput, allowSession }));
+        if (choice === undefined || choice === null) choice = choiceFor(ask, behavior, { allowSession });
+        this._write(this.adapter.answer(ask, { behavior, message, updatedInput, allowSession, choice, answers }));
     }
 
-    _clearPermission(outcome) {
+    _clearPermission(outcome, choice = null) {
         const ask = this.pendingPermission;
         if (!ask) return;
         this.pendingPermission = null;
         this.emit('permission-resolved', {
             sessionId: this.sessionId, requestId: ask.id, outcome,
+            // Which of the ask's own decisions it was, when it carried a list.
+            ...(choice && { choice: choice.id }),
         });
         // Waiting on a person is not the process going quiet: the clock starts
         // again from the answer.
@@ -1458,6 +1600,7 @@ class Runner extends EventEmitter {
                         if (i < 0) break;
                         if (ev.state === 'started') this.inFlight.push(this.queue.splice(i, 1)[0]);
                         else if (ev.state === 'cancelled' || ev.state === 'discarded') this.queue.splice(i, 1);
+                        else if (ev.state === 'returned') this.queue[i].handed = false;
                         break;
                     }
                     case 'turn-end':
@@ -1584,12 +1727,21 @@ class Runner extends EventEmitter {
                 // A resumed session keeps its id; a fork gets a new one, and the
                 // UI has to follow it or the user is left watching a transcript
                 // that will never move again.
+                //
+                // `minted` is the other way an id can change, and it is not a
+                // fork: a runtime that names its own sessions (Codex's thread id
+                // comes back from `thread/start`) was started under a placeholder,
+                // and this is the session that start created. Nothing was copied
+                // and there is no original to leave behind, so it is a separate
+                // event — the pool re-keys for both, but only a fork is a branch.
                 if (ev.sessionId && ev.sessionId !== this.sessionId) {
                     const from = this.sessionId;
                     this.sessionId = ev.sessionId;
-                    this.emit('forked', { from, to: ev.sessionId });
+                    this.emit(ev.minted ? 'minted' : 'forked', { from, to: ev.sessionId });
                 }
-                this.emit('init', ev.raw);
+                // `raw` is Claude's system/init, for the slash palette; a runtime
+                // with nothing of that shape sends none.
+                this.emit('init', ev.raw || null);
                 // Once per process, and the only moment the version is known:
                 // the note so an adopting bridge has it, the status so every
                 // window's stale-binary hint can clear.
@@ -2042,6 +2194,32 @@ function controlError(message, reason) {
     return err;
 }
 
+/**
+ * The entry of an ask's `decisions` that an answer in the old words means, or
+ * null for an ask with no list (every Claude ask). A decision is
+ * `{id, label, behavior: 'allow'|'deny', scope: 'once'|'session'|'always',
+ * endsTurn, raw}`; see the contract in bridge/runtimes/claude/process.js.
+ *
+ * `allow` is the one-off allow, and `allowSession` the for-the-session one.
+ * `strict` is for an answer somebody chose: no stand-in, because a button that
+ * said "for this session" must not be answered with "once". Without it — the
+ * bridge answering by itself — "for the session" falls back to "once". A deny
+ * prefers a decline that lets the turn go on over one that ends it, and takes
+ * the one that ends it when that is all there is (Codex's `untrusted` list:
+ * `accept`, an amendment, `cancel`).
+ */
+function choiceFor(ask, behavior, { allowSession = false, strict = false } = {}) {
+    const list = ask && Array.isArray(ask.decisions) ? ask.decisions : null;
+    if (!list || !list.length) return null;
+    if (behavior === 'allow') {
+        const scoped = (scope) => list.find(d => d.behavior === 'allow' && (d.scope || 'once') === scope);
+        return (allowSession ? scoped('session') : scoped('once'))
+            || (!strict && allowSession ? scoped('once') : null) || null;
+    }
+    return list.find(d => d.behavior === 'deny' && !d.endsTurn)
+        || list.find(d => d.behavior === 'deny') || null;
+}
+
 /** The ask as the UI sees it — no timer handle, nothing it cannot serialise. */
 function publicAsk(ask) {
     return {
@@ -2062,6 +2240,16 @@ function publicAsk(ask) {
         blockedPath: ask.blockedPath,
         agentId: ask.agentId,
         askedAt: ask.askedAt,
+        // The runtime's own answers, when it offers a list rather than allow and
+        // deny (Codex's `availableDecisions`). Absent for every Claude ask. A card
+        // draws one button per entry and answers with `choice: id`; `raw`, the
+        // runtime's spelling, stays in the bridge.
+        ...(Array.isArray(ask.decisions) && ask.decisions.length ? {
+            decisions: ask.decisions.map(d => ({
+                id: d.id, label: d.label, behavior: d.behavior,
+                scope: d.scope || 'once', endsTurn: !!d.endsTurn,
+            })),
+        } : {}),
     };
 }
 
@@ -2174,7 +2362,7 @@ class RunnerPool extends EventEmitter {
 
     /** Existing runner for a session, or a new one bound to `cwd`. */
     ensure(sessionId, {
-        cwd, model, effort, permissionMode, isNew = false, fork = false, branch = null,
+        cwd, model, effort, permissionMode, isNew = false, fork = false, branch = null, runtime,
     } = {}) {
         ({ model, effort } = this._forced(sessionId, model, effort));
         let r = this.runners.get(sessionId);
@@ -2253,7 +2441,7 @@ class RunnerPool extends EventEmitter {
         // Delegated rather than handed over, so a runner asks the pool afresh
         // every time: settings change under a live session, and the answer
         // should not be the one that was true when it started.
-        r = this._make({ sessionId, cwd, model, effort, permissionMode, isNew, fork, branch });
+        r = this._make({ sessionId, cwd, model, effort, permissionMode, isNew, fork, branch, runtime });
         if (carried.length) {
             r.queue.push(...carried);
             r._queueChanged();
@@ -2298,7 +2486,7 @@ class RunnerPool extends EventEmitter {
         // there is nothing to infer. On a fork, `forked` is emitted just above
         // this in the same handler, so `r.sessionId` is already the copy's.
         r.on('init', (msg) => this.emit('init', {
-            sessionId: r.sessionId, cwd: msg.cwd || r.cwd, init: msg,
+            sessionId: r.sessionId, cwd: (msg && msg.cwd) || r.cwd, init: msg,
         }));
         r.on('exit', () => this.emit('status', r.status()));
         // A model/effort change held for background work is applied at the first
@@ -2318,6 +2506,14 @@ class RunnerPool extends EventEmitter {
             if (this.runners.get(from) === r) this.runners.delete(from);
             this.runners.set(to, r);
             this.emit('forked', { from, to });
+        });
+        // A runtime that named the session it was started for (see the runner's
+        // `init`). Re-keyed like a fork, and emitted under its own name so that
+        // nothing treats the placeholder as an original that was branched.
+        r.on('minted', ({ from, to }) => {
+            if (this.runners.get(from) === r) this.runners.delete(from);
+            this.runners.set(to, r);
+            this.emit('minted', { from, to });
         });
         return r;
     }
@@ -2341,7 +2537,10 @@ class RunnerPool extends EventEmitter {
         for (const h of await hostClient.held()) {
             if (h.exited) { await hostClient.forget(h.key); continue; }
             const note = h.note;
-            if (!note || note.v !== 1 || !note.sessionId || !note.cwd) {
+            if (!note || note.v !== 1 || !note.sessionId || !note.cwd
+                // A runtime this build does not know cannot be driven, so its
+                // note is as unusable as a missing one.
+                || (note.runtime && !runtimes.known(note.runtime))) {
                 await this._endHeld(h.key);
                 continue;
             }
@@ -2355,7 +2554,7 @@ class RunnerPool extends EventEmitter {
             try { got = await hostClient.adopt(h.key); } catch { continue; }
             const r = this._make({
                 sessionId: note.sessionId, cwd: note.cwd, model: note.model,
-                effort: note.effort, permissionMode: note.permissionMode,
+                effort: note.effort, permissionMode: note.permissionMode, runtime: note.runtime,
             });
             r.adopt({ child: got.child, records: got.records, note: got.note || note,
                 noteSeq: got.noteSeq });
@@ -2373,11 +2572,11 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Create a brand-new session and deliver its first prompt. */
-    create({ cwd, model, effort, permissionMode, prompt, attachments = [], sessionId = randomUUID() }) {
+    create({ cwd, model, effort, permissionMode, prompt, attachments = [], sessionId = randomUUID(), runtime }) {
         // `sessionId` is for a caller that has to file the id somewhere before the
         // process starts — an orchestrator's worker, whose role decides the argv.
         const dir = resolveWorkdir(cwd);
-        const r = this.ensure(sessionId, { cwd: dir, model, effort, permissionMode, isNew: true });
+        const r = this.ensure(sessionId, { cwd: dir, model, effort, permissionMode, isNew: true, runtime });
         // The first message takes files like any other. `send` has always accepted
         // them and `userContent` has always known what to do with them; this was the
         // one caller that dropped them on the floor, so a session could not be
@@ -2417,7 +2616,7 @@ class RunnerPool extends EventEmitter {
         ({ model, effort } = this._forced(r.sessionId, model, effort));
         const carried = r.takeQueue();
         const fresh = this._make({ sessionId: r.sessionId, cwd, model, effort,
-            permissionMode: r.permissionMode });
+            permissionMode: r.permissionMode, runtime: r.runtime });
         this.runners.set(r.sessionId, fresh);
         // The old runner's exit reports *its* settings, and a window takes the
         // last status it hears for a session as the truth — so say the new one's
@@ -2540,7 +2739,9 @@ class RunnerPool extends EventEmitter {
     _evictIdle() {
         const now = Date.now();
         for (const [id, r] of this.runners) {
-            if (r.state === 'busy' || r.hasBackground) continue;
+            // `starting` lasts no time for Claude; for a runtime whose handshake
+            // gates the queue it is a process still being introduced.
+            if (r.state === 'busy' || r.state === 'starting' || r.hasBackground) continue;
             if (now - r.lastUsedAt < IDLE_EVICT_MS) continue;
             this._evict(id, r,
                 'That session had been idle for a while, so its process was shut down.');
@@ -2551,7 +2752,7 @@ class RunnerPool extends EventEmitter {
         const idle = [...this.runners.entries()]
             // Not one running background work either: it is idle in name only, and
             // evicting it stops the work. MAX_LIVE gives way rather than that.
-            .filter(([, r]) => r.state !== 'busy' && !r.hasBackground)
+            .filter(([, r]) => r.state !== 'busy' && r.state !== 'starting' && !r.hasBackground)
             .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
         while (this.runners.size > limit && idle.length) {
             const [id, r] = idle.shift();

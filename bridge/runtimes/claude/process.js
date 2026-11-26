@@ -29,6 +29,22 @@
 // `gone`, which the runner's callers branch on. An adapter may keep state across
 // lines (a Codex one has to remember turn and item ids); this one does not.
 //
+// **Requests of the adapter's own.** The runner only waits on the ids it minted
+// (`req_<tag>_<n>`), and a `response` event for any other id is dropped without a
+// word. So an adapter may put requests on the wire that are not `rpc` calls — a
+// turn that is a request (`turn` below), a handshake step whose answer it needs to
+// read itself — with ids from a space of its own, and keep the replies: `read`
+// returns whatever those replies mean (an `init`, a `lifecycle`, nothing), and
+// need not return a `response` for them at all. Never mint an id that could be
+// the runner's.
+//
+// **Events come only from `read`.** An adapter has no way to push an event from
+// a promise, and that is on purpose: what it learns from a reply has to be said
+// when `read` sees the reply, because the adoption replay rebuilds a process's
+// state by running its saved output through `read` again, and anything said
+// anywhere else would be missing from it. An `init` built from a `thread/start`
+// reply is built in `read`, from that reply's line.
+//
 // **Starting a process** — the runner asks, in this order:
 //
 //   bin                         what to spawn
@@ -41,8 +57,22 @@
 //   label                       "Starting <label>…", and the process's name in
 //                               the messages the runner writes about it
 //   product                     the CLI's name, for "this <product> version…"
-//   handshake()                 a promise, sent once the process is up; a
-//                               rejection is ignored (an old build)
+//   handshake(o)                a promise, called synchronously once the process
+//                               is up, with the same `o` argv had — a runtime
+//                               that opens or resumes its conversation by
+//                               request rather than by flag needs it
+//   handshakeGates              how the runner treats that promise. False (this
+//                               adapter): the first turn is written straight
+//                               after the handshake, and a rejection is ignored
+//                               as an old build. True: the runner stays
+//                               `starting` and writes no turn — queued or handed
+//                               over — until it resolves, and a rejection is
+//                               fatal: the process is ended and the queue handed
+//                               back with `err.kind` (a docs/api.md `send-failed`
+//                               kind; `unknown` if absent) and `err.message`.
+//                               For a runtime that refuses everything before it
+//                               is introduced and cannot take a turn until a
+//                               conversation is open (Codex)
 //
 // **Reading.** `read(msg)` turns one output object into a list of events, in the
 // order they happened. The runner acts on them in that order, and also replays
@@ -50,25 +80,54 @@
 // it adopts a process a previous bridge left there. So an event says what
 // happened, never what to do about it:
 //
-//   {type:'init', version, sessionId, cwd, raw}
+//   {type:'init', version, sessionId, minted, cwd, raw}
 //                     the process is up. `sessionId` differing from the
-//                     runner's is a fork; `raw` reaches the pool's `init`
-//                     listeners (the slash palette reads Claude's)
+//                     runner's is a fork — unless `minted` is true, which says
+//                     the runtime named the session this start created and the
+//                     runner's id was a placeholder for it (Codex mints a thread
+//                     id at `thread/start`). Both re-key the runner; only a fork
+//                     is announced as one (`forked` vs `minted`). It need not be
+//                     printed by the process: an adapter may build it in `read`
+//                     from replies to its own handshake requests. `raw` reaches
+//                     the pool's `init` listeners, which read it as Claude's
+//                     system/init (the slash palette); null for anything else
 //   {type:'response', id, ok, result, error}
 //                     the answer to an `rpc`
 //   {type:'ask', ask, uninteractive}
 //                     the process is blocked on a person. `ask` is in the
 //                     runner's held shape — {id, kind:'tool'|'plan'|'question',
 //                     tool, displayName, input, secrets, toolUseId, description,
-//                     reason, blockedPath, agentId, askedAt} — and
+//                     reason, blockedPath, agentId, askedAt, decisions} — and
 //                     `uninteractive` means it wants a dialog of its own that no
-//                     card can draw
+//                     card can draw.
+//
+//                     `decisions` is for a tool ask whose runtime offers its own
+//                     list of answers rather than allow and deny (Codex's
+//                     `availableDecisions`); absent or null otherwise, and on
+//                     every Claude ask. Each entry is {id, label, behavior:
+//                     'allow'|'deny', scope:'once'|'session'|'always', endsTurn,
+//                     raw}: `id` is what a client answers with, `scope: 'always'`
+//                     is a rule the runtime keeps beyond this session (it must say
+//                     so in `label`), `endsTurn` a refusal that also stops the
+//                     turn, and `raw` the runtime's own spelling, which never
+//                     leaves the bridge.
+//
+//                     A question ask carries `input.questions[]` in Claude's
+//                     shape ({question, header, options[{label, description}],
+//                     multiSelect}), each with an optional `id` when the runtime
+//                     answers by id rather than by text
 //   {type:'ask-withdrawn', id}      the process stopped waiting for an answer
 //   {type:'request', id, method}    an inbound request the adapter does not
 //                                   handle; the runner writes `refuse(event)`
 //   {type:'lifecycle', uuid, state} what became of a turn written mid-turn:
 //                                   queued | started | completed | cancelled |
-//                                   discarded (see Runner#_onLifecycle)
+//                                   discarded | returned (see
+//                                   Runner#_onLifecycle). `returned` is a handed-
+//                                   over message the process did not take and
+//                                   that is still wanted — Codex refusing a steer
+//                                   that lost the race with the end of its turn —
+//                                   and the runner sends it again as a turn of
+//                                   its own
 //   {type:'tool-start', id, name, label}
 //                     a tool call began; `label` is what to call it meanwhile
 //   {type:'tools-done', ids}
@@ -93,11 +152,24 @@
 //
 // **Writing.**
 //
-//   turn(entry)          the line for one user turn: `{uuid, text, attachments}`.
-//                        `uuid` is ours, and `lifecycle` events name it
+//   turn(entry, {handOver})
+//                        the line for one user turn: `{uuid, text, attachments}`.
+//                        `uuid` is ours, and `lifecycle` events name it.
+//                        `handOver` is true when it joins the running turn
+//                        (Runner#_handOver) and false when it starts one. The line
+//                        may be a request with an id of the adapter's own (Codex's
+//                        `turn/start` and `turn/steer`); its reply is the
+//                        adapter's to read, see above
 //   request(id, verb, payload)                   an outbound request's line
-//   answer(ask, {behavior:'allow'|'deny', message, updatedInput, allowSession})
-//                        the line answering an ask
+//   answer(ask, {behavior:'allow'|'deny', message, updatedInput, allowSession,
+//                choice, answers})
+//                        the line answering an ask. `choice` is the entry of
+//                        `ask.decisions` it is, or null for an ask without them;
+//                        when the bridge answers by itself (a stop, an auto-deny)
+//                        the runner has already picked the nearest one. `answers`
+//                        is a question's, `[{id, question, answers:[string]}]`,
+//                        for the adapter to say in its runtime's shape — this one
+//                        puts it in `updatedInput.answers`, keyed by text
 //   refuse(requestEvent)                         the line turning one away
 //
 // **Control verbs** — each a promise, made with `rpc`:
@@ -703,6 +775,11 @@ class ClaudeAdapter {
     get product() { return 'Claude Code'; }
     get bin() { return CLAUDE_BIN; }
 
+    // The first turn is written straight after the handshake rather than after
+    // its answer: `claude` reads its input in order, and a build that does not
+    // know `initialize` still takes the turn.
+    get handshakeGates() { return false; }
+
     argv(o) { return argv(o); }
     env(o) { return sessionEnv(o); }
 
@@ -718,13 +795,22 @@ class ClaudeAdapter {
 
     read(msg) { return read(msg); }
 
+    // The same line whether or not a turn is running: the CLI's own queue folds
+    // one written mid-turn into it.
     turn(entry) { return userLine(entry); }
 
     request(id, verb, payload = {}) {
         return { type: 'control_request', request_id: id, request: { subtype: verb, ...payload } };
     }
 
-    answer(ask, { behavior, message, updatedInput, allowSession }) {
+    // No Claude ask carries `decisions`, so `choice` is always null here. A
+    // question's answers go back in its input, keyed by question text, one string
+    // each; the tool result echoes them to the model.
+    answer(ask, { behavior, message, updatedInput, allowSession, answers }) {
+        if (behavior === 'allow' && answers) {
+            updatedInput = { ...ask.input,
+                answers: Object.fromEntries(answers.map(a => [a.question, a.answers.join(', ')])) };
+        }
         const response = { behavior, toolName: ask.tool };
         if (behavior === 'allow' && updatedInput) response.updatedInput = updatedInput;
         if (behavior === 'deny') response.message = message || 'Denied from TGXCode.';
