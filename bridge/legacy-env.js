@@ -31,7 +31,7 @@ applyLegacyEnv();
 
 /**
  * Remove a variable under both spellings. A session must not inherit the
- * bridge's port under either name — see sessionEnv() in runner.js.
+ * bridge's port under either name — see sessionEnv() in bridge/runtimes/claude/process.js.
  */
 function deleteBoth(env, suffix) {
     delete env[NEW + suffix];

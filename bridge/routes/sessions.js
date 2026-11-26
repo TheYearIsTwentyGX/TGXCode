@@ -26,7 +26,7 @@ const orchestration = require('../orchestration');
 const { broadcast } = require('../events');
 const { stateOf: handoffState } = require('../handoff');
 const { NEXT, readJson, send } = require('../http');
-const { resolveWorkdir } = require('../runner');
+const { resolveWorkdir, rowStatus } = require('../runner');
 const { draftsPayload } = require('./drafts');
 const { resolveAttachments } = require('./files');
 const { createWorktree } = require('../worktree');
@@ -82,11 +82,7 @@ async function handle(req, res, url, pathname, seg, who) {
             // row too narrow for the whole label can show the half that matters.
             // `stalled` so a window opened onto a wedged turn badges it at once,
             // rather than only after the next transition event.
-            if (st) {
-                s.runner = { state: st.state, activity: st.activity,
-                    detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion,
-                    stalled: st.stalled };
-            }
+            if (st) s.runner = rowStatus(st);
         }
         return send(res, 200, { sessions, ready: index.ready });
     }

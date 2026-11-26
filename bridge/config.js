@@ -203,10 +203,10 @@ const WSL_DISTRO = process.env.WSL_DISTRO_NAME || '';
 // panel that is empty for everybody is worse than no panel at all. Set
 // TGXCODE_TODO_TOOLS=0 in front of the bridge and it adds nothing.
 //
-// It reaches only sessions the bridge *starts* — see sessionEnv in runner.js —
-// and only from the next process start, so a session already running is
-// unaffected. A session in somebody's own terminal keeps no list unless they set
-// the variable for themselves.
+// It reaches only sessions the bridge *starts* — see sessionEnv in
+// bridge/runtimes/claude/process.js — and only from the next process start, so a
+// session already running is unaffected. A session in somebody's own terminal
+// keeps no list unless they set the variable for themselves.
 const TODO_TOOLS = process.env.TGXCODE_TODO_TOOLS !== '0';
 
 /**

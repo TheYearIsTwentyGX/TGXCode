@@ -276,7 +276,7 @@ function ensureExcluded(root) {
  * So the message ends with a list, and bridge/transcript.js parses it straight back off
  * before anything is rendered.
  *
- * Assembled by `userContent` in bridge/runner.js — a line at a time, for a reason
+ * Assembled by `userContent` in bridge/runtimes/claude/process.js — a line at a time, for a reason
  * explained there — and never by a client, so that a phone, a curl and the desktop
  * cannot each produce a slightly different list that only one parser knows.
  *

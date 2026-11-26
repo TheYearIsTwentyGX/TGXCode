@@ -490,7 +490,7 @@ project filter on `GET /api/sessions?project=`.
 | **`worker`** | **object or null** — `{orchestratorId: string, title: string\|null, closed: boolean}` on a session an orchestrator started. Null otherwise. A worker whose orchestrator is gone keeps the field; draw it as an ordinary session |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
-| **`runner`** | **object or absent** — six fields only, see below |
+| **`runner`** | **object or absent** — six fields plus `runtime` and `capabilities`, see below |
 
 **`schedule` is an object, not an id**, and its presence changes `title`. It is
 `{id, title}` when a schedule started this session and `null` for everything else,
@@ -599,7 +599,7 @@ read it off. Nothing errors when you read a field that is not there; you get
 | Where | `runner` is |
 |---|---|
 | `GET /api/sessions/:id` · `runner-status` event · the `status` a write returns | **the whole thing** — every field in §*`runner-status`* below |
-| `GET /api/sessions` · `GET /api/dashboard` | **six fields**: `{state, activity, detail, queued, claudeVersion, stalled}` — `stalled` a bool. (Five until `stalled` was added; a client written against five reads it as `undefined`, which is falsy and therefore the right answer for an old bridge) |
+| `GET /api/sessions` · `GET /api/dashboard` | **six fields, plus the two every runner carries**: `{state, activity, detail, queued, claudeVersion, stalled, runtime, capabilities}` — `stalled` a bool, `runtime` a string, `capabilities` an object (§*`runtime` and `capabilities`*). (Five until `stalled` was added; a client written against five reads it as `undefined`, which is falsy and therefore the right answer for an old bridge. `runtime` and `capabilities` are newer still: absent from an older bridge, where the runtime is `"claude"` and every capability is true) |
 | a `GET /api/overview` / `taskboard` card | **eight fields**: `{state, activity, queued, busySince, retry, error, errorKind, stalled}` — `stalled` a bool |
 | absent entirely | there is no process of ours for that session |
 
@@ -625,7 +625,13 @@ object until August 2026, which silently kept only the newest.
 
 ### `GET /api/sessions/:id[?tail=N | ?turns=K]`
 
-`{ summary, events: [...], offset, runner, suggestions, prefs }`.
+`{ summary, events: [...], offset, runtime, capabilities, runner, suggestions, prefs }`.
+
+`runtime` is a string and `capabilities` an object of booleans — see
+§*`runtime` and `capabilities`* just below. **Both are present whether or not a
+process is live**, unlike `runner`, which is null when there is none; read them here
+rather than off `runner`. They are on every form of this route — a full read,
+`?tail=N` (`tail=0` included) and `?turns=K`.
 
 `prefs` is the settings in force **for this conversation's directory** — see
 `GET /api/prefs`. It travels with the transcript rather than being fetched
@@ -707,6 +713,46 @@ without `turns`.
 Use `?turns=K` over `?tail=N` when you can: the index is cached per transcript in
 `~/.cache/tgxcode/turns/` and grows incrementally, so a warm open of a 50 MB transcript
 is milliseconds rather than a full parse. The desktop opens with `?turns=8`.
+
+### `runtime` and `capabilities`
+
+Every session runs on one agent CLI, its **`runtime`**: a string, and today always
+`"claude"` (Claude Code). It is fixed for the life of a session. The bridge is being
+taught a second runtime (`"codex"`), and these two fields are how a client stays
+correct across that without asking which one it is looking at.
+
+**`capabilities`** is an object of booleans saying which features a session on that
+runtime supports. **Hide a control whose capability is false; do not branch on
+`runtime`.** That is the whole contract — a runtime added later works in a client
+written today, as long as the client reads the flags.
+
+| Flag | The feature it governs |
+|---|---|
+| `fork` | branching off a copy of the conversation (`fork: true` on `POST …/send`) |
+| `branchFromTurn` | editing an earlier turn and continuing from there (`fromUuid` on `POST …/send`) |
+| `planMode` | the `plan` permission mode, and the plan card (`kind: "plan"` asks) |
+| `askUser` | the question card (`kind: "question"` asks) |
+| `peers` | messages between live sessions: peer-message events, `@` mentions, `GET /api/sessions/addressable` as a target |
+| `tasks` | the session's checklist (`GET /api/sessions/:id/tasks`) and the task boards |
+| `scratchpad` | the per-session scratch directory (`GET /api/sessions/:id/scratchpad`) |
+| `slashCommands` | the slash palette (`GET /api/slash-commands`) |
+| `steer` | a message sent while a turn runs is handed to that turn (`handed` on a queue entry) rather than waiting for it to end |
+| `images` | images attached to a turn reach the model inline |
+| `allowForSession` | the "allow always" answer on a tool ask (`decision: "allow-always"`) |
+
+- **Every flag is `true` for `"claude"`.** Every feature in this document was built
+  for Claude Code, so a session today can do all of them.
+- **A flag a client does not recognise is ignored**, and **a flag that is missing
+  means `true`** — an older bridge sends no `capabilities` at all, and everything it
+  offers works. New flags will be added; none will be renamed.
+- **Where they appear:** top level on `GET /api/sessions/:id`; and on every `runner`
+  object that has a process behind it — the whole `runner-status` payload and the
+  narrow `runner` on `GET /api/sessions` and `GET /api/dashboard` rows. A row with no
+  `runner` has no live process and its runtime is not on the row; open the session to
+  read it. (The overview and task-board cards' eight-field `runner` does not carry
+  them.)
+- **The object is the same for every session on one runtime**, so a client may cache
+  it by `runtime`.
 
 ### `GET /api/sessions/:id/range?from=A&to=B`
 
@@ -3292,7 +3338,8 @@ the field to check before concluding anything from an empty `prs`.
 
 `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
-carrying the same narrow six-field `runner` as `GET /api/sessions` where one is live.
+carrying the same narrow `runner` as `GET /api/sessions` (six fields plus `runtime` and
+`capabilities`) where one is live.
 A chip carries **no `schedule`**, so a client cannot tell a scheduled run from any
 other here; its `title` is still the composed one, so the schedule's name and the date
 it ran are in the text even though the field is not there to group on.
@@ -4058,6 +4105,8 @@ down from:
 | Field | Type |
 |---|---|
 | `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
+| **`runtime`** | string — the CLI this session runs on, `"claude"` today. See §*`runtime` and `capabilities`* |
+| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession}`, all `true` for `"claude"`. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
 | `effort` | string or null — the `--effort` the process was started with, `null` for none. **Only here**: the transcript does not record it, so no session summary carries it, and a session with no process has nothing to report |
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |
@@ -7684,8 +7733,9 @@ not noticed it.
 chunk. Anything keyed on first sight, or handling only the first of those two shapes,
 will show a permanently spinning tool. See §*A tool call resolves in one of two ways*.
 
-**`runner` on a session summary is not the `runner-status` payload.** Five fields, and
-`pendingPermission` is not among them. See §`GET /api/sessions`.
+**`runner` on a session summary is not the `runner-status` payload.** Six fields plus
+`runtime` and `capabilities`, and `pendingPermission` is not among them. See
+§`GET /api/sessions`.
 
 **A bridge restart does not end a turn.** When `/api/health` reports a `sessionHost`,
 every `claude` this bridge started runs in that host, and a restart hands it on rather

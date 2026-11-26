@@ -40,13 +40,19 @@ const path = require('path');
 
 const { CACHE_DIR } = require('./config');
 const { buildEvents } = require('./transcript');
+const runtimes = require('./runtimes');
 
 const INDEX_DIR = path.join(CACHE_DIR, 'turns');
 // Bump when a mark's shape or derivation changes, so an old file is rebuilt
 // rather than served.
 const INDEX_VERSION = 1;
 
-const REVIEWABLE = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
+// The tool calls the rail marks, and which kind of mark each is: the runtime's
+// table of asks that are a plan or a question (`tools.asks`, the same table the
+// runner draws its cards from). Claude's, while every indexed session is Claude's.
+const REVIEWABLE = runtimes.toolsOf('claude').asks;
+// The raw-line test for one of them, before anything is parsed: the name, quoted.
+const REVIEWABLE_NEEDLES = Object.keys(REVIEWABLE).map(name => `"${name}"`);
 // What the rail's popover shows of a message; more would be bytes on every open.
 const TEXT_MAX = 460;
 const HEAD_BYTES = 4096;
@@ -93,7 +99,7 @@ function wanted(pendingIds) {
     // has to have its answer kept, and it was not pending when the read began.
     const pending = new Set(pendingIds);
     const want = (s) => {
-        if (s.includes('"ExitPlanMode"') || s.includes('"AskUserQuestion"')) return true;
+        if (REVIEWABLE_NEEDLES.some(n => s.includes(n))) return true;
         if (s.includes('"type":"attachment"')) return s.includes('queued_command');
         if (!s.includes('"type":"user"')) return false;
         // A tool result is never a turn; it matters only if it answers a plan or
@@ -121,7 +127,7 @@ function toolMark(ev, offset) {
         kind: REVIEWABLE[ev.name], id: ev.id, offset, ts: ev.ts || null, name: ev.name,
         status: ev.status || 'pending',
         // Just what the rail says about it: toolSummary reads these two.
-        input: ev.name === 'ExitPlanMode'
+        input: REVIEWABLE[ev.name] === 'plan'
             ? { plan: clip(input.plan, 200) }
             : { questions: (input.questions || []).map(q => ({ header: q.header || null,
                 question: clip(q.question, 200) })) },

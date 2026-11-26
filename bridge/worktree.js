@@ -10,8 +10,8 @@
 //     session that crosses into a worktree leaves two transcripts behind (see
 //     `conversationRecord` in bridge/sessions.js). Starting in the worktree from
 //     the first message leaves one, with the cwd the rail already knows how to
-//     nest — `.claude/worktrees/<name>` is what transcript.js's WORKTREE_DIR_RE
-//     reads.
+//     nest — `.claude/worktrees/<name>` is what bridge/places.js's
+//     WORKTREE_DIR_RE reads.
 //   * **The same layout `EnterWorktree` uses.** `<top>/.claude/worktrees/<name>`
 //     on branch `worktree-<name>`, so a worktree made here and one an agent made
 //     look the same to everything downstream, and to the person reading

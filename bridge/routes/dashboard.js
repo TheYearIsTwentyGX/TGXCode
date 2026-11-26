@@ -14,6 +14,7 @@
 const cfg = require('../config');
 const dashboard = require('../dashboard');
 const { NEXT, send } = require('../http');
+const { rowStatus } = require('../runner');
 const pulls = require('../pulls');
 const { prsPayload, tickPrs } = require('../pr-refresh');
 const { ownersPayload } = require('../pr-owners');
@@ -52,11 +53,7 @@ async function handle(req, res, url, pathname, seg, who) {
             for (const w of p.workspaces) {
                 for (const s of w.sessions) {
                     const st = statuses[s.sessionId];
-                    if (st) {
-                        s.runner = { state: st.state, activity: st.activity,
-                            detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion,
-                            stalled: st.stalled };
-                    }
+                    if (st) s.runner = rowStatus(st);
                 }
             }
         }

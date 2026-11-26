@@ -30,12 +30,14 @@
 const path = require('path');
 
 const { readSubagentIndex, readSubagentTranscript } = require('./transcript');
+const runtimes = require('./runtimes');
 
-// Everything that changes a file on disk and reports a patch for it. `Bash`
-// running `sed -i` is not here and cannot be: nothing in the transcript says
-// which file it touched, which is exactly why the working tree is shown beside
-// this rather than instead of it.
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+// Everything that changes a file on disk and reports a patch for it — a table
+// the runtime supplies, because the names are the CLI's (`tools.edits` in
+// bridge/runtimes/index.js; Claude's is in bridge/runtimes/claude/tools.js, with
+// why `Bash` is not on it). `fromEvents` takes another runtime's with `runtime`.
+// This name is Claude's table, kept because it was exported.
+const EDIT_TOOLS = runtimes.toolsOf('claude').edits;
 
 // How many sessions to remember reads for. The point of the cache is a panel
 // re-opened on the same conversation, so a handful is the whole need.
@@ -139,11 +141,13 @@ function pathOf(ev) {
  *
  * @param {Array} events render events, from `buildEvents`
  * @param {{into?: Map<string, any>, pending?: Map<string, any>, done?: Set<string>,
- *          agent?: {toolUseId, agentType, description}}} opts
+ *          agent?: {toolUseId, agentType, description}, runtime?: string}} opts
+ *   `runtime` picks whose tool names count as edits; Claude's when absent.
  */
 function fromEvents(events, {
-    into = new Map(), pending = new Map(), done = new Set(), agent = null,
+    into = new Map(), pending = new Map(), done = new Set(), agent = null, runtime = null,
 } = {}) {
+    const edits = runtime ? runtimes.toolsOf(runtime).edits : EDIT_TOOLS;
     const record = (ev) => {
         const file = pathOf(ev);
         if (!file) return;
@@ -169,7 +173,7 @@ function fromEvents(events, {
             if (ev.status === 'ok') record({ ...call, ...ev, id: call.id });
             continue;
         }
-        if (ev.kind !== 'tool' || !EDIT_TOOLS.has(ev.name)) continue;
+        if (ev.kind !== 'tool' || !edits.has(ev.name)) continue;
 
         // A call that failed changed nothing, and a call still running has not
         // changed anything yet. Either would otherwise land as a 0/0 row that

@@ -462,11 +462,18 @@ Two rules worth knowing before you send a patch:
 | `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached |
 | `bridge/pricing.js` | API list prices per model, and the cost of one message's usage |
 | `bridge/search-index.js` | Per-session full-text index of what you and Claude said (and, clipped, tool calls), built incrementally like the turn index and in the background a slice at a time; the query and its snippets |
-| `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
+| `bridge/transcript.js` | What the bridge imports to read a transcript: re-exports the Claude reader and the modules below, and `readerFor(runtime)` picks a reader |
+| `bridge/runtimes/claude/transcript.js` | The Claude transcript reader: `.jsonl` → session-list metadata (`scanMeta`) and render events (`buildEvents`); pairs tool calls with results; reads subagent transcripts |
+| `bridge/places.js` | Which checkout or worktree a directory is, and its branch — read off the disk, for a session of any runtime |
+| `bridge/envelopes.js` | The wrappers the bridge writes into a turn (handoff, orchestrator nudge and message, attached-files note), both halves of each |
+| `bridge/jsonl.js` | Reading a JSONL file that is still being written |
 | `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
-| `bridge/runner.js` | `claude` processes, one per active conversation |
+| `bridge/runner.js` | One agent process per active conversation: the queue and `inFlight`, approval cards, the stall clock, eviction, host notes and adoption. Everything about the CLI itself goes through its runtime's process adapter |
+| `bridge/runtimes/index.js` | The runtimes a session can run on (`claude` today): each one's process adapter, transcript reader, tool tables, and the `capabilities` clients hide controls by |
+| `bridge/runtimes/claude/process.js` | The Claude process adapter — argv, the line a turn is written as, stream-json read into busy/idle/tool/ask events, the control verbs, exit classification. Its header is the contract another runtime's adapter implements |
+| `bridge/runtimes/claude/tools.js` | Claude Code's tool names as tables: which are plans and questions, which edit files, which are always allowed, and what to call one in progress |
 | `bridge/host.js` | The session host: owns `claude`'s pipes so a turn outlives a bridge restart. A dumb relay, on purpose |
 | `bridge/host-client.js` | The bridge's side of it — a hosted `claude` dressed as a ChildProcess, or a plain spawn when there is no host |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
