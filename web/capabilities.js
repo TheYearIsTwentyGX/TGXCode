@@ -13,6 +13,7 @@
 // has to read as "it can", or every Claude session would lose its composer.
 
 import { state } from './state.js';
+import { agentFrom } from './agent-name.js';
 
 /**
  * Whether `summary`'s session supports `flag`. Reads the live runner's object
@@ -24,4 +25,18 @@ export function can(flag, summary = state.current) {
         && state.runner && state.runner.capabilities;
     const caps = fromRunner || (summary && summary.capabilities) || null;
     return !caps || caps[flag] !== false;
+}
+
+/**
+ * What to call the agent behind `summary`'s session — `{name, product}`, the
+ * bridge's `agent` field ("Codex" / "Codex", "Claude" / "Claude Code"). Read the
+ * same way as `can`: the live runner's first, then the summary's. An older
+ * bridge sends none, and then it is Claude, the only agent such a bridge ran.
+ * Used for every label that names the agent, so no surface keeps a table of
+ * runtime names.
+ */
+export function agentOf(summary = state.current) {
+    const fromRunner = summary && state.current && summary.sessionId === state.current.sessionId
+        && state.runner && state.runner.agent;
+    return agentFrom(fromRunner || (summary && summary.agent) || null);
 }

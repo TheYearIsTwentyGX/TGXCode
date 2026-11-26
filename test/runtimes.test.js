@@ -29,7 +29,7 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
 // --- the registry ---------------------------------------------------------------------------------
 {
     const FLAGS = ['fork', 'branchFromTurn', 'planMode', 'askUser', 'peers', 'tasks', 'scratchpad',
-        'slashCommands', 'steer', 'images', 'allowForSession', 'send', 'delete'];
+        'slashCommands', 'steer', 'images', 'allowForSession', 'send', 'delete', 'updateCheck'];
     const caps = runtimes.capabilitiesOf('claude');
     assert.deepStrictEqual(Object.keys(caps).sort(), FLAGS.slice().sort(), 'the documented flags, no more and no fewer');
     for (const f of FLAGS) assert.strictEqual(caps[f], true, `${f} is true for claude`);

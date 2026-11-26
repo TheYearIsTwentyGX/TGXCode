@@ -92,7 +92,7 @@ const handoffLimit = new HandoffLimit();
  */
 function runtimeFields(st, summary = null) {
     const runtime = (st && st.runtime) || (summary && summary.runtime) || runtimes.DEFAULT;
-    return { runtime, capabilities: runtimes.capabilitiesOf(runtime) };
+    return { runtime, capabilities: runtimes.capabilitiesOf(runtime), agent: runtimes.agentOf(runtime) };
 }
 
 /**

@@ -562,7 +562,8 @@ Two rules worth knowing before you send a patch:
 | `web/api.js` | `get`, `post`, `patch`, `put`, `del`, `postFile` — the fetch wrappers every call to the bridge goes through, and the CSRF header they send |
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
-| `web/capabilities.js` | `can(flag, summary)`: whether a session supports a feature, from its `capabilities` (a missing flag is true). Every control that a runtime may lack is hidden through this, never by asking which runtime it is |
+| `web/capabilities.js` | `can(flag, summary)`: whether a session supports a feature, from its `capabilities` (a missing flag is true). Every control that a runtime may lack is hidden through this, never by asking which runtime it is. `agentOf(summary)`: what to call its agent (`{name, product}`), for every label that names one |
+| `web/agent-name.js` | The bridge's `agent` field read with Claude's names for none — pure, so `test/agent-name.test.js` loads it under node |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
 | `web/models.js` | The model and effort lists from the `tgx-models` `<meta>` tag, and filling a `<select>` from them |
 | `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`, `pose`. Every call names a preset from `PRESETS` (`menu`, `dialog`, `toast`, `dock`…); durations and curves are read from `--dur-*`/`--ease-*` in base.css, and reduced motion keeps a short fade without the movement. See docs/plans/22-ui-overhaul.md |

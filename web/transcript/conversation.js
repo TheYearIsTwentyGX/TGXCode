@@ -23,7 +23,7 @@
 // before this file runs. Do not extend the exception to any other import.
 
 import { get } from '../api.js';
-import { can } from '../capabilities.js';
+import { agentOf, can } from '../capabilities.js';
 import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
 import { dom, el, toast } from '../dom.js';
@@ -451,11 +451,19 @@ export function renderHeader() {
     if (s.model) bits.push(sep('model'), html`<span key="model">${shortModel(s.model)}</span>`);
     // Only when this session's process predates the installed binary, which is
     // the case where a feature somebody just read about is not here yet.
-    const oldClaude = cvStaleFor(s.sessionId);
+    // Named by the agent's product, from the bridge, never by a runtime check.
+    // Where the bridge does not compare this agent's version with a release
+    // (`updateCheck` false — Codex), the version is shown plainly instead, so a
+    // Codex process says which Codex it is and nothing calls it old.
+    const product = agentOf(s).product;
+    const oldClaude = can('updateCheck', s) ? cvStaleFor(s.sessionId) : null;
     if (oldClaude) {
-        bits.push(sep('cv'), html`<span key="cv" class="cv-old" title=${`This session's process is Claude Code `
+        bits.push(sep('cv'), html`<span key="cv" class="cv-old" title=${`This session's process is ${product} `
             + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.`}
-            >${`Claude ${oldClaude.version} (older)`}</span>`);
+            >${`${product} ${oldClaude.version} (older)`}</span>`);
+    } else if (!can('updateCheck', s)) {
+        const v = state.runner && state.runner.sessionId === s.sessionId ? state.runner.claudeVersion : null;
+        if (v) bits.push(sep('cv'), html`<span key="cv" title=${`This session's process is ${product} ${v}`}>${`${product} ${v}`}</span>`);
     }
     // The CLI's name, only where it matters to what you can do here: a session
     // that cannot take a message says which program it belongs to, so you know

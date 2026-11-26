@@ -636,6 +636,7 @@ class SessionIndex extends EventEmitter {
             // a message. See bridge/runtimes/index.js and docs/api.md.
             runtime,
             capabilities: runtimes.capabilitiesOf(runtime),
+            agent: runtimes.agentOf(runtime),
             pinned: flags.pinned,
             archived: flags.archived,
             test: flags.test,

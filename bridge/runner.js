@@ -202,6 +202,8 @@ class Runner extends EventEmitter {
         // capabilities are what clients hide controls by.
         this.runtime = opts.runtime || runtimes.DEFAULT;
         this.capabilities = runtimes.capabilitiesOf(this.runtime);
+        // What clients call it, `{name, product}`; fixed for the runner's life too.
+        this.agent = runtimes.agentOf(this.runtime);
         this.tools = runtimes.toolsOf(this.runtime);
         this.adapter = new (runtimes.get(this.runtime).adapter.Adapter)({
             rpc: (verb, payload) => this._control(verb, payload),
@@ -2200,6 +2202,8 @@ class Runner extends EventEmitter {
             // life. See bridge/runtimes/index.js and docs/api.md.
             runtime: this.runtime,
             capabilities: this.capabilities,
+            // What clients call this CLI: `{name, product}`.
+            agent: this.agent,
             state: this.state,
             activity: this.activity,
             // The two halves `activity` is composed of, so a surface too narrow

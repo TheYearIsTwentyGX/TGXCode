@@ -81,6 +81,9 @@ const CLAUDE_CAPABILITIES = Object.freeze({
     send: true,
     // Deleting the session's transcript (`DELETE /api/sessions/:id`).
     delete: true,
+    // The bridge compares the running process's version with the latest
+    // release and says when one is older (`GET /api/claude-version`).
+    updateCheck: true,
 });
 
 /**
@@ -109,11 +112,23 @@ const CODEX_CAPABILITIES = Object.freeze({
     allowForSession: false,
     send: true,
     delete: false,
+    // Nothing compares a Codex version with Codex's latest yet (Phase 4), so a
+    // client shows the version as it is rather than as old or current.
+    updateCheck: false,
 });
+
+/**
+ * What a client calls each runtime, so no client keeps its own table of names:
+ * `name` is who said something ("Claude", "Codex"), `product` the program a
+ * version belongs to ("Claude Code", "Codex"). Sent as `agent` beside `runtime`.
+ */
+const CLAUDE_AGENT = Object.freeze({ name: 'Claude', product: 'Claude Code' });
+const CODEX_AGENT = Object.freeze({ name: 'Codex', product: 'Codex' });
 
 const RUNTIMES = {
     claude: {
         name: 'claude',
+        agent: CLAUDE_AGENT,
         capabilities: CLAUDE_CAPABILITIES,
         tools: {
             asks: claudeTools.ASKS,
@@ -126,6 +141,7 @@ const RUNTIMES = {
     },
     codex: {
         name: 'codex',
+        agent: CODEX_AGENT,
         capabilities: CODEX_CAPABILITIES,
         // Codex names the session at `thread/start`, so what a runner is created
         // with is a placeholder until its `init` says `minted`. The create route
@@ -182,6 +198,15 @@ function capabilitiesOf(name) {
     return describe(name).capabilities;
 }
 
+/**
+ * `{name, product}`, what a client calls a runtime. A runtime registered
+ * without names (a test's fake) is called by its own.
+ */
+function agentOf(name) {
+    const r = describe(name);
+    return r.agent || Object.freeze({ name: r.name, product: r.name });
+}
+
 /** The tool tables for a runtime name. */
 function toolsOf(name) {
     return describe(name).tools;
@@ -193,6 +218,6 @@ function mintsId(name) {
 }
 
 module.exports = {
-    DEFAULT, RUNTIMES, READ_ONLY, get, known, readable, describe, capabilitiesOf, toolsOf, mintsId,
+    DEFAULT, RUNTIMES, READ_ONLY, get, known, readable, describe, capabilitiesOf, toolsOf, mintsId, agentOf,
     CLAUDE_CAPABILITIES, CODEX_CAPABILITIES,
 };

@@ -39,6 +39,7 @@ import { dom, el, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
+import { agentOf } from '../capabilities.js';
 import { paintPerm, scrollToEnd } from '../app.js';
 import { closeFind } from './find.js';
 import { toolSummary } from './tools.js';
@@ -493,7 +494,7 @@ function Feedback({ how, pending }) {
 
     return html`<div class="perm-feedback">
         <textarea ref=${ta} class="perm-fb" rows="3" onKeyDown=${onKeyDown}
-            aria-label=${approving ? 'What should Claude bear in mind?' : 'What should change about this plan?'}
+            aria-label=${approving ? `What should ${agentOf().name} bear in mind?` : 'What should change about this plan?'}
             placeholder=${approving
                 ? 'Anything to bear in mind? Enter to approve, Esc to go back.'
                 : 'What should change? Enter to send, Esc to go back.'}></textarea>

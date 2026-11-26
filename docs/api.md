@@ -491,6 +491,7 @@ project filter on `GET /api/sessions?project=`.
 | `prs` | array of `{number, url, repo}`, empty if none |
 | `runtime` | string — the CLI that wrote this conversation: `"claude"`, or `"codex"` for a Codex thread. See §*`runtime` and `capabilities`* |
 | **`capabilities`** | **object** of booleans — what a client may offer on this session, **on every row whether or not a process is live**. Same object as on `GET /api/sessions/:id`. Absent from a bridge older than Codex sessions, where every flag is true |
+| `agent` | **object** `{name: string, product: string}` — what to call this session's agent (§*`runtime` and `capabilities`*). Absent from an older bridge, where it is `{name: "Claude", product: "Claude Code"}` |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — six fields plus `runtime` and `capabilities`, see below |
 
@@ -760,16 +761,18 @@ written today, as long as the client reads the flags.
 | `images` | images attached to a turn reach the model inline |
 | `allowForSession` | the "allow always" answer on a tool ask (`decision: "allow-always"`) |
 | `send` | **any message at all**: the composer, `POST …/send`, `…/later`, `…/wake`, `…/handoff`, `…/attachments`. False means the session can only be read — draw no composer, no Edit-and-resend, no queue, no mode or model picker |
+| `updateCheck` | the bridge compares the process's version with the latest release (`GET /api/claude-version`'s `staleSessions`). False: show `runner.claudeVersion` as it is, labelled with `agent.product`, and call nothing old |
 | `delete` | `DELETE /api/sessions/:id`. False for a runtime whose transcripts are another program's store (a Codex rollout has projections in Codex's own databases) |
 
-- **Every flag is `true` for `"claude"`**, `send` and `delete` included. For
+- **Every flag is `true` for `"claude"`**, `send`, `delete` and `updateCheck` included. For
   **`"codex"`**: `planMode`, `askUser`, `steer`, `images` and `send` are `true`;
   `fork`, `branchFromTurn`, `tasks` and `slashCommands` are `false` until a later
   phase; `peers` and `scratchpad` are `false` because Codex has no equivalent;
   `allowForSession` is `false` because a Codex tool ask carries its own `decisions`
   (§`POST /api/sessions/:id/permission`) and a card draws those instead of the
   generic "allow always"; and `delete` is `false` because a rollout is Codex's store,
-  with projections of it in Codex's own databases.
+  with projections of it in Codex's own databases; `updateCheck` is `false` because
+  nothing compares a Codex version with Codex's latest yet.
   (A bridge from before this change sent Claude's object without `send` and `delete`,
   and every Codex flag `false`; by the next rule, the missing ones mean true.)
 - **A flag a client does not recognise is ignored**, and **a flag that is missing
@@ -795,6 +798,15 @@ written today, as long as the client reads the flags.
 - **A Codex session is otherwise an ordinary session**: send, queue, stop, pin,
   archive, rename (`flags`), the terminal pane, `range`, `since`, `changes` and the
   `turns[]` index all work.
+- **`agent`** — **object** `{name: string, product: string}`, beside `runtime` on
+  `GET /api/sessions/:id`, on every session summary and on the full `runner-status`
+  payload (**not** on the narrow `runner` of `GET /api/sessions` and
+  `GET /api/dashboard` rows — read the row's own `agent` there). What to call the
+  agent: `name` is who speaks (`"Claude"`, `"Codex"` — the transcript's reply
+  heading, "waiting for Codex's next step"), `product` the program a version
+  belongs to (`"Claude Code"`, `"Codex"`). Label with these rather than a table of
+  runtime names of your own. Absent from an older bridge: then it is Claude's,
+  `{name: "Claude", product: "Claude Code"}`.
 - **Codex's version rides in `runner.claudeVersion`**, the field that has always
   meant "the version of the CLI running this process". The stale-binary hint
   (`GET /api/claude-version`'s `staleSessions`) counts Claude runners only.
@@ -4219,7 +4231,8 @@ down from:
 |---|---|
 | `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
 | **`runtime`** | string — the CLI this session runs on: `"claude"` or `"codex"`. See §*`runtime` and `capabilities`* |
-| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession, send, delete}`, all `true` for `"claude"`; a missing flag means true. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
+| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession, send, delete, updateCheck}`, all `true` for `"claude"`; a missing flag means true. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
+| **`agent`** | **object** `{name: string, product: string}` — what to call this CLI (`"Codex"`/`"Codex"`, `"Claude"`/`"Claude Code"`); see §*`runtime` and `capabilities`* |
 | `effort` | string or null — the `--effort` the process was started with, `null` for none. **Only here**: the transcript does not record it, so no session summary carries it, and a session with no process has nothing to report |
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |

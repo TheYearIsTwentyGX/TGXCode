@@ -11,6 +11,7 @@ import { dom, closeModal, el, openModal } from '../dom.js';
 import { clip, clockOf, dateOf } from '../format.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
+import { agentOf } from '../capabilities.js';
 import { closeContextMenu } from './context-menu.js';
 import { readAnswer } from './tools.js';
 import { hideTurnPop, REVIEWABLE } from './turn-rail.js';
@@ -153,7 +154,7 @@ function reviewQuestions(ev) {
         const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test((ev.result || {}).text || '');
         dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' }, stopped
             ? 'Stopped before it was answered.'
-            : 'Dismissed — Claude carried on unaided.'));
+            : `Dismissed — ${agentOf().name} carried on unaided.`));
     }
 
     for (const q of qs) {
