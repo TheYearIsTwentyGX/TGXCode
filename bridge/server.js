@@ -154,13 +154,13 @@ const index = new SessionIndex(flags);
 const spend = new SpendIndex();
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
-// A session whose runtime cannot take a message — a Codex thread, which this
-// bridge reads and never runs (docs/plans/23-codex.md, Phase 2) — must never get
-// a process, because the only process `ensure` knows how to start is `claude
-// --resume <id>`, and that id is not Claude's. The routes refuse first and say
-// why (`readOnly` in bridge/routes/session.js); this is the backstop for any
-// path that reaches the pool without passing one of them. Keyed on the
-// `send` capability, not on which runtime it is.
+// A session whose runtime cannot take a message must never get a process. The
+// routes refuse first and say why (`readOnly` in bridge/routes/session.js); this
+// is the backstop for any path that reaches the pool without passing one of
+// them. Keyed on the `send` capability, not on which runtime it is — Codex was
+// refused here through Phase 2 and is not since Phase 3 gave it an adapter, and
+// `pool.runtimeOf` below is what makes `ensure` start it as Codex rather than as
+// `claude --resume <thread id>`.
 {
     const ensure = pool.ensure.bind(pool);
     pool.ensure = (sessionId, opts) => {
@@ -933,6 +933,12 @@ function serveStatic(req, res, pathname, who) {
  * that sends `X-TGXCode-Viewer` counts too, for thirty seconds per poll.
  */
 pool.hasViewer = () => clients.size > 0 || viewers.leases.active() > 0;
+// The runtime a session the pool has not run is on, from the index — which
+// knows a Codex rollout from a Claude transcript (docs/plans/23-codex.md, Phase 2).
+pool.runtimeOf = (id) => {
+    const s = index.summary(id);
+    return (s && s.runtime) || null;
+};
 
 // And what it says while it works. Every surface that shows a session working
 // reads `runner.activity` off one SSE message, so deciding it here is what makes

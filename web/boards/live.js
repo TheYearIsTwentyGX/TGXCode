@@ -650,7 +650,15 @@ class AskBar extends Component {
                     ${what ? html`<span>${clip(what, row ? 70 : 90)}</span>` : null}
                 </div>
                 <div class="lask-acts">
-                    ${kind === 'tool' ? [
+                    ${kind === 'tool' && Array.isArray(ask.decisions) && ask.decisions.length
+                        // The runtime's own answers (Codex), short-labelled; the
+                        // card in the session has the long ones.
+                        ? ask.decisions.map(d => html`<button key=${d.id} type="button" disabled=${off}
+                            class=${d.behavior === 'deny' ? 'lbtn no' : d.scope === 'once' ? 'lbtn ok' : 'lbtn'}
+                            title=${d.label} onClick=${() => this.answer({ choice: d.id })}>${
+                                d.behavior === 'deny' ? (d.endsTurn ? 'Deny & stop' : 'Deny')
+                                : d.scope === 'always' ? 'Always (saved)' : d.scope === 'session' ? 'Session' : 'Allow'}</button>`)
+                    : kind === 'tool' ? [
                         html`<button key="allow" class="lbtn ok" type="button" disabled=${off}
                             onClick=${() => this.answer({ decision: 'allow' })}>Allow</button>`,
                         html`<button key="always" class="lbtn" type="button" disabled=${off}

@@ -28,6 +28,7 @@ import { projectColor } from '../app.js';
 import { closeSnips } from '../snippets/popover.js';
 import { clearAttach } from '../composer/attachments.js';
 import { grow } from '../composer/send.js';
+import { fillSelectFor } from '../models.js';
 import {
     closeMenus, live, makeComposer, menuOpen, repositionFloatingMenus, updateSlashMenu,
 } from '../composer/slash.js';
@@ -205,6 +206,12 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // stops at the first prompt and waits until morning. Editing an existing
     // schedule keeps whatever it already had.
     dom.newPerm.value = src ? src.permissionMode : (schedMode ? 'dontAsk' : 'plan');
+    // Claude on every open, and offered by Start alone: drafts and schedules do
+    // not carry a runtime yet, so a Codex pick saved into one would come back as
+    // Claude without a word. Hidden rather than ignored, for that reason.
+    dom.newRuntime.value = 'claude';
+    dom.newRuntime.closest('.opt').hidden = schedMode;
+    paintNewRuntime();
     // **Only what somebody said.** A draft or schedule being edited carries its
     // own directory, and every caller that means a particular project passes
     // one — the suggested-task dialog, the rail's split button, the conversion
@@ -640,6 +647,23 @@ export function newDialogValues() {
  * Start sends nothing at all when it is empty, so the session names itself from
  * its conversation exactly as it did before the box meant anything there.
  */
+/**
+ * Refill the model and effort pickers for the runtime picked. Claude's are the
+ * page's list; Codex's are Codex's own (`model/list`), fetched on first use.
+ */
+export function paintNewRuntime() {
+    const rt = dom.newRuntime.value || 'claude';
+    for (const [sel, kind] of [[dom.newModel, 'model'], [dom.newEffort, 'effort']]) {
+        if ((sel.dataset.runtime || 'claude') !== rt) fillSelectFor(sel, kind, rt);
+    }
+}
+
+/** `runtime` for `POST /api/sessions` — only when it is not the default. */
+export function newDialogRuntime() {
+    const rt = dom.newRuntime.value;
+    return rt && rt !== 'claude' && !dom.newRuntime.closest('.opt').hidden ? rt : null;
+}
+
 export function newDialogName() {
     return dom.newName.value.trim() || null;
 }
@@ -717,6 +741,7 @@ export function wireNewDialog() {
         n.addEventListener('click', closeNew);
     }
     closeOnClickOutside(dom.newScrim, closeNew);
+    dom.newRuntime.addEventListener('change', paintNewRuntime);
 
     dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
     dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));

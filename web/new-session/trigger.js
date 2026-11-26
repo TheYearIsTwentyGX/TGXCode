@@ -21,7 +21,7 @@ import { commitAttachments } from '../composer/attachments.js';
 import { openSessionSoon } from '../transcript/conversation.js';
 import { firstLine } from '../transcript/suggestions.js';
 import { sendToOrchestrator } from '../orch-picker.js';
-import { closeNew, newC, newDialogName, newDialogOrchestrator, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
+import { closeNew, newC, newDialogName, newDialogOrchestrator, newDialogRuntime, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
 
 // ── the trigger picker ──────────────────────────────────────────────────────
 //
@@ -627,6 +627,11 @@ export async function startNew() {
     // the session to name itself. See newDialogName.
     const title = newDialogName();
     if (title) body.title = title;
+    // Which CLI it runs on, Start alone again (newDialogRuntime says why). The
+    // id that comes back is the one the runtime minted — Codex names its own
+    // threads — so opening it below needs nothing different.
+    const runtime = newDialogRuntime();
+    if (runtime) body.runtime = runtime;
 
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';

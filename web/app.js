@@ -4,6 +4,7 @@
 // arrives from one place only (the file tail, pushed over SSE), so a session
 // running in somebody's terminal renders identically to one started here.
 
+import { fillSelectFor } from './models.js';
 import { configurePaths } from './markdown.js';
 import { PreviewPane, canPreviewUrls } from './preview.js';
 import {
@@ -3534,7 +3535,22 @@ function ownOrchSetting(key) {
     return p.settings[key] || null;
 }
 
+/**
+ * The composer's model and effort pickers hold the open session's runtime's
+ * list: Claude's from the page, Codex's from Codex (`model/list`, via
+ * web/models.js). Refilled only when the runtime changes, and repainted once a
+ * fetched list lands.
+ */
+function syncPickers() {
+    const rt = (state.runner && state.runner.runtime) || (state.current && state.current.runtime) || 'claude';
+    for (const [sel, kind] of [[dom.model, 'model'], [dom.effort, 'effort']]) {
+        if ((sel.dataset.runtime || 'claude') === rt) continue;
+        fillSelectFor(sel, kind, rt).then(() => { paintModel(); paintEffort(); });
+    }
+}
+
 function paintModel() {
+    syncPickers();
     const id = state.current && state.current.sessionId;
     // Written as a ladder rather than a `??` chain: every rung's "no answer" is
     // a different test — a Map that may hold `''`, an object that may be null,

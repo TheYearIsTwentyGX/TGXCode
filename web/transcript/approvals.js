@@ -71,12 +71,12 @@ const DECISION_WORD = {
     cancelled: 'Withdrawn — the turn ended.',
     superseded: 'Replaced by a later request.',
     'auto-denied': 'Denied automatically — nobody answered.',
-    abandoned: 'The Claude process exited before this was answered.',
+    abandoned: 'The agent process exited before this was answered.',
     'plan-approved': 'Approved.',
     'plan-approved-note': 'Approved, with a note to bear in mind.',
     'plan-rejected': 'Sent back for more planning.',
     answered: 'Answered.',
-    dismissed: 'Dismissed — Claude carries on unaided.',
+    dismissed: 'Dismissed — the agent carries on unaided.',
 };
 
 /** Head words per kind: what the card calls itself. */
@@ -231,6 +231,17 @@ function renderToolCard(ask) {
         toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''));
 
     if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
+    askDetail(card, ask);
+
+    // A runtime that offers its own answers (Codex's `availableDecisions`) gets
+    // one button per answer, in its order and its words, answered by `choice`.
+    if (Array.isArray(ask.decisions) && ask.decisions.length) {
+        decisionButtons(card, ask.decisions);
+        dom.log.append(card);
+        if (document.hasFocus() && !dom.input.matches(':focus')) card.focus({ preventScroll: true });
+        if (state.pinned) scrollToEnd(false);
+        return;
+    }
 
     card.append(el('div', { class: 'perm-btns' },
         el('button', { class: 'perm-btn allow', type: 'button',
@@ -260,6 +271,67 @@ function renderToolCard(ask) {
     // from something being typed, would be worse than a click.
     if (document.hasFocus() && !dom.input.matches(':focus')) card.focus({ preventScroll: true });
     if (state.pinned) scrollToEnd(false);
+}
+
+/**
+ * What a card needs beyond its one-line summary, for the asks whose input is
+ * more than a command line: the directory a command runs in, each file a change
+ * touches with its diff, and the grant a permissions request is asking for.
+ * Keyed on the input's shape, not on a runtime's name.
+ */
+function askDetail(card, ask) {
+    const input = ask.input || {};
+    if (typeof input.command === 'string' && input.cwd) {
+        card.append(el('div', { class: 'perm-why' }, `in ${input.cwd}`));
+    }
+    if (Array.isArray(input.changes) && input.changes.length) {
+        for (const c of input.changes.slice(0, 6)) {
+            card.append(el('div', { class: 'perm-why' }, `${c.kind || 'update'} ${c.path}`));
+            if (c.diff) card.append(el('pre', { class: 'perm-diff' }, clip(c.diff, 4000)));
+        }
+    }
+    if (input.permissions && typeof input.permissions === 'object') {
+        card.append(el('pre', { class: 'perm-diff' }, JSON.stringify(input.permissions, null, 2)));
+    }
+}
+
+/**
+ * One button per entry of an ask's `decisions`. The keys follow the old card's
+ * where an entry means the same: Y the one-off allow, A the for-this-session
+ * allow, N the refusal that lets the turn go on (or the one that ends it, when
+ * that is all there is). An answer kept beyond this session (`scope: "always"`,
+ * Codex's execpolicy amendment) gets no key and a mark saying so: it is the one
+ * button whose effect outlives the card, so it is never a single keystroke.
+ */
+function decisionButtons(card, decisions) {
+    const keyFor = new Map();
+    const once = decisions.find(d => d.behavior === 'allow' && d.scope === 'once');
+    const session = decisions.find(d => d.behavior === 'allow' && d.scope === 'session');
+    const deny = decisions.find(d => d.behavior === 'deny' && !d.endsTurn) || decisions.find(d => d.behavior === 'deny');
+    if (once) keyFor.set(once.id, 'Y');
+    if (session) keyFor.set(session.id, 'A');
+    if (deny) keyFor.set(deny.id, 'N');
+    const row = el('div', { class: 'perm-btns' });
+    for (const d of decisions) {
+        const key = keyFor.get(d.id);
+        const cls = d.behavior === 'deny' ? 'perm-btn deny' : d === once ? 'perm-btn allow' : 'perm-btn';
+        row.append(el('button', {
+            class: d.scope === 'always' ? `${cls} persistent` : cls, type: 'button',
+            title: d.scope === 'always' ? 'Kept by the agent beyond this session, until you remove it from its rules'
+                : d.endsTurn ? 'Also stops the turn' : null,
+            onclick: () => answerAsk({ choice: d.id }),
+        }, d.label, d.scope === 'always' ? el('span', { class: 'perm-persist' }, 'persistent') : null,
+        key ? el('kbd', {}, key) : null));
+    }
+    card.append(row);
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        const k = e.key.toUpperCase();
+        const d = decisions.find(x => keyFor.get(x.id) === k);
+        if (!d) return;
+        e.preventDefault();
+        answerAsk({ choice: d.id });
+    });
 }
 
 /**
@@ -642,7 +714,10 @@ function QuestionDock({ ask, pending }) {
     return html`<div class="ask-dock-inner" onKeyDown=${onKeyDown}>
         <div class="ask-dock-head">
             <span class="perm-tool">Question</span>
-            <span class="perm-title">${ask.agentId ? 'from a subagent' : 'waiting on you'}</span>
+            <span class="perm-title">${ask.agentId ? 'from a subagent'
+                // A question nothing is blocked on (Codex's async question tool):
+                // the turn has gone on, and the answer is your next message.
+                : ask.followUp ? 'your answer is sent as your next message' : 'waiting on you'}</span>
             <span class="spacer"></span>
             ${nav}
         </div>
@@ -651,7 +726,7 @@ function QuestionDock({ ask, pending }) {
             <button class="perm-btn allow" type="button" disabled=${pending || !complete}
                 onClick=${send}>${n > 1 ? 'Send answers ' : 'Send answer '}<kbd>⏎</kbd></button>
             <button class="perm-btn deny" type="button" disabled=${pending}
-                title="Answer nothing and let Claude decide for itself"
+                title=${ask.followUp ? 'Put the card away and send nothing' : 'Answer nothing and let the agent decide for itself'}
                 onClick=${() => answerAsk({ decision: 'deny' })}>Skip</button>
             <span class="ask-remain">${left ? `${left} still to answer` : ''}</span>
         </div>
@@ -681,8 +756,9 @@ export function answerAskFor(sessionId, requestId, payload) {
  * plan onwards. The dock and the footer draw that from `state.askPending`; the
  * permission card is `el()`, so its buttons are set directly.
  *
- * @param {{decision:'allow'|'allow-always'|'deny', mode?:string,
- *          answers?:object, feedback?:string}} payload
+ * @param {{decision?:'allow'|'allow-always'|'deny', choice?:string, mode?:string,
+ *          answers?:object, feedback?:string}} payload  `choice` is one of the
+ *          ask's own `decisions`, for a runtime that offers a list
  */
 export async function answerAsk(payload) {
     const ask = state.ask;

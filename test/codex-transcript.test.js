@@ -138,17 +138,20 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
 
 // --- the runtime ----------------------------------------------------------------------------------
 {
+    // Driven since Phase 3: sent to, steered, with its asks and images. What is
+    // still false is Phase 4's or has no Codex equivalent; deleting stays false,
+    // because a rollout is Codex's store and Codex deletes it.
     const caps = runtimes.capabilitiesOf('codex');
-    for (const [flag, v] of Object.entries(caps)) assert.strictEqual(v, false, `${flag} is false for codex`);
-    assert.strictEqual(caps.send, false);
-    assert.strictEqual(caps.delete, false);
+    assert.deepStrictEqual(caps, { fork: false, branchFromTurn: false, planMode: true, askUser: true,
+        peers: false, tasks: false, scratchpad: false, slashCommands: false, steer: true, images: true,
+        allowForSession: false, send: true, delete: false });
     assert.ok(Object.isFrozen(caps));
-    assert.ok(runtimes.readable('codex') && !runtimes.known('codex'), 'read, never run');
-    assert.throws(() => runtimes.get('codex'), /unknown runtime: codex/, 'nothing that starts a process can get one');
+    assert.ok(runtimes.readable('codex') && runtimes.known('codex'), 'read, and run');
+    assert.strictEqual(runtimes.get('codex').adapter.Adapter.name, 'CodexAdapter', 'with a process adapter');
     assert.strictEqual(transcript.readerFor('codex'), reader, 'the reader seam answers for it');
     assert.ok(runtimes.toolsOf('codex').edits.has('apply_patch'));
     assert.ok(!runtimes.toolsOf('codex').edits.has('exec_command'), 'as with Bash, a command says no file');
-    ok('codex is a read-only runtime: every capability false, no process adapter');
+    ok('codex is a driven runtime with a process adapter, and says what it cannot do');
 }
 
 // --- the metadata scan ----------------------------------------------------------------------------
@@ -407,7 +410,7 @@ if (reader.CAN_ZSTD) {
     assert.ok(s, 'indexed beside the (empty) Claude projects');
     assert.strictEqual(s.runtime, 'codex');
     assert.strictEqual(s.capabilities, runtimes.capabilitiesOf('codex'));
-    assert.strictEqual(s.capabilities.send, false);
+    assert.strictEqual(s.capabilities.send, true, 'driven since Phase 3, so a row can take a message');
     assert.strictEqual(s.title, 'Notes edit', 'the thread\'s name, last line wins');
     assert.strictEqual(s.titleSource, 'thread-name');
     assert.strictEqual(s.cwd, PROJ);
@@ -455,7 +458,10 @@ if (reader.CAN_ZSTD) {
     {
         const { Readable } = require('stream');
         const routes = require('../bridge/routes/session');
-        const CODEX = { sessionId: 'cx', runtime: 'codex', capabilities: runtimes.capabilitiesOf('codex'),
+        // Codex can take a message since Phase 3, so the flag is turned off here to
+        // keep the refusal itself pinned: it is by capability, for any runtime.
+        const CODEX = { sessionId: 'cx', runtime: 'codex',
+            capabilities: { ...runtimes.capabilitiesOf('codex'), send: false },
             cwd: '/home/user/work/proj', title: 't', projectName: 'proj', userMessages: 1 };
         const asked = [];
         // `later` validates its body in its own module, which takes the same two.

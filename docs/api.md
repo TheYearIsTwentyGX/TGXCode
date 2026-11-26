@@ -489,7 +489,7 @@ project filter on `GET /api/sessions?project=`.
 | **`orchestrator`** | **object or null** — `{inbox: number, workers: number, paused: boolean}` on a session marked as an orchestrator: unread inbox items, open workers, and whether the usage cutoff stopped it. Null otherwise. See §*Orchestrators* |
 | **`worker`** | **object or null** — `{orchestratorId: string, title: string\|null, closed: boolean}` on a session an orchestrator started. Null otherwise. A worker whose orchestrator is gone keeps the field; draw it as an ordinary session |
 | `prs` | array of `{number, url, repo}`, empty if none |
-| `runtime` | string — the CLI that wrote this conversation: `"claude"`, or `"codex"` for a Codex thread this bridge reads and does not run. See §*`runtime` and `capabilities`* |
+| `runtime` | string — the CLI that wrote this conversation: `"claude"`, or `"codex"` for a Codex thread. See §*`runtime` and `capabilities`* |
 | **`capabilities`** | **object** of booleans — what a client may offer on this session, **on every row whether or not a process is live**. Same object as on `GET /api/sessions/:id`. Absent from a bridge older than Codex sessions, where every flag is true |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — six fields plus `runtime` and `capabilities`, see below |
@@ -732,12 +732,11 @@ life of a session. Two values exist:
 
 - **`"claude"`** — Claude Code. Every feature in this document.
 - **`"codex"`** — an OpenAI Codex thread, read from its rollout file under
-  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`). **Read-only**: the bridge
-  lists it, draws its transcript, tails it while a terminal `codex` writes to it, and
-  **starts no Codex process for it, ever** — so every capability below is `false`,
-  including the two that only Codex sends (`send`, `delete`). Driving Codex from the
-  bridge is a later change; when it lands, its flags turn true and a client written
-  against this section needs nothing new.
+  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`), and **driven** over
+  `codex app-server`: the bridge starts one app-server per conversation, sends to it,
+  steers it, stops it, and draws its approvals, questions and plans as the cards
+  below. Start one with `runtime: "codex"` on `POST /api/sessions`. What it cannot
+  do yet is `false` in its capabilities (see the table's last rule).
 
 These two fields are how a client stays correct across both without asking which one
 it is looking at.
@@ -763,9 +762,16 @@ written today, as long as the client reads the flags.
 | `send` | **any message at all**: the composer, `POST …/send`, `…/later`, `…/wake`, `…/handoff`, `…/attachments`. False means the session can only be read — draw no composer, no Edit-and-resend, no queue, no mode or model picker |
 | `delete` | `DELETE /api/sessions/:id`. False for a runtime whose transcripts are another program's store (a Codex rollout has projections in Codex's own databases) |
 
-- **Every flag is `true` for `"claude"`**, and **every flag is `false` for
-  `"codex"`**. Claude's object does not yet carry `send` and `delete` — they arrived
-  with Codex — and by the next rule that means true, which is Claude's answer.
+- **Every flag is `true` for `"claude"`**, `send` and `delete` included. For
+  **`"codex"`**: `planMode`, `askUser`, `steer`, `images` and `send` are `true`;
+  `fork`, `branchFromTurn`, `tasks` and `slashCommands` are `false` until a later
+  phase; `peers` and `scratchpad` are `false` because Codex has no equivalent;
+  `allowForSession` is `false` because a Codex tool ask carries its own `decisions`
+  (§`POST /api/sessions/:id/permission`) and a card draws those instead of the
+  generic "allow always"; and `delete` is `false` because a rollout is Codex's store,
+  with projections of it in Codex's own databases.
+  (A bridge from before this change sent Claude's object without `send` and `delete`,
+  and every Codex flag `false`; by the next rule, the missing ones mean true.)
 - **A flag a client does not recognise is ignored**, and **a flag that is missing
   means `true`** — an older bridge sends no `capabilities` at all, and everything it
   offers works. New flags will be added; none will be renamed.
@@ -775,7 +781,7 @@ written today, as long as the client reads the flags.
   payload and the narrow `runner` on `GET /api/sessions` and `GET /api/dashboard` rows.
   (The overview and task-board cards' eight-field `runner` does not carry them.) A
   session with a live runner has the same object in both places; read the summary's
-  when there is no runner, which for a Codex session is always.
+  when there is no runner.
 - **The object is the same for every session on one runtime**, so a client may cache
   it by `runtime`.
 - **A write a session cannot take is refused `409`** with
@@ -786,8 +792,12 @@ written today, as long as the client reads the flags.
   still come first — a refused mode is `403` and an unknown id `404` before this. The
   routes that need a live process (`stop`, `restart`, `permission`, `queue`) answer
   as they do for any session with none.
-- **A Codex session is otherwise an ordinary session**: pin, archive, rename (`flags`),
-  the terminal pane, `range`, `since`, `changes` and the `turns[]` index all work.
+- **A Codex session is otherwise an ordinary session**: send, queue, stop, pin,
+  archive, rename (`flags`), the terminal pane, `range`, `since`, `changes` and the
+  `turns[]` index all work.
+- **Codex's version rides in `runner.claudeVersion`**, the field that has always
+  meant "the version of the CLI running this process". The stale-binary hint
+  (`GET /api/claude-version`'s `staleSessions`) counts Claude runners only.
   What its events look like is under *Codex sessions*, after the event kinds.
 
 ### `GET /api/sessions/:id/range?from=A&to=B`
@@ -1856,6 +1866,32 @@ is the value to send (an alias the CLI resolves — `"opus"`, not `"claude-opus-
 `note` is one line on when that model fits. Order is the order to show them in.
 Open to a paired remote caller. A client should still offer `inherit` (send `null`)
 first — it is not in the list because it is not a model.
+
+**`?runtime=codex`** asks Codex instead: the bridge starts a short-lived
+`codex app-server`, calls `model/list` (every page), and caches the answer for ten
+minutes (a failure for one; `&refresh=1` skips the cache). **Never hard-code a Codex
+model** — which exist, and which is the default, depend on the Codex account and move
+between Codex versions, and a turn naming a model the account cannot use fails at the
+end of the turn rather than when it is sent. The response:
+
+```
+{ runtime: "codex",
+  models: [{ id: string, label: string, note: string, default: bool,
+             efforts: [string], defaultEffort: string | null, images: bool }],
+  efforts: [string],
+  error?: string }
+```
+
+`models` holds only what Codex does not mark hidden, in Codex's order; `default` is
+true on the account's default model, which is what `inherit` gets. `efforts` per
+model is what that model accepts (`"low"`, …, `"max"`, and newer words such as
+`"ultra"`); the top-level `efforts` is every level any model offers, for a picker
+drawn before a model is chosen. Send any of these strings as `effort` on a Codex
+session; the bridge passes a Codex effort through rather than checking it against
+Claude's five. `error` is present, with `models` and `efforts` empty, when Codex
+could not be asked — not installed, not on PATH, or refusing; say it rather than
+showing an empty picker. `?runtime=claude` (or none) is the response above;
+anything else is `400`.
 
 ### `GET /api/prefs?cwd=<path>&files=1`
 
@@ -4169,7 +4205,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason, usageLimit}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError`. `usageLimit` as in `lastResult` (§*`runner-status`*) |
 | `session-spend` | `{sessionId, totals}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id`: that session's all-time API-equivalent spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
-| `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
+| `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued); and for a Codex session `codex-signed-out` (Codex has no account signed in — say to run `codex login` in a terminal; nothing was sent) and `no-codex` (the `codex` command was not found). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, any time after the one that said `listening`, seconds or minutes later. `web` (bool) as in the run record |
@@ -4182,8 +4218,8 @@ down from:
 | Field | Type |
 |---|---|
 | `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
-| **`runtime`** | string — the CLI this session runs on. Always `"claude"` here: a runner is a process of ours, and the bridge runs no other CLI yet (a `"codex"` session has no runner). See §*`runtime` and `capabilities`* |
-| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession}`, all `true` for `"claude"`; a missing flag (`send`, `delete`) means true. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
+| **`runtime`** | string — the CLI this session runs on: `"claude"` or `"codex"`. See §*`runtime` and `capabilities`* |
+| **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession, send, delete}`, all `true` for `"claude"`; a missing flag means true. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
 | `effort` | string or null — the `--effort` the process was started with, `null` for none. **Only here**: the transcript does not record it, so no session summary carries it, and a session with no process has nothing to report |
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |
@@ -4279,8 +4315,24 @@ causes auto-denials.
 ### `POST /api/sessions`
 
 `{cwd, prompt, title?: string, model?, effort?, permissionMode?, test?, attachments?,
-fromDraft?, worktree?: {name: string, base?: string}, orchestrator?: boolean}` →
+fromDraft?, worktree?: {name: string, base?: string}, orchestrator?: boolean,
+runtime?: "claude" | "codex"}` →
 `{sessionId, status, test, orchestrator: boolean, worktree?: {path: string, branch: string}}`.
+
+**`runtime`** (string, default `"claude"`) is the CLI to run it on (§*`runtime` and
+`capabilities`*). An unknown one is `400 {error: "unknown runtime: …"}`. With
+`"codex"`, `model` and `effort` are Codex's (from `GET /api/models?runtime=codex`),
+and `orchestrator: true` is refused `400` — an orchestration cannot run on Codex yet.
+
+**For Codex, the `sessionId` returned is the id Codex minted**, not one the bridge
+made up: Codex names a thread at `thread/start`, so this route waits for that — up to
+30 seconds, usually one or two — and answers with the thread id, the id every other
+route takes. It has to wait because the process has to start first, so a Codex create
+is slower than a Claude one. If Codex cannot start the conversation the answer is
+**`502 {error: string, kind: string, unsent: [string]}`** — `kind` one of the
+`send-failed` kinds (`codex-signed-out` when Codex has no account signed in,
+`no-codex`, `unknown`), `unsent` the prompt handed back — and no session exists.
+A `send-failed` event for the same failure is also broadcast.
 
 `orchestrator: true` starts the session as an orchestrator (§*Orchestrators*), with
 its tools from the first turn. Marking an existing session instead goes through
@@ -6000,7 +6052,12 @@ The one route that answers all three kinds of ask.
   is refused **`400`**, rather than answered with something stronger or weaker
   than the button said — a list with no session-scoped allow refuses
   `allow-always`.
-- **Plan** — `allow` **plus `mode`**. This is load-bearing: the session is *in* plan
+- **Plan** — `allow` **plus `mode`**. On an ask with `followUp: true` (below) this
+  sends the next turn instead: `allow` switches the session to `mode` (or
+  `acceptEdits` when none is given and it is in `plan`) and sends *Implement the
+  plan.*, with `feedback` after it when there is any; `deny` stays in plan mode and
+  sends `feedback` (or *Not yet — revise the plan.*) as the next turn. For every
+  other plan ask: this is load-bearing: the session is *in* plan
   mode while the card is up, so approving without changing mode agrees to the work
   and then blocks every edit in it. `auto` is the normal choice, `acceptEdits` the
   deliberate second one. `feedback` on an allow is appended to the plan and echoed
@@ -6013,7 +6070,10 @@ The one route that answers all three kinds of ask.
   answers by id). Each value is **a string, or an array of strings** for several
   choices; blank strings are dropped. A key that names no question is ignored, and
   an answer with nothing left in it is `409 {error: "no answers were given"}`.
-  Several strings reach a Claude session joined with `", "`, as one string.
+  Several strings reach a Claude session joined with `", "`, as one string; a Codex
+  blocking question gets them as a list, by id. On a `followUp` question, `allow`
+  sends the answers as the next turn — each question's text and then its answer — and
+  `deny` puts the card away and sends nothing.
 
 `404` means no live process. **`409` means it was already answered** — by another
 window, or the desktop's notification buttons. That is an ordinary outcome, not an
@@ -6030,8 +6090,12 @@ The ask shape (`permission-request`, and `runner.pendingPermission`):
   "tool": "Bash", "displayName": "Bash", "input": {…},
   "toolUseId": "…", "description": null, "reason": null,
   "blockedPath": null, "agentId": null,
-  "askedAt": 1786722343125 }
+  "askedAt": 1786722343125,
+  "followUp": true, "decisions": [{…}] }
 ```
+
+`followUp` and `decisions` are both **absent unless true / non-empty**; each is
+below.
 
 `tool` is the raw name — match on it, and send it back in an allow rule.
 `displayName` is the label to draw: for an MCP tool it is always the friendly
@@ -6052,7 +6116,31 @@ every Claude ask**, so a client that ignores it keeps working there. Each entry:
 | `endsTurn` | bool — a refusal that also stops the turn (Codex's `cancel`) |
 
 When the list is there, draw one button per entry, in order, and answer with
-`choice`. A card that only knows allow, allow-always and deny still works through
+`choice`.
+
+What a Codex session's tool asks look like:
+
+| `tool` | `input` | `decisions` |
+|---|---|---|
+| `"exec_command"` (`displayName: "Run a command"`) | `{command: string, cwd: string \| null, network?: object}` — `command` as typed, without Codex's `/bin/bash -lc '…'` wrapper | Codex's `availableDecisions`, in its order. Measured under `manual`: `accept` (Allow, once), `acceptWithExecpolicyAmendment` (scope `always`: *Always allow \`<prefix>\` — saved to Codex's rules, in every session*), `cancel` (deny, `endsTurn`). Others it can send: `acceptForSession` (`session`), `decline` (deny, the turn goes on), `applyNetworkPolicyAmendment` (`always`, allow or deny by its action) |
+| `"apply_patch"` (`displayName: "Edit files"`) | `{changes: [{path: string, kind: "add" \| "delete" \| "update", movePath: string \| null, diff: string}], grantRoot?: string}` — `diff` a unified diff, from the item that started the change | always `accept`, `acceptForSession`, `decline`, `cancel` |
+| `"permissions"` (`displayName: "More permissions"`) | `{permissions: {fileSystem?: object, network?: object}, cwd: string \| null}` — what Codex is asking to be granted, in Codex's shape | `turn` (allow for this turn, scope `once`), `session`, `decline` |
+
+A `scope: "always"` entry is the one whose effect outlives the card — Codex keeps
+it in its own rules until somebody removes it there — so the desktop draws it
+outlined with a *persistent* mark and gives it no keyboard shortcut.
+
+**`followUp`** — **bool, present (as `true`) only on an ask nothing is blocked on.**
+A Codex plan turn ends in a plan and asks nothing; Codex's async question tool asks
+inside a message and the turn goes on. Both are drawn as the ordinary plan or
+question card, and **answering one sends the next turn** (see the plan and question
+rules above) rather than unblocking this one. So: the session can be `idle` with
+this card up; it is never auto-denied for want of a window; a message sent from the
+composer while it is up answers it (`outcome: "superseded"`); and nothing is
+written to the agent until you answer. A Codex blocking question
+(`item/tool/requestUserInput`, `tool: "request_user_input"`) is an ordinary
+question ask without `followUp`, with an `id` on each question; an async one has
+`tool: "request_user_input_async"`. A card that only knows allow, allow-always and deny still works through
 the mapping above, but can be refused `400` where the list has no equivalent.
 
 **`secretNames`** — **array of strings, present only on a Bash ask the secrets hook
@@ -6069,6 +6157,11 @@ who should answer is not at the desk.
 The case that made expiry seem necessary is handled earlier and more bluntly: an
 ask arriving with no client connected is denied immediately, because there is
 nobody to ask.
+
+**An ask survives a bridge restart**, Claude's and Codex's alike: the process lives
+in the session host, and the next bridge redraws the card — same `requestId`, same
+`decisions` — and answers the request the agent is still waiting on. A client that
+reconnects after a restart finds it on `runner.pendingPermission` as before.
 
 `outcome` values on `permission-resolved`: `allow`, `allow-always`, `deny`,
 `answered`, `dismissed`, `plan-approved`, `plan-approved-note`, `plan-rejected`,

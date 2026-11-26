@@ -8,8 +8,12 @@ the two disagree. A Codex outside it may work; it has not been looked at. The
 plan (docs/plans/23-codex.md) has the bridge show a banner in that case rather
 than refuse.
 
-What is here. The first three are Phase 0 of the plan, and nothing in the bridge
-calls them yet; items.js is Phase 2's, and the rollout reader uses it:
+What is here. The first three are Phase 0 of the plan; items.js is Phase 2's,
+shared by the rollout reader and the process adapter; models.js is Phase 3's.
+A conversation's own app-server is spawned by the runner from the adapter
+(bridge/runtimes/codex/process.js), which reuses protocol.js and items.js and
+frames nothing itself; client.js serves an app-server outside any conversation
+(models.js, the recorder, the replay test):
 
   rpc.js       JSON-RPC 2.0 over a readable and a writable. Newline-delimited
                JSON, an id → promise map, a handler table for server requests,
@@ -21,6 +25,8 @@ calls them yet; items.js is Phase 2's, and the rollout reader uses it:
                initialized handshake with experimentalApi on.
   protocol.js  The tested range, and the ServerNotification / ServerRequest
                method lists copied from the schema for that version.
+  models.js    `model/list` for the pickers (GET /api/models?runtime=codex),
+               asked of a short-lived app-server and cached ten minutes.
   items.js     The v2 ThreadItem kinds as the bridge's `tool` events, in one
                table. `fromRollout` turns the rollout's form of an item
                (`item_completed`: PascalCase type, snake_case fields, a
@@ -97,10 +103,8 @@ app-server in that respect):
   2. A runtime can mint the session's id. `init` carries `minted: true` for
      the id of the session this start created; the runner and pool re-key as
      for a fork, but emit `minted` rather than `forked`. What the runner was
-     created with is a placeholder. NOT yet done: the pool emits `minted` and
-     nothing listens, so the create route still answers with the placeholder,
-     and `index.note(id)` is not called for the minted id. That is the route
-     half of Phase 3's first row, and it is a wire change (docs/api.md).
+     created with is a placeholder. The create route waits for `minted` and
+     answers with the minted id, labelling and noting that one (Phase 3).
   3. `init` may be built from replies. Events still come only from read(),
      which is the point: an `init` said from read() of the thread/start reply
      is rebuilt by the adoption replay, and one pushed from a promise would
@@ -122,15 +126,16 @@ app-server in that respect):
      supersede) picks the nearest entry, so answer() always gets a `choice` on
      such an ask; `raw` never leaves the bridge. The amendment is
      `scope: "always"`, and is not remembered as a session allow of ours.
-     NOT yet done: web/ cards still draw allow / deny, so a Codex command card
-     works through the mapping until they draw from the list.
+     web/'s tool card draws one button per entry (Phase 3).
   7. A question's answers reach answer() as `[{id, question, answers:
      [string]}]`, and the adapter says them in its runtime's shape. A client
      may key `answers` by a question's `id` as well as its text, and give
      several strings. Claude's adapter builds the same updatedInput the runner
      used to.
 
-Still the adapter's to do, with nothing more needed from the runner: integer
-server-request ids (the runner holds `ask.id` as a string; keep the integer and
-answer with it), and withdrawing a card on `serverRequest/resolved` only while
-it is unanswered.
+The adapter (bridge/runtimes/codex/process.js, Phase 3) does the rest: it keeps
+the integer server-request id as `ask.rpcId` and answers with it, and withdraws a
+card on `serverRequest/resolved` only while it is unanswered. Phase 3 added two
+optional hooks of its own — `notify` (a line nobody waits on: `initialized`) and
+`adopting(o)` — and asks with `followUp: true`, which the runner answers by sending
+the next turn; the contract's header in bridge/runtimes/claude/process.js says how.

@@ -29,14 +29,16 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
 // --- the registry ---------------------------------------------------------------------------------
 {
     const FLAGS = ['fork', 'branchFromTurn', 'planMode', 'askUser', 'peers', 'tasks', 'scratchpad',
-        'slashCommands', 'steer', 'images', 'allowForSession'];
+        'slashCommands', 'steer', 'images', 'allowForSession', 'send', 'delete'];
     const caps = runtimes.capabilitiesOf('claude');
     assert.deepStrictEqual(Object.keys(caps).sort(), FLAGS.slice().sort(), 'the documented flags, no more and no fewer');
     for (const f of FLAGS) assert.strictEqual(caps[f], true, `${f} is true for claude`);
     assert.ok(Object.isFrozen(caps), 'one object shared by every runner, so nobody may edit it');
     assert.strictEqual(runtimes.get().name, 'claude', 'claude when no runtime is named');
     assert.strictEqual(runtimes.DEFAULT, 'claude');
-    assert.ok(runtimes.known('claude') && !runtimes.known('codex'));
+    // Codex is driven since Phase 3 of docs/plans/23-codex.md, so a session can be
+    // run on it; test/codex-transcript.test.js pins its flags.
+    assert.ok(runtimes.known('claude') && runtimes.known('codex'));
     assert.throws(() => runtimes.get('nope'), /unknown runtime/);
     ok('claude is the default runtime, and every capability is true for it');
 }
