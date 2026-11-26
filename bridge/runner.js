@@ -9,6 +9,18 @@
 // transcript, so a session driven from here is indistinguishable on disk from
 // one driven from a terminal.
 //
+// **What is Claude's and what is ours.** Everything about the CLI itself — its
+// argv, the line a user turn is written as, what each line of its output means,
+// how a control request is spelled, how its exits read — is the process adapter
+// in bridge/runtimes/claude/process.js, whose header is the contract a second
+// runtime implements. This file is the rest: the queue and `inFlight`, the
+// approval cards and who may answer them, the stall clock and the activity label,
+// eviction, the host note and adoption. It never parses a stream-json line; it
+// acts on the adapter's events, so the parts below that say `can_use_tool` or
+// `result` are describing what the Claude adapter turns into an `ask` or a
+// `turn-end`. A runner takes `runtime` (default `claude`) and asks
+// bridge/runtimes for its adapter.
+//
 // That process is normally not our child. It runs in the session host
 // (bridge/host.js), which holds its pipes so that a bridge restart does not end
 // the turn: `claude` stops at end-of-input, and the host is what keeps the input
@@ -90,174 +102,21 @@
 // interrupt that does not land falls through to the signal path.
 
 const fs = require('fs');
-const path = require('path');
 const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
 
 const cfg = require('./config');
-const { deleteBoth } = require('./legacy-env');
-
-const { CLAUDE_BIN } = cfg;
-const { describeTool } = require('./transcript');
+const runtimes = require('./runtimes');
 const { toolDisplayName } = require('./tool-name');
-const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
 const hostClient = require('./host-client');
-const sudo = require('./sudo');
 const secrets = require('./secrets');
+
+// The Claude adapter's helpers, re-exported below for the callers that imported
+// them from here before the adapter existed: bridge/routes and the tests.
+const claude = runtimes.get('claude').adapter;
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
-
-/**
- * The environment a session runs in.
- *
- * A session inherits the bridge's environment, and `TGXCODE_PORT` has no
- * business travelling down it. The bridge sets that variable for itself; an agent
- * that inherits it is holding the port of *this* instance, so a bridge it starts
- * while working on this codebase silently binds the everyday one — which is
- * exactly how a worktree came to be serving the user's window. An agent that
- * genuinely wants a port picks one, and `npm run dev` picks a free one for it.
- *
- * CLAUDE_CODE_ENTRYPOINT goes the other way: it is set here so the CLI knows what
- * started it.
- *
- * `browser` is the `agentBrowser.mode` setting. `headless` sets the variable the
- * Playwright MCP server reads in place of its `--headless` flag, so the browser an
- * agent tests with draws no window and cannot take focus from the person typing
- * elsewhere. `visible` adds nothing, which leaves the bridge's own environment in
- * charge — set the variable there and it still holds. The MCP server is started
- * once per `claude`, so a change reaches the next session spawned, not one running.
- *
- * `sudo` is `{key, port}` when Settings › Sudo is on, and then the session gets
- * SUDO_ASKPASS and what the helper needs to reach this bridge; null strips them.
- * Read at spawn like the browser — see bridge/sudo.js.
- *
- * `TGXCODE_SECRETS_PORT` is where bridge/secret-exec.js fetches a command's
- * secrets from. Always set, because the hook that wraps a command is always
- * there (bridge/secrets.js), and deliberately not `TGXCODE_PORT`: nothing reads
- * this one as the port to bind.
- */
-function sessionEnv({ browser = 'visible', sudo: sudoAccess = null } = {}) {
-    const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'tgxcode' };
-    deleteBoth(env, 'PORT');
-    // terminal.js sets this on a session's own terminal pane, and devservers.js
-    // reads it ahead of CLAUDE_CODE_SESSION_ID. A bridge started from that pane
-    // would pass it to every agent it runs, and each server those agents started
-    // would be attributed to the pane's session. `claude` sets
-    // CLAUDE_CODE_SESSION_ID itself.
-    delete env.TGXCODE_SESSION_ID;
-    // And this one goes the same way as the entrypoint: the app shows a
-    // session's own task list, and current models are not offered the tools that
-    // keep one unless this is set. See cfg.TODO_TOOLS for the opt-out.
-    if (cfg.TODO_TOOLS) env.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1';
-    if (browser === 'headless') env.PLAYWRIGHT_MCP_HEADLESS = 'true';
-    sudo.applyEnv(env, sudoAccess);
-    env.TGXCODE_SECRETS_PORT = String(cfg.PORT);
-    return env;
-}
-
-// The tools this app gives a session that it would not otherwise have: offer the
-// next piece of work as a suggestion, find the other sessions, and hand one of
-// them a fact — waking it if it is idle. See bridge/mcp.js for what each does.
-//
-// Passed as a JSON *string* rather than a file — `--mcp-config` takes either, and
-// a string means there is no temp file to write, collide on between two bridges,
-// or leave behind. `process.execPath` rather than `node`, because the node that
-// is already running us is the only one we know exists: a login shell has none
-// on PATH, which is the whole reason bridge/launch.sh exists.
-//
-// Deliberately *not* `--strict-mcp-config`, which would switch off every MCP
-// server the user configured for themselves. We are adding one, not taking over.
-//
-// **The port and the session id are arguments, and the token is not.** Two of
-// these tools call back into this bridge, so the server has to know where it is
-// — and `sessionEnv()` strips TGXCODE_PORT on purpose, so the
-// environment is not the channel. This string lands on the `claude` command
-// line, where `ps` can read it, which is why the port travels here and the token
-// is read off disk at the other end instead.
-const AGENT_TOOLS = [
-    // A read of the agent brief's sections; see bridge/brief.js.
-    'mcp__tgxcode__tgxcode_guide',
-    'mcp__tgxcode__suggest_session',
-    'mcp__tgxcode__list_sessions',
-    'mcp__tgxcode__message_session',
-    'mcp__tgxcode__find_tasks',
-    'mcp__tgxcode__start_task',
-    'mcp__tgxcode__set_task_status',
-    'mcp__tgxcode__schedule_session',
-    // Speaks only to this session, later; see bridge/wakes.js. A card for it would
-    // be asked exactly when a session is about to stop for the night.
-    'mcp__tgxcode__wake_me_up',
-    // A read. install_on_phone is not here: it makes bytes downloadable off this
-    // machine, which is a call worth a card.
-    'mcp__tgxcode__phone_install_status',
-    // Asking changes nothing until you answer the card it raises, and the answer
-    // is only ever "it is set" — see bridge/secrets.js. Listing is names only.
-    'mcp__tgxcode__request_secret',
-    'mcp__tgxcode__list_secrets',
-];
-
-// The extra tools a session gets for its part in an orchestration — see
-// bridge/orchestrators.js. Auto-approved for the reason the list above is: an
-// orchestrator's whole job is calling them, mostly while nobody is watching, and
-// a card for each one would be auto-denied at exactly that moment. What they can
-// *do* is bounded where it survives that: the workers they start stop at the
-// orchestrator's own permission prompts, the cap on running workers, and the
-// usage cutoff.
-const ROLE_TOOLS = {
-    orchestrator: [
-        'spawn_worker', 'list_workers', 'next_message', 'send_to_worker', 'answer_worker',
-        'read_worker', 'stop_worker', 'close_worker', 'get_usage', 'set_summary',
-    ].map(t => `mcp__tgxcode__${t}`),
-    worker: ['mcp__tgxcode__report_to_orchestrator'],
-};
-
-// Answered without asking anybody, in any mode, plan included. Filing a report
-// in an orchestrator's inbox changes nothing outside the app, and a worker in
-// plan mode that had to have it approved would send its permission prompt to
-// the very inbox it was trying to write to.
-const ALWAYS_ALLOW = new Set(['mcp__tgxcode__report_to_orchestrator']);
-
-// The `--mcp-config` string itself; see the note above AGENT_TOOLS for its shape.
-//
-// **`preview` is the second server, and only when `preview.agentControl` is on.**
-// It is Playwright MCP pointed at the browser preview in the user's window rather
-// than at a browser of its own; bridge/preview-mcp.js says how. Named `preview`
-// so its tools (`mcp__preview__browser_click`, …) cannot be mistaken for the
-// user's own Playwright server's, which stays exactly as it was. With it,
-// tgxcode lists open_in_preview, which is how an agent gets a page there to drive.
-function mcpConfig(sessionId, role = null, { preview = false } = {}) {
-    const servers = {
-        tgxcode: {
-            command: process.execPath,
-            args: [
-                path.join(__dirname, 'mcp.js'),
-                '--port', String(cfg.PORT),
-                '--session', sessionId,
-                // Which tools to list. Fixed at spawn, like everything on this
-                // line: the CLI reads the tool list once, so a session whose
-                // role changes has to be restarted to see it — see
-                // RunnerPool#recycle.
-                ...(role ? ['--role', role] : []),
-                ...(preview ? ['--preview'] : []),
-            ],
-        },
-    };
-    if (preview) {
-        servers.preview = {
-            command: process.execPath,
-            args: [path.join(__dirname, 'preview-mcp.js'), '--port', String(cfg.PORT)],
-        };
-    }
-    return JSON.stringify({ mcpServers: servers });
-}
-
-// Answered without a card when the preview server is there. Turning the setting
-// on is the consent: what these reach is the page in the preview pane and
-// nothing else (app/preview-cdp.js), the user is watching it happen, and a card
-// per click would make watching an agent use the page impossible. `mcp__preview`
-// with no tool name is every tool that server lists.
-const PREVIEW_TOOLS = ['mcp__preview', 'mcp__tgxcode__open_in_preview'];
 
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
@@ -265,15 +124,6 @@ const IDLE_EVICT_MS = 15 * 60 * 1000;
 // How long a background task is believed to be running with no word of it
 // finishing. Generous: a dev server is the common case and runs for hours.
 const BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
-// The task statuses that mean it is over, as `task_updated` spells them.
-const TASK_DONE = ['completed', 'failed', 'killed', 'stopped'];
-
-// What the CLI says when a turn is refused for the usage limit: the synthetic
-// "You've hit your session limit · resets 3:20pm" (and the 5-hour and weekly
-// spellings), or the older "Claude AI usage limit reached". A fallback for the
-// `rate_limit_event` with status `rejected`, which is the reliable signal but is
-// not there for a turn read back from an adopted process.
-const LIMIT_TEXT = /\b(hit your (?:[\w-]+ )*limit|usage limit reached)\b/i;
 
 const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'bypassPermissions'];
 
@@ -299,19 +149,13 @@ function settingsWord(r, wants) {
     return parts.join(' and ');
 }
 
-/**
- * Which tools are a conversation rather than a permission question.
- * @type {Record<string, 'plan'|'question'>}
- */
-const ASK_KINDS = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
-
 // An outstanding ask never expires. It used to: two minutes for a tool call,
 // fifteen for a plan or a question, on the theory that a blocked turn holds a
 // process open and nobody may be there to answer. But the cost landed on the
 // person who *was* there — you read a plan, thought about it, and the card was
 // denied out from under you. Claude Code itself does not do that, so neither
 // does this. The case that mattered is still covered, and covered up front
-// rather than on a clock: _handlePermission denies immediately when no window
+// rather than on a clock: _onAsk denies immediately when no window
 // is open to answer. Once a card is on screen it waits as long as you do, and
 // a window that closes and comes back finds it again — statuses() hands the
 // pending ask to every viewer that attaches.
@@ -325,79 +169,11 @@ const CONTROL_TIMEOUT_MS = 8_000;
 // turn instead and say why.
 const MAX_AUTO_DENIES = 2;
 
-// Types the API accepts as an image source. Kept here rather than imported from
-// bridge/attachments.js so the runner has no opinion about where files come from —
-// it is handed a list and asked to send it.
-const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
-
-// A cap on what one turn will inline, independent of the per-file upload cap. Five
-// 25MB screenshots base64'd is a 160MB line on a pipe, and the paths are in the text
-// either way — so past this the model reads the file instead of being handed it.
-const MAX_INLINE_BYTES = 12 * 1024 * 1024;
-
-/**
- * The content blocks for one user turn.
- *
- * With nothing attached this is what it always was: one text block. With files on it,
- * three things are going on, and they are worth separating.
- *
- * **The note is split across blocks, one line each, with an image block sitting
- * straight after the line that names it.** `userText` in bridge/transcript.js joins a
- * turn's text blocks with a newline, so this reassembles into exactly the message a
- * single block would have carried — the parser on the way back does not know or care
- * that it arrived in pieces. What it buys is that each screenshot is labelled with the
- * file it came from. Two anonymous images on one turn are genuinely ambiguous, and
- * asked which was which the model said so; "the second screenshot" is a thing people
- * say, and this is what makes it answerable.
- *
- * **The base64 is read here**, at flush time, rather than carried on the queue entry.
- * A queued message is broadcast to every viewer inside `status()` on every change, and
- * a screenshot on that path would put megabytes through an SSE stream for reasons
- * unrelated to it.
- *
- * **A file that has gone missing since it was staged is skipped**, not fatal. Its path
- * is still in the note, so the message stays true either way: it says a file was
- * attached, and the model finds out it cannot read it in the ordinary way.
- */
-function userContent(entry) {
-    const files = entry.attachments || [];
-    if (!files.length) return [{ type: 'text', text: entry.text }];
-
-    // The note's heading rides on the end of the typed message rather than in a block
-    // of its own, so the blank line between the two survives the rejoin.
-    const content = [{
-        type: 'text',
-        text: entry.text ? `${entry.text}\n\n${ATTACHMENT_NOTE_HEAD}` : ATTACHMENT_NOTE_HEAD,
-    }];
-
-    let budget = MAX_INLINE_BYTES;
-    for (const a of files) {
-        content.push({ type: 'text', text: attachmentNoteLine(a) });
-        if (!INLINE_IMAGE_TYPES.has(a.mediaType) || a.bytes > budget) continue;
-        let data;
-        try { data = fs.readFileSync(a.path); } catch { continue; }
-        budget -= data.length;
-        content.push({
-            type: 'image',
-            source: { type: 'base64', media_type: a.mediaType, data: data.toString('base64') },
-        });
-    }
-
-    return content;
-}
-
-/**
- * The stdin line for one user turn. The uuid is ours, and the CLI reports what
- * became of the message under it — `command_lifecycle` frames, see _onLifecycle —
- * which is the only way to tell a message folded into a running turn from one
- * still waiting in the CLI's queue.
- */
-function userLine(entry) {
-    return {
-        type: 'user',
-        uuid: entry.uuid,
-        message: { role: 'user', content: userContent(entry) },
-    };
+/** The label an ask puts on a busy session while it waits. */
+function waitingLabel(ask) {
+    return ask.kind === 'plan' ? 'Waiting for you: a plan to approve'
+        : ask.kind === 'question' ? 'Waiting for you: a question'
+        : `Waiting for you: ${ask.displayName}`;
 }
 
 class Runner extends EventEmitter {
@@ -406,6 +182,7 @@ class Runner extends EventEmitter {
      * @param {string} opts.sessionId
      * @param {string} opts.cwd
      * @param {boolean} opts.isNew   start a fresh session rather than resuming
+     * @param {string} [opts.runtime] which CLI drives it; `claude` when absent
      * @param {{permissionPrompt:boolean, interrupt:boolean}} [opts.caps]
      *   What this `claude` build has been observed to support. Shared across the
      *   pool, so one runner discovering a gap spares the rest from rediscovering
@@ -415,6 +192,15 @@ class Runner extends EventEmitter {
         super();
         this.sessionId = opts.sessionId;
         this.cwd = opts.cwd;
+        // The CLI on the other end, and the adapter that speaks to it. Fixed for
+        // the runner's life: a session does not change runtime, and its
+        // capabilities are what clients hide controls by.
+        this.runtime = opts.runtime || runtimes.DEFAULT;
+        this.capabilities = runtimes.capabilitiesOf(this.runtime);
+        this.tools = runtimes.toolsOf(this.runtime);
+        this.adapter = new (runtimes.get(this.runtime).adapter.Adapter)({
+            rpc: (verb, payload) => this._control(verb, payload),
+        });
         this.isNew = !!opts.isNew;
         this.model = opts.model || null;
         this.effort = effortOrNull(opts.effort);
@@ -443,10 +229,10 @@ class Runner extends EventEmitter {
         // ms; 0 is never. Delegated like the two above. See the header.
         this.stallAfter = opts.stallAfter || (() => 0);
         // Whether the browser an agent tests with gets a window. Supplied by the
-        // pool from `agentBrowser.mode`; see sessionEnv().
+        // pool from `agentBrowser.mode`; see the adapter's `env`.
         this.agentBrowser = opts.agentBrowser || (() => 'visible');
         // Whether this session may drive the browser preview — `preview.agentControl`,
-        // supplied by the pool and read at each spawn. See mcpConfig().
+        // supplied by the pool and read at each spawn. See the adapter's `argv`.
         this.previewControl = opts.previewControl || (() => false);
         // The agent brief for this session, or null — see bridge/brief.js.
         // Supplied by the pool and asked at each spawn, so a settings change
@@ -510,7 +296,7 @@ class Runner extends EventEmitter {
         this.pendingSettings = null;
 
         // -- control channel ------------------------------------------------
-        this.caps = opts.caps || { permissionPrompt: true, interrupt: true };
+        this.caps = opts.caps || this.adapter.initialCaps();
         /** Is anyone actually in a position to answer an approval card? */
         this.hasViewer = opts.hasViewer || (() => false);
         /**
@@ -574,117 +360,39 @@ class Runner extends EventEmitter {
         // A fresh process is not the one that was too busy to answer.
         this._interruptTimedOut = false;
 
-        const args = [
-            '-p',
-            '--input-format', 'stream-json',
-            '--output-format', 'stream-json',
-            '--verbose',
-            '--permission-mode', this.permissionMode,
-        ];
-        // The whole point of the control channel: route "may I?" back to us
-        // instead of letting headless mode answer "no" on the user's behalf.
-        // `stdio` is the CLI's sentinel for "ask over this stream" rather than
-        // the name of an MCP tool.
-        if (this.caps.permissionPrompt) args.push('--permission-prompt-tool', 'stdio');
-        // Filing a suggestion is the agent offering the user something, not the
-        // agent doing anything, so it must never raise an approval card — a
-        // permission prompt for "may I suggest this?" is noise nobody wants.
-        // `--allowedTools` is an auto-approve list, not a restriction on which
-        // tools exist; `--tools` is the one that would narrow the set.
-        //
-        // `message_session` is on that list too, and that one is a real choice:
-        // it wakes another session, which is an effect outside this
-        // conversation, and auto-approving it means a session in *plan* mode can
-        // still cause one. The alternative was worse. A handoff exists precisely
-        // because the sender is finishing and the recipient is not around, so
-        // gating it on an approval card means it is auto-denied exactly when it
-        // was needed (see _handlePermission, which denies with no window open)
-        // and stalls until somebody looks the rest of the time. The containment
-        // is put where it survives that: the woken session resumes in plan mode
-        // and stops at a plan, and the bridge rate-limits the pair.
-        //
-        // One flag per tool. Repeating it is the form that has been checked
-        // against a real session; whether a comma-separated list is also accepted
-        // has not, and there is nothing to gain by finding out.
-        //
-        // **Plan mode ignores this list, and that is worth knowing before you go
-        // looking for a bug in it.** A session in `plan` routes every tool that
-        // is not plainly read-only through `can_use_tool` whatever is on
-        // `--allowedTools`, so `message_session` from a planning session raises a
-        // card — and is auto-denied when no window is open. Measured, not assumed:
-        // the same `list_sessions` call is denied in `plan` and runs unasked in
-        // `auto`.
-        //
-        // It matters in two directions and is wanted in both. A session that has
-        // just *changed* something is not in plan mode, so the handoff that
-        // motivates this feature goes out. And a session woken *by* a handoff is
-        // resumed in plan mode, so it cannot pass the work on to a third session
-        // even though the tool is nominally allowed — which is exactly the
-        // containment the wrapper asks for in prose, enforced.
-        //
-        // The task and schedule tools are on it for the handoff's reason. Their
-        // main caller is a *scheduled* run, which is unattended by definition, so
-        // an approval card would be auto-denied at the one moment it matters —
-        // and the same plan-mode rule means a session that is only planning still
-        // has to ask before it schedules or starts anything.
+        // Ours, whichever CLI is on the other end: which part of an orchestration
+        // this session plays, whether it may drive the preview, and what TGXCode
+        // is and offers (bridge/brief.js) followed by what that part is for, with
+        // the user's own addendum. The adapter decides how each reaches the
+        // process — see `argv` in bridge/runtimes/claude/process.js for why the
+        // tools these name are auto-approved and how the prompt is appended.
         const role = this.roleOf(this.sessionId);
         this.role = role ? role.role : null;
         let preview = false;
         try { preview = this.previewControl(this.cwd) === true; } catch { /* off */ }
-        args.push('--mcp-config', mcpConfig(this.sessionId, this.role, { preview }));
-        for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
-        // The secrets hook, and the rules keeping Read and Edit out of the store —
-        // bridge/secrets.js. Additive, like --mcp-config: the user's own settings
-        // and hooks still apply.
-        args.push('--settings', JSON.stringify(secrets.sessionSettings()));
-        if (preview) for (const tool of PREVIEW_TOOLS) args.push('--allowedTools', tool);
-        for (const tool of (this.role && ROLE_TOOLS[this.role]) || []) args.push('--allowedTools', tool);
-        // What TGXCode is and offers (bridge/brief.js), then what an orchestrator
-        // or a worker is for, with the user's own addendum. Appended rather than
-        // replacing anything, so CLAUDE.md and the rest of the default prompt
-        // still apply. One flag carrying both, joined here: whether the CLI
-        // concatenates a repeated --append-system-prompt or keeps the last one
-        // is not something to find out from a worker that lost its brief.
         let general = null;
         try { general = this.agentBrief(this.cwd, this.role); } catch { /* no brief beats no session */ }
-        const prompt = [general, role && role.brief].filter(Boolean).join('\n\n');
-        if (prompt) args.push('--append-system-prompt', prompt);
-        // `--session-id` mints the id; `--resume` continues it. Which one is right
-        // is a fact about *this start*, not about the runner — see the reset below
-        // the spawn, and the bug that reset fixes.
-        if (this.isNew) args.push('--session-id', this.sessionId);
-        else args.push('--resume', this.sessionId);
-        if (this.fork) args.push('--fork-session');
-        // Keep history up to and including `parent` — the entry the edited turn
-        // follows — and drop the rest from the copy. The original is not touched:
-        // the cut only applies to what this process loads, and `--fork-session`
-        // writes it under a new id. Both flags are print-mode only, which the
-        // `-p` above is, and both need `--resume`, which a fork always has.
-        //
-        // `--resume-drops-turn` is the CLI's own check that the cut discards the
-        // turn you meant and nothing else — a queued message it absorbed, a task
-        // notification. It refuses any cut that drops *another turn of yours*,
-        // though, so it can only be asked for when the edited turn is the last
-        // one (`guard`). Branching from turn 4 of 12 drops turns 5–12 on purpose,
-        // and the banner that offered it said so.
-        if (this.branch) {
-            args.push(`--resume-session-at=${this.branch.parent}`);
-            if (this.branch.guard) args.push(`--resume-drops-turn=${this.branch.fromUuid}`);
-        }
-        if (this.model) args.push('--model', this.model);
-        if (this.effort) args.push('--effort', this.effort);
+        const systemPrompt = [general, role && role.brief].filter(Boolean).join('\n\n');
+        // `isNew`, `fork` and `branch` are facts about *this start*, not about
+        // the runner — see the reset below the spawn, and the bug that reset fixes.
+        const args = this.adapter.argv({
+            sessionId: this.sessionId, cwd: this.cwd, permissionMode: this.permissionMode,
+            model: this.model, effort: this.effort,
+            isNew: this.isNew, fork: this.fork, branch: this.branch,
+            role: this.role, preview, systemPrompt: systemPrompt || null, caps: this.caps,
+        });
 
-        this._setState('starting', 'Starting Claude…');
+        this._setState('starting', `Starting ${this.adapter.label}…`);
 
         try {
             // In the session host when there is one (bridge/host.js), so the turn
             // outlives this bridge; as our own child when there is not. Either way
             // what comes back has the ChildProcess surface the rest of this file
             // uses, and nothing below needs to know which it got.
-            this.proc = hostClient.spawnClaude(CLAUDE_BIN, args, {
+            this.proc = hostClient.spawnClaude(this.adapter.bin, args, {
                 cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: sessionEnv({ browser: this.agentBrowser(this.cwd),
+                env: this.adapter.env({ browser: this.agentBrowser(this.cwd),
                     sudo: this.sudoAccess(this.sessionId) }),
                 // Its own process group, so a Ctrl-C aimed at the bridge is not
                 // also delivered to a turn in flight; it gets to shut down on
@@ -698,7 +406,7 @@ class Runner extends EventEmitter {
                 detached: true,
             }, this.sessionId);
         } catch (err) {
-            this.lastError = `Could not start ${CLAUDE_BIN}: ${err.message}`;
+            this.lastError = `Could not start ${this.adapter.bin}: ${err.message}`;
             this._setState('error', null);
             return;
         }
@@ -738,11 +446,8 @@ class Runner extends EventEmitter {
         // still leaves the host a record of whose process this is.
         this._saveNote();
 
-        // The handshake the Agent SDK opens with. We need nothing from the
-        // reply, but a CLI that expects a client to announce itself gets what it
-        // is waiting for, and a round trip completing tells us the channel works
-        // in both directions before anything depends on it.
-        this._control('initialize', {}).catch(() => { /* older build; the fallbacks cover it */ });
+        // Whatever the CLI expects a client to open with; see the adapter's.
+        this.adapter.handshake().catch(() => { /* older build; the fallbacks cover it */ });
 
         // The process is ready for input immediately; `system/init` confirms it.
         this._setState('idle', null);
@@ -794,7 +499,7 @@ class Runner extends EventEmitter {
             // Whatever it was running in the background went with it.
             this.background.clear();
             this.pendingSettings = null;
-            this._abandonControl('the Claude process exited');
+            this._abandonControl(`the ${this.adapter.label} process exited`);
             // The turn this process was answering, taken before any branch below
             // gets an opinion about it.
             //
@@ -826,7 +531,7 @@ class Runner extends EventEmitter {
                 // came from a retire and has been offered to nobody.
                 if (this.queue.length) {
                     this._handBack('retired',
-                        'The Claude process was shut down before these messages were sent.');
+                        `The ${this.adapter.label} process was shut down before these messages were sent.`);
                 }
                 this._setState('stopped', null);
             } else if (code === 0) {
@@ -837,18 +542,20 @@ class Runner extends EventEmitter {
                 // message that is simply gone is not.
                 if (flight.length || this.queue.length) {
                     this._handBack('exited',
-                        'Claude Code exited without answering.', flight);
+                        `${this.adapter.product} exited without answering.`, flight);
                 }
                 this._setState('stopped', null);
             } else {
                 const raw = this._stderr.trim();
 
-                // A build that does not know the flag rejects it before doing
-                // any work. Drop approval prompts for the rest of the bridge's
-                // life rather than letting a protocol difference break sending,
-                // and put the turn back on the queue so nothing is lost.
-                if (this.caps.permissionPrompt && /permission-prompt-tool/i.test(raw)) {
-                    this.caps.permissionPrompt = false;
+                // A build that does not know a flag rejects it before doing any
+                // work — for Claude, `--permission-prompt-tool`. Drop that part of
+                // the protocol for the rest of the bridge's life rather than
+                // letting a version difference break sending, and put the turn
+                // back on the queue so nothing is lost.
+                const refusal = this.adapter.argvRefusal(raw, this.caps);
+                if (refusal) {
+                    this.caps[refusal.cap] = false;
                     // The one branch where re-queueing is provably right: a build
                     // that does not know the flag rejects it while parsing argv,
                     // so the line was never read and no turn was ever recorded.
@@ -860,17 +567,13 @@ class Runner extends EventEmitter {
                     this.fork = wasFork;
                     this.branch = wasBranch;
                     this._stderr = '';
-                    this.emit('notice', {
-                        level: 'warn', kind: 'no_permission_prompt',
-                        text: 'This Claude Code version does not support approval prompts here — '
-                            + 'using permission mode only.',
-                    });
+                    this.emit('notice', refusal.notice);
                     this.emit('exit', code);
                     this.start();
                     return;
                 }
 
-                const classified = classifyError(raw, code);
+                const classified = this.adapter.classifyExit(raw, code);
                 this.errorKind = classified.kind;
                 this.lastError = classified.message;
                 // Mostly this catches a refusal at startup — busy-elsewhere,
@@ -951,7 +654,7 @@ class Runner extends EventEmitter {
         this._saveNote();
         // A rejected write means the process is going away. The message is still
         // ours at that point, so put it back rather than dropping it on the floor.
-        if (!this._write(userLine(entry))) {
+        if (!this._write(this.adapter.turn(entry))) {
             this.inFlight.pop();
             this.queue.unshift(entry);
             return;
@@ -995,7 +698,7 @@ class Runner extends EventEmitter {
             // between the two must leave a note saying the process has it.
             entry.handed = true;
             this._saveNote();
-            if (!this._write(userLine(entry))) { entry.handed = false; break; }
+            if (!this._write(this.adapter.turn(entry))) { entry.handed = false; break; }
         }
         this._queueChanged();
     }
@@ -1011,18 +714,18 @@ class Runner extends EventEmitter {
      *   cancelled  taken back — by cancel_async_message, or swept by an interrupt.
      *   discarded  the session ended with it still queued.
      */
-    _onLifecycle(msg) {
+    _onLifecycle(ev) {
         this._lifecycle = true;
-        const i = this.queue.findIndex(q => q.handed && q.uuid === msg.command_uuid);
+        const i = this.queue.findIndex(q => q.handed && q.uuid === ev.uuid);
         if (i < 0) return;
-        if (msg.state === 'started') {
+        if (ev.state === 'started') {
             const [entry] = this.queue.splice(i, 1);
             this.inFlight.push(entry);
             // Folded into the running turn, or starting the next one after a
             // `result` that went by first. Either way it is working.
             if (this.state !== 'busy') this._work();
             this._queueChanged();
-        } else if (msg.state === 'cancelled' || msg.state === 'discarded') {
+        } else if (ev.state === 'cancelled' || ev.state === 'discarded') {
             this.queue.splice(i, 1);
             this._queueChanged();
             this._settleIfDone();
@@ -1096,8 +799,7 @@ class Runner extends EventEmitter {
      */
     async _withdraw(entry) {
         try {
-            const r = await this._control('cancel_async_message', { message_uuid: entry.uuid });
-            return !!(r && r.cancelled);
+            return await this.adapter.withdraw(entry.uuid);
         } catch {
             return false;
         }
@@ -1244,7 +946,7 @@ class Runner extends EventEmitter {
         if (!hard && this.caps.interrupt && !this._interruptTimedOut) {
             this.queue.length = 0;
             try {
-                await this._control('interrupt', { cancel_queued: true });
+                await this.adapter.interrupt();
                 // Leave the state alone: the CLI answers an interrupt with a
                 // `result` like any other turn ending, and that is what should
                 // move us back to idle.
@@ -1310,10 +1012,8 @@ class Runner extends EventEmitter {
     _control(subtype, payload = {}, { timeoutMs = CONTROL_TIMEOUT_MS } = {}) {
         return new Promise((resolve, reject) => {
             const id = `req_${this._ctlTag}_${++this._ctlSeq}`;
-            if (!this._write({
-                type: 'control_request', request_id: id, request: { subtype, ...payload },
-            })) {
-                reject(controlError('the Claude process is not accepting input', 'closed'));
+            if (!this._write(this.adapter.request(id, subtype, payload))) {
+                reject(controlError(`the ${this.adapter.label} process is not accepting input`, 'closed'));
                 return;
             }
             const timer = setTimeout(() => {
@@ -1343,56 +1043,33 @@ class Runner extends EventEmitter {
     }
 
     /**
-     * An inbound request from the CLI.
-     *
-     * Only `can_use_tool` is ours to act on. Anything else is a newer CLI
-     * expecting a client we are not — answer it with an error so it stops
-     * waiting on us, and carry on.
+     * The process is blocked on a person: an `ask` event from the adapter. For
+     * Claude that is a `can_use_tool` control request; anything else inbound is
+     * a `request` event, answered with the adapter's refusal in _onEvent.
      */
-    _onControlRequest(msg) {
-        const req = msg.request || {};
-        if (req.subtype !== 'can_use_tool') {
-            this._write({
-                type: 'control_response',
-                response: {
-                    subtype: 'error', request_id: msg.request_id,
-                    error: `tgxcode does not handle the "${req.subtype}" control request`,
-                },
-            });
-            return;
-        }
-
+    _onAsk({ ask, uninteractive }) {
         // A plan and a question are asks this app has a real answer for; every
         // other tool that wants its own dialog is one it does not.
-        const kind = ASK_KINDS[req.tool_name] || 'tool';
+        const kind = ask.kind;
 
         // Some MCP asks need a dialog of the server's own, which this channel
         // cannot carry. Offering Allow would be a lie — the call fails anyway —
         // so say what happened instead of pretending it was a choice.
-        if (req.requires_user_interaction && kind === 'tool') {
-            this._markAnswered(msg.request_id);
-            this._write({
-                type: 'control_response',
-                response: {
-                    subtype: 'success', request_id: msg.request_id,
-                    response: {
-                        behavior: 'deny', toolName: req.tool_name,
-                        message: 'This tool needs its own interactive prompt, which Claude '
-                            + 'Sessions cannot show. Run it from a terminal.',
-                    },
-                },
+        if (uninteractive && kind === 'tool') {
+            this._respondPermission(ask, {
+                behavior: 'deny',
+                message: 'This tool needs its own interactive prompt, which Claude '
+                    + 'Sessions cannot show. Run it from a terminal.',
             });
             this.emit('notice', {
                 level: 'warn', kind: 'permission_uninteractive',
-                text: `${toolDisplayName(req.tool_name)} asked for an interactive prompt this app cannot show, `
+                text: `${toolDisplayName(ask.tool)} asked for an interactive prompt this app cannot show, `
                     + 'so it was denied. That tool needs a terminal.',
             });
             return;
         }
 
-        const ask = askFrom(msg);
-
-        if (ALWAYS_ALLOW.has(ask.tool)) {
+        if (this.tools.alwaysAllow.has(ask.tool)) {
             this._respondPermission(ask, { behavior: 'allow' });
             return;
         }
@@ -1405,10 +1082,7 @@ class Runner extends EventEmitter {
         // different question, and answering the next one in advance is not
         // something anybody can mean.
         if (kind === 'tool' && this._sessionAllow.has(ask.tool)) {
-            this._respondPermission(ask, {
-                behavior: 'allow',
-                updatedPermissions: sessionAllowRule(ask.tool),
-            });
+            this._respondPermission(ask, { behavior: 'allow', allowSession: true });
             return;
         }
 
@@ -1433,9 +1107,7 @@ class Runner extends EventEmitter {
         }
 
         this.pendingPermission = ask;
-        this._setState('busy', kind === 'plan' ? 'Waiting for you: a plan to approve'
-            : kind === 'question' ? 'Waiting for you: a question'
-            : `Waiting for you: ${ask.displayName}`);
+        this._setState('busy', waitingLabel(ask));
         this.emit('permission-request', { sessionId: this.sessionId, ...publicAsk(ask) });
     }
 
@@ -1479,7 +1151,7 @@ class Runner extends EventEmitter {
             this._respondPermission(ask, {
                 behavior: 'allow',
                 updatedInput: updatedInput && Object.keys(updatedInput).length ? updatedInput : null,
-                updatedPermissions: always ? sessionAllowRule(ask.tool) : null,
+                allowSession: always,
             });
         }
         this._clearPermission(decision);
@@ -1568,7 +1240,7 @@ class Runner extends EventEmitter {
         const previous = this.permissionMode;
         this.permissionMode = mode;
         this._queueChanged();   // the UI's mode selector follows this
-        this._control('set_permission_mode', { mode }).catch(() => {
+        this.adapter.setPermissionMode(mode).catch(() => {
             // An older CLI that does not know the request leaves the process in
             // plan mode while we believe otherwise. Put our copy back and say
             // so — silently refusing every edit of an approved plan is the
@@ -1578,28 +1250,26 @@ class Runner extends EventEmitter {
             this.emit('notice', {
                 level: 'warn', kind: 'mode_change_failed',
                 text: approved
-                    ? `Approved, but this Claude Code version would not switch out of `
+                    ? `Approved, but this ${this.adapter.product} version would not switch out of `
                         + `${previous} mode from here. Change the mode under the composer and `
                         + 'send a message to carry on.'
                     // From ensure(), which switches in place to spare background work.
-                    : `This Claude Code version would not switch to ${mode} mode without `
+                    : `This ${this.adapter.product} version would not switch to ${mode} mode without `
                         + `a restart, so that message ran in ${previous} mode. It will `
                         + 'switch on the first message after the background tasks finish.',
             });
         });
     }
 
-    _respondPermission(ask, { behavior, message, updatedInput, updatedPermissions }) {
-        const response = { behavior, toolName: ask.tool };
-        if (behavior === 'allow' && updatedInput) response.updatedInput = updatedInput;
-        if (behavior === 'deny') response.message = message || 'Denied from TGXCode.';
-        if (updatedPermissions) response.updatedPermissions = updatedPermissions;
+    /**
+     * Answer an ask on the wire. `allowSession` is "allow always": the tool is
+     * allowed for the rest of the session, which the adapter says in the CLI's
+     * own terms.
+     */
+    _respondPermission(ask, { behavior, message, updatedInput, allowSession = false }) {
         // Before the write, for _flushQueue's reason.
         this._markAnswered(ask.id);
-        this._write({
-            type: 'control_response',
-            response: { subtype: 'success', request_id: ask.id, response },
-        });
+        this._write(this.adapter.answer(ask, { behavior, message, updatedInput, allowSession }));
     }
 
     _clearPermission(outcome) {
@@ -1717,7 +1387,7 @@ class Runner extends EventEmitter {
      * bridge wrote down before it went (see `_saveNote`), and `noteSeq` how far the
      * output had got when it did. Between them they rebuild what this object would
      * know had it been here all along — without *acting* on any of it. The replay
-     * goes nowhere near `_onMessage`: that would answer asks, auto-deny them for
+     * goes nowhere near `_onEvent`: that would answer asks, auto-deny them for
      * want of a window, and announce turns long finished.
      *
      * What is rebuilt:
@@ -1727,7 +1397,7 @@ class Runner extends EventEmitter {
      *     `turn-complete` is emitted for it now, since nobody heard it then;
      *   - **an unanswered ask**, the last `can_use_tool` with nothing after it that
      *     settled it. Put straight back on `pendingPermission` rather than through
-     *     `_onControlRequest`, which would deny it: no window is attached this
+     *     `_onAsk`, which would deny it: no window is attached this
      *     early in a bridge's life, and the CLI is still blocked waiting. The card
      *     waits, exactly as one does that was on screen when a window closed;
      *   - **the tool running**, for the activity line;
@@ -1758,51 +1428,61 @@ class Runner extends EventEmitter {
         let ask = null;
         let finished = null;       // a result the previous bridge never saw
         const tools = new Map();
+        // The adapter's own reading of each line, the same one the live stream
+        // gets — acted on here only as far as rebuilding state.
         for (const r of records) {
             if (r.dir === 'err') { this._stderr = (this._stderr + r.data).slice(-4000); continue; }
             let msg;
             try { msg = JSON.parse(r.data); } catch { continue; }
-            if (msg.type === 'control_request' && msg.request
-                && msg.request.subtype === 'can_use_tool') {
-                ask = msg;
-            } else if (msg.type === 'control_cancel_request') {
-                const id = msg.request_id || (msg.request && msg.request.request_id);
-                if (ask && ask.request_id === id) ask = null;
-            } else if (msg.type === 'assistant') {
-                for (const b of (msg.message && msg.message.content) || []) {
-                    if (b.type === 'tool_use') tools.set(b.id, b);
+            for (const ev of this.adapter.read(msg)) {
+                switch (ev.type) {
+                    case 'ask':
+                        ask = ev.ask;
+                        break;
+                    case 'ask-withdrawn':
+                        if (ask && ask.id === ev.id) ask = null;
+                        break;
+                    case 'tool-start':
+                        tools.set(ev.id, ev);
+                        break;
+                    case 'tools-done':
+                        for (const id of ev.ids) tools.delete(id);
+                        break;
+                    case 'lifecycle': {
+                        // What became of a message handed over before the last
+                        // bridge went. Replayed without _onLifecycle's side
+                        // effects: the state is decided once, below, from
+                        // everything at once.
+                        this._lifecycle = true;
+                        const i = this.queue.findIndex(q => q.handed && q.uuid === ev.uuid);
+                        if (i < 0) break;
+                        if (ev.state === 'started') this.inFlight.push(this.queue.splice(i, 1)[0]);
+                        else if (ev.state === 'cancelled' || ev.state === 'discarded') this.queue.splice(i, 1);
+                        break;
+                    }
+                    case 'turn-end':
+                        ask = null;
+                        tools.clear();
+                        if (r.seq > noteSeq) finished = ev.result;
+                        break;
+                    case 'task':
+                        // Background work that started or finished while no
+                        // bridge was listening. Without this an adopted process
+                        // would look free to replace while something it started
+                        // was still running.
+                        this._noteTask(ev, { quiet: true });
+                        break;
+                    case 'init':
+                        if (ev.version) this.claudeVersion = ev.version;
+                        // A fork the previous bridge had already followed is in
+                        // the note; this catches one it did not live to see.
+                        if (ev.sessionId && ev.sessionId !== this.sessionId) this.sessionId = ev.sessionId;
+                        break;
                 }
-            } else if (msg.type === 'user') {
-                for (const b of (msg.message && msg.message.content) || []) {
-                    if (b.type === 'tool_result') tools.delete(b.tool_use_id);
-                }
-            } else if (msg.type === 'command_lifecycle') {
-                // What became of a message handed over before the last bridge
-                // went. Replayed without _onLifecycle's side effects: the state
-                // is decided once, below, from everything at once.
-                this._lifecycle = true;
-                const i = this.queue.findIndex(q => q.handed && q.uuid === msg.command_uuid);
-                if (i < 0) continue;
-                if (msg.state === 'started') this.inFlight.push(this.queue.splice(i, 1)[0]);
-                else if (msg.state === 'cancelled' || msg.state === 'discarded') this.queue.splice(i, 1);
-            } else if (msg.type === 'result') {
-                ask = null;
-                tools.clear();
-                if (r.seq > noteSeq) finished = msg;
-            } else if (msg.type === 'system' && /^task_/.test(msg.subtype || '')) {
-                // Background work that started or finished while no bridge was
-                // listening. Without this an adopted process would look free to
-                // replace while something it started was still running.
-                this._noteTask(msg, { quiet: true });
-            } else if (msg.type === 'system' && msg.subtype === 'init') {
-                if (msg.claude_code_version) this.claudeVersion = msg.claude_code_version;
-                // A fork the previous bridge had already followed is in the note;
-                // this catches one it did not live to see.
-                if (msg.session_id && msg.session_id !== this.sessionId) this.sessionId = msg.session_id;
             }
         }
-        if (ask && this._answered.includes(ask.request_id)) ask = null;
-        for (const [id, b] of tools) this._pendingTools.set(id, b.name);
+        if (ask && this._answered.includes(ask.id)) ask = null;
+        for (const [id, t] of tools) this._pendingTools.set(id, t.name);
 
         this._bind(child);
 
@@ -1815,14 +1495,11 @@ class Runner extends EventEmitter {
         }
 
         if (ask) {
-            this.pendingPermission = askFrom(ask);
-            const a = this.pendingPermission;
-            this._setState('busy', a.kind === 'plan' ? 'Waiting for you: a plan to approve'
-                : a.kind === 'question' ? 'Waiting for you: a question'
-                : `Waiting for you: ${a.displayName}`);
+            this.pendingPermission = ask;
+            this._setState('busy', waitingLabel(ask));
         } else if (this.inFlight.length || tools.size || this.queue.some(q => q.handed)) {
             const last = [...tools.values()].pop();
-            this._work(last ? describeTool(last) : null);
+            this._work(last ? last.label : null);
         } else {
             this._setState('idle', null);
         }
@@ -1851,152 +1528,143 @@ class Runner extends EventEmitter {
                 msg = JSON.parse(line);
             } catch {
                 // stderr shares this stream now, so anything that is not an
-                // event is diagnostic text — and it is what classifyError reads
+                // event is diagnostic text — and it is what the adapter's classifyExit reads
                 // to tell "already running elsewhere" from a generic failure.
                 this._stderr = (this._stderr + line + '\n').slice(-4000);
                 continue;
             }
             this._touch();
-            this._onMessage(msg);
+            for (const ev of this.adapter.read(msg)) this._onEvent(ev);
         }
     }
 
-    _onMessage(msg) {
-        switch (msg.type) {
-            case 'control_request':
-                this._onControlRequest(msg);
+    /**
+     * One event from the adapter, live. The contract in
+     * bridge/runtimes/claude/process.js says what each one means; this says what
+     * we do about it.
+     */
+    _onEvent(ev) {
+        switch (ev.type) {
+            case 'ask':
+                this._onAsk(ev);
                 break;
 
-            case 'control_response': {
-                const r = msg.response || {};
-                const p = this._pending.get(r.request_id);
+            case 'request':
+                // A newer CLI expecting a client we are not: turn it away so it
+                // stops waiting on us, and carry on.
+                this._write(this.adapter.refuse(ev));
+                break;
+
+            case 'response': {
+                const p = this._pending.get(ev.id);
                 if (!p) break;
-                this._pending.delete(r.request_id);
+                this._pending.delete(ev.id);
                 clearTimeout(p.timer);
-                if (r.subtype === 'error') {
-                    p.reject(controlError(r.error || 'the request was refused', 'refused'));
+                if (!ev.ok) {
+                    p.reject(controlError(ev.error || 'the request was refused', 'refused'));
                 }
-                else p.resolve(r.response || {});
+                else p.resolve(ev.result || {});
                 break;
             }
 
-            case 'command_lifecycle':
-                this._onLifecycle(msg);
+            case 'lifecycle':
+                this._onLifecycle(ev);
                 break;
 
-            case 'control_cancel_request': {
-                // The CLI withdrew an ask — usually because the turn it belonged
-                // to ended. Take the card down rather than leaving a dead one on
-                // screen with a countdown running.
-                const id = msg.request_id || (msg.request && msg.request.request_id);
-                if (this.pendingPermission && this.pendingPermission.id === id) {
+            case 'ask-withdrawn':
+                // Usually because the turn it belonged to ended. Take the card
+                // down rather than leaving a dead one on screen.
+                if (this.pendingPermission && this.pendingPermission.id === ev.id) {
                     this._clearPermission('cancelled');
                 }
                 break;
-            }
 
-            case 'system':
-                if (msg.subtype === 'init') {
-                    this.claudeVersion = msg.claude_code_version || null;
-                    // A resumed session keeps its id; a fork gets a new one, and
-                    // the UI has to follow it or the user is left watching a
-                    // transcript that will never move again.
-                    if (msg.session_id && msg.session_id !== this.sessionId) {
-                        const from = this.sessionId;
-                        this.sessionId = msg.session_id;
-                        this.emit('forked', { from, to: msg.session_id });
-                    }
-                    this.emit('init', msg);
-                    // Once per process, and the only moment the version is known:
-                    // the note so an adopting bridge has it, the status so every
-                    // window's stale-binary hint can clear.
-                    this._saveNote();
-                    this.emit('status', this.status());
-                } else if (msg.subtype === 'permission_denied') {
-                    this.emit('notice', {
-                        level: 'warn', kind: 'permission_denied',
-                        text: msg.content || 'A tool call was denied by the permission mode.',
-                    });
-                } else if (msg.subtype === 'task_started' || msg.subtype === 'task_updated') {
-                    this._noteTask(msg);
-                } else if (msg.subtype === 'task_notification') {
-                    this._noteTask(msg);
-                    // A background task finished — a subagent, or a command.
-                    //
-                    // The conversation gets this as an injected *user* message,
-                    // which is the form transcript.js parses to draw the row —
-                    // but the stream carries it structured, and the stream is
-                    // here whether or not anybody is watching the session. A log
-                    // that only filled up while somebody was looking would miss
-                    // exactly the hours it exists for.
-                    const u = msg.usage || {};
-                    this.emit('agent-done', {
-                        sessionId: this.sessionId,
-                        taskId: msg.task_id,
-                        toolUseId: msg.tool_use_id || null,
-                        status: msg.status || 'completed',
-                        summary: msg.summary || null,
-                        durationMs: u.duration_ms || null,
-                    });
-                } else if (msg.subtype === 'api_retry') {
-                    // The CLI retries a failing API call up to ten times with
-                    // exponential backoff, which can run for several minutes.
-                    // Without this the UI just says "Thinking" the whole time and
-                    // the user has no idea anything is wrong, or that stopping is
-                    // an option.
-                    this.retry = {
-                        attempt: msg.attempt,
-                        max: msg.max_retries,
-                        status: msg.error_status || null,
-                        at: Date.now(),
-                    };
-                    this._setState('busy',
-                        `Can't reach the API — retry ${msg.attempt} of ${msg.max_retries}`);
-                    // One notice, not ten.
-                    if (msg.attempt === 1) {
-                        this.emit('notice', {
-                            level: 'warn', kind: 'api_retry',
-                            text: 'Trouble reaching the Anthropic API. Claude is retrying; '
-                                + 'this can take several minutes before it gives up.',
-                        });
-                    }
+            case 'init':
+                this.claudeVersion = ev.version || null;
+                // A resumed session keeps its id; a fork gets a new one, and the
+                // UI has to follow it or the user is left watching a transcript
+                // that will never move again.
+                if (ev.sessionId && ev.sessionId !== this.sessionId) {
+                    const from = this.sessionId;
+                    this.sessionId = ev.sessionId;
+                    this.emit('forked', { from, to: ev.sessionId });
                 }
+                this.emit('init', ev.raw);
+                // Once per process, and the only moment the version is known:
+                // the note so an adopting bridge has it, the status so every
+                // window's stale-binary hint can clear.
+                this._saveNote();
+                this.emit('status', this.status());
                 break;
 
-            case 'assistant': {
-                const content = (msg.message && msg.message.content) || [];
-                for (const b of content) {
-                    if (b.type === 'tool_use') {
-                        this._pendingTools.set(b.id, b.name);
-                        this._touch();
-                        this._work(describeTool(b));
-                        // The round this tool belongs to is where anything waiting
-                        // gets read, so hand it over now, while there is time.
-                        this._handOver();
-                    } else if (b.type === 'text' && b.text.trim()) {
-                        this._work('Writing…');
-                    } else if (b.type === 'thinking') {
-                        this._work();
-                    }
-                }
+            case 'notice':
+                this.emit('notice', ev.notice);
                 break;
-            }
 
-            case 'user': {
-                const content = (msg.message && msg.message.content) || [];
-                for (const b of content) {
-                    if (b.type !== 'tool_result') continue;
-                    this._pendingTools.delete(b.tool_use_id);
+            case 'task':
+                this._noteTask(ev);
+                break;
+
+            case 'agent-done':
+                // A background task finished — a subagent, or a command. The
+                // stream is here whether or not anybody is watching the session,
+                // which the transcript's copy of the same news is not: a log that
+                // only filled up while somebody was looking would miss exactly the
+                // hours it exists for.
+                this.emit('agent-done', {
+                    sessionId: this.sessionId,
+                    taskId: ev.taskId,
+                    toolUseId: ev.toolUseId,
+                    status: ev.status,
+                    summary: ev.summary,
+                    durationMs: ev.durationMs,
+                });
+                break;
+
+            case 'retry':
+                // Retrying can run for several minutes. Without this the UI just
+                // says "Thinking" the whole time and the user has no idea anything
+                // is wrong, or that stopping is an option.
+                this.retry = {
+                    attempt: ev.attempt,
+                    max: ev.max,
+                    status: ev.status,
+                    at: Date.now(),
+                };
+                this._setState('busy',
+                    `Can't reach the API — retry ${ev.attempt} of ${ev.max}`);
+                if (ev.notice) this.emit('notice', ev.notice);
+                break;
+
+            case 'tool-start':
+                this._pendingTools.set(ev.id, ev.name);
+                this._touch();
+                this._work(ev.label);
+                // The round this tool belongs to is where anything waiting gets
+                // read, so hand it over now, while there is time.
+                this._handOver();
+                break;
+
+            case 'writing':
+                this._work('Writing…');
+                break;
+
+            case 'thinking':
+                this._work();
+                break;
+
+            case 'tools-done':
+                for (const id of ev.ids) {
+                    this._pendingTools.delete(id);
                     this._touch();
                 }
-                // The call is over, so its name would now be a lie — back to
-                // the verb alone until the next thing starts.
+                // The call is over, so its name would now be a lie — back to the
+                // verb alone until the next thing starts.
                 if (this.state === 'busy') this._work();
                 break;
-            }
 
-            case 'result': {
-                const { failed, detail } = this._readResult(msg);
+            case 'turn-end': {
+                const { failed, detail } = this._readResult(ev.result);
                 this._limitInfo = null;     // read into lastResult.usageLimit
                 this._pendingTools.clear();
                 this.inFlight.length = 0;   // safely in the transcript now
@@ -2022,38 +1690,27 @@ class Runner extends EventEmitter {
                 break;
             }
 
-            case 'rate_limit_event':
-                if (!msg.rate_limit_info) break;
-                // The whole payload, every time — not just the ones that are
-                // going wrong. An `allowed` event is where `resetsAt` for a
-                // window lives, so dropping it (which is what this did) threw
-                // away the only free source of "when does the quota come back".
-                // bridge/usage.js decides what is worth showing; see the note
-                // there on why `utilization` is usually absent.
-                this.emit('quota', msg.rate_limit_info);
+            case 'quota':
+                // Account-wide; bridge/usage.js decides what is worth showing.
+                this.emit('quota', ev.info);
                 // A refusal is what ends a turn on the usage limit. Kept until the
                 // result, which says whether the turn actually ended on it.
-                if (msg.rate_limit_info.status === 'rejected') this._limitInfo = msg.rate_limit_info;
-                if (msg.rate_limit_info.status !== 'allowed') {
-                    this.emit('notice', {
-                        level: 'warn', kind: 'rate_limit',
-                        text: `Rate limit: ${msg.rate_limit_info.status}`,
-                    });
-                }
+                if (ev.rejected) this._limitInfo = ev.info;
+                if (ev.notice) this.emit('notice', ev.notice);
                 break;
         }
     }
 
     /**
-     * What a `result` says about the turn it ends. Split out of _onMessage so an
+     * What a `turn-end` says about the turn it ends. Split out of _onEvent so an
      * adopted process can read the result of a turn that ended while no bridge was
      * listening without also acting on it.
      */
-    _readResult(msg) {
+    _readResult(res) {
         // A turn that ends in an API error still counts as "finished" to
         // the CLI, so say what went wrong rather than quietly going idle.
-        const failed = !!msg.is_error;
-        const detail = typeof msg.result === 'string' ? msg.result : '';
+        const failed = !!res.isError;
+        const detail = typeof res.text === 'string' ? res.text : '';
         // What the turn actually said, kept off `lastResult` on purpose.
         //
         // `lastResult` is what `turn-complete` broadcasts, and that event
@@ -2089,10 +1746,10 @@ class Runner extends EventEmitter {
             isError: failed,
             detail: failed ? detail.slice(0, 300) : null,
             retries: this.retry ? this.retry.attempt : 0,
-            costUsd: msg.total_cost_usd || 0,
-            durationMs: msg.duration_ms || msg.duration_api_ms || 0,
-            numTurns: msg.num_turns || 0,
-            stopReason: msg.stop_reason || null,
+            costUsd: res.costUsd || 0,
+            durationMs: res.durationMs || 0,
+            numTurns: res.numTurns || 0,
+            stopReason: res.stopReason || null,
             usageLimit: this._usageLimit(failed, detail),
         };
         return { failed, detail };
@@ -2105,14 +1762,10 @@ class Runner extends EventEmitter {
      * limit; see there.
      */
     _usageLimit(failed, detail) {
-        if (!failed) return null;
-        const info = this._limitInfo;
-        if (!info && !LIMIT_TEXT.test(detail)) return null;
-        const secs = info && Number.isFinite(info.resetsAt) ? info.resetsAt : null;
-        return {
-            resetsAt: secs === null ? null : Math.round(secs * 1000),
-            window: (info && typeof info.rateLimitType === 'string' && info.rateLimitType) || null,
-        };
+        // What counts as hitting the limit is the CLI's to say. `this.adapter` is
+        // absent only when this is called off the prototype, as the wakes test
+        // does, and then the answer is Claude's.
+        return (this.adapter || claude).usageLimit(this._limitInfo, failed, detail);
     }
 
     /**
@@ -2287,15 +1940,13 @@ class Runner extends EventEmitter {
      * without the notification. `quiet` is the adopt replay, which decides state
      * once at the end and must not act on each line.
      */
-    _noteTask(msg, { quiet = false } = {}) {
-        const id = msg.task_id;
+    _noteTask(ev, { quiet = false } = {}) {
+        const id = ev.id;
         if (!id) return;
         const before = this.background.size;
-        if (msg.subtype === 'task_started') {
-            this.background.set(id, { type: msg.task_type || null, startedAt: Date.now() });
-        } else if (msg.subtype === 'task_notification'
-            || (msg.subtype === 'task_updated' && msg.patch
-                && TASK_DONE.includes(msg.patch.status))) {
+        if (ev.state === 'started') {
+            this.background.set(id, { type: ev.taskType || null, startedAt: Date.now() });
+        } else if (ev.state === 'done') {
             this.background.delete(id);
         } else {
             return;
@@ -2309,6 +1960,10 @@ class Runner extends EventEmitter {
     status() {
         return {
             sessionId: this.sessionId,
+            // Which CLI this is and what it can do — static for the runner's
+            // life. See bridge/runtimes/index.js and docs/api.md.
+            runtime: this.runtime,
+            capabilities: this.capabilities,
             state: this.state,
             activity: this.activity,
             // The two halves `activity` is composed of, so a surface too narrow
@@ -2374,33 +2029,6 @@ class Runner extends EventEmitter {
     }
 }
 
-/** A `can_use_tool` request as the runner holds it. */
-function askFrom(msg) {
-    const req = msg.request || {};
-    return {
-        id: msg.request_id,
-        kind: ASK_KINDS[req.tool_name] || 'tool',
-        tool: req.tool_name,
-        // Ours for an MCP tool, whatever the CLI sent: its own label for one is
-        // the server and tool spelled raw, and this string is drawn as-is by every
-        // card, notification and the phone.
-        displayName: toolDisplayName(req.tool_name) !== req.tool_name
-            ? toolDisplayName(req.tool_name) : req.display_name || req.tool_name,
-        input: req.input || {},
-        // A Bash command the secrets hook wrapped: what it runs and with which
-        // names. The card shows that, not the wrapper — see publicAsk.
-        secrets: req.tool_name === 'Bash' && req.input ? secrets.unwrapCommand(req.input.command) : null,
-        toolUseId: req.tool_use_id || null,
-        description: req.description || null,
-        reason: req.decision_reason || null,
-        blockedPath: req.blocked_path || null,
-        // A call made by a subagent, not by the session itself.
-        agentId: req.agent_id || null,
-        askedAt: Date.now(),
-    };
-}
-
-/** The ask as the UI sees it — no timer handle, nothing it cannot serialise. */
 /**
  * A control-channel rejection, with the reason machine-readable.
  *
@@ -2414,6 +2042,7 @@ function controlError(message, reason) {
     return err;
 }
 
+/** The ask as the UI sees it — no timer handle, nothing it cannot serialise. */
 function publicAsk(ask) {
     return {
         requestId: ask.id,
@@ -2434,66 +2063,6 @@ function publicAsk(ask) {
         agentId: ask.agentId,
         askedAt: ask.askedAt,
     };
-}
-
-/**
- * "Allow this tool for the rest of the session."
- *
- * `destination: 'session'` keeps it in the CLI's memory for this process only.
- * A wider scope would mean writing to Claude Code's own settings files, which is
- * not ours to do — a permanent allowlist belongs in Claude Code, not here.
- */
-function sessionAllowRule(toolName) {
-    return [{
-        type: 'addRules',
-        rules: [{ toolName }],
-        behavior: 'allow',
-        destination: 'session',
-    }];
-}
-
-/**
- * Turn `claude`'s stderr into something the UI can act on.
- *
- * The case that matters: a session already running elsewhere — a background
- * agent, or a terminal — cannot be resumed, because two writers would be
- * appending to one transcript. Claude Code refuses and suggests branching off a
- * copy, which is exactly the recovery the UI should offer.
- */
-function classifyError(stderr, code) {
-    const text = String(stderr || '').trim();
-
-    if (/currently running as a background agent|add --fork-session to branch/i.test(text)) {
-        return {
-            kind: 'busy-elsewhere',
-            message: 'This session is already running somewhere else, so it cannot be '
-                + 'continued here. Branch off a copy to keep going.',
-        };
-    }
-    // A branch from an earlier turn that the CLI would not cut: the entry it was
-    // told to keep is not in the transcript, or the drop guard found something
-    // other than the edited turn in the part that would be discarded. Before the
-    // `missing` test below, which "No message found" would otherwise not reach but
-    // a later rewording easily could.
-    if (/Resume rejected by --resume-drops-turn|No message found with message\.uuid/i.test(text)) {
-        return {
-            kind: 'branch-refused',
-            message: 'Claude Code would not branch from that turn: '
-                + text.split('\n').filter(Boolean)[0],
-        };
-    }
-    if (/ENOENT|command not found|not found/i.test(text) && /claude/i.test(text)) {
-        return {
-            kind: 'no-claude',
-            message: 'Could not find the `claude` command in WSL. Check that it is on PATH.',
-        };
-    }
-    if (/No conversation found|session .* not found/i.test(text)) {
-        return { kind: 'missing', message: 'Claude Code could not find this session to resume.' };
-    }
-
-    const tail = text.split('\n').filter(Boolean).slice(-4).join('\n');
-    return { kind: 'unknown', message: tail || `claude exited with code ${code}` };
 }
 
 /**
@@ -3058,6 +2627,22 @@ class RunnerPool extends EventEmitter {
     }
 }
 
+/**
+ * The narrow `runner` that `GET /api/sessions` and `GET /api/dashboard` carry on
+ * each row, from a full status(). One definition for both routes: the rail draws
+ * hundreds of rows and wants a label and a badge, not a queue and an ask each,
+ * and docs/api.md promises exactly these fields. `runtime` and `capabilities`
+ * ride along so a row can hide a control without the whole status.
+ */
+function rowStatus(st) {
+    return { state: st.state, activity: st.activity,
+        detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion,
+        stalled: st.stalled, runtime: st.runtime, capabilities: st.capabilities };
+}
+
 module.exports = {
-    RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, sessionEnv, mcpConfig, PREVIEW_TOOLS, LIMIT_TEXT,
+    RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, rowStatus,
+    // The Claude adapter's, re-exported from where they used to live.
+    sessionEnv: claude.sessionEnv, mcpConfig: claude.mcpConfig,
+    PREVIEW_TOOLS: claude.PREVIEW_TOOLS, LIMIT_TEXT: claude.LIMIT_TEXT,
 };

@@ -506,7 +506,7 @@ const DEFAULTS = {
         // 'visible' is what a session always did: Playwright opens a real window.
         // 'headless' starts every new session's Playwright MCP server with
         // PLAYWRIGHT_MCP_HEADLESS, so screenshots and clicks work and nothing is
-        // drawn. Read at spawn — see sessionEnv() in bridge/runner.js.
+        // drawn. Read at spawn — see sessionEnv() in bridge/runtimes/claude/process.js.
         mode: 'visible',
     },
     digest: {

@@ -29,6 +29,7 @@ const { HandoffLimit, stateOf: handoffState, wakeFailure, wakes } = require('../
 const { NEXT, readJson, send } = require('../http');
 const { MAX_PER_SESSION: MAX_LATER_PER_SESSION } = require('../later');
 const { PERMISSION_MODES } = require('../runner');
+const runtimes = require('../runtimes');
 const { STATUSES: SUGGESTION_STATUSES } = require('../suggestions');
 const tasks = require('../tasks');
 // Written here, read back by transcript.js. One format, and the two halves of it
@@ -84,6 +85,16 @@ const handoffLimit = new HandoffLimit();
  * transcript is megabytes, and parsing and drawing all of it is the lag on
  * opening one. The earlier turns come from `/range` when they are asked for.
  */
+/**
+ * `{runtime, capabilities}` for a session, which `GET /api/sessions/:id` carries
+ * whether or not a process is live. From the runner when there is one; otherwise
+ * the default runtime, which today is every session the index knows about.
+ */
+function runtimeFields(st) {
+    const runtime = (st && st.runtime) || runtimes.DEFAULT;
+    return { runtime, capabilities: runtimes.capabilitiesOf(runtime) };
+}
+
 function sendWindowed(res, url, sessionId) {
     const idx = index.turns(sessionId);
     if (!idx) return send(res, 404, { error: 'session not found' });
@@ -96,6 +107,7 @@ function sendWindowed(res, url, sessionId) {
     const st = pool.statuses()[sessionId];
     return send(res, 200, {
         ...data,
+        ...runtimeFields(st),
         turns: idx.marks,
         window: { start, startTurn },
         runner: st || null,
@@ -162,6 +174,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 const dropped = data.events.length - want;
                 return send(res, 200, {
                     ...data,
+                    ...runtimeFields(st),
                     events: want === 0 ? [] : data.events.slice(-want),
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
@@ -170,7 +183,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 });
             }
             return send(res, 200, {
-                ...data, runner: st || null, suggestions: acted, prefs: settings });
+                ...data, ...runtimeFields(st), runner: st || null, suggestions: acted, prefs: settings });
         }
 
         // Hard delete. Everywhere else in this app "remove" means archive; this

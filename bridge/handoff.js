@@ -99,7 +99,7 @@ class HandoffLimit {
  * `elsewhere` is the one worth naming. A session running in a terminal, in VS
  * Code, or as a background agent has no stdin of ours, and `claude --resume`
  * refuses it outright because two writers cannot append to one transcript (see
- * classifyError in bridge/runner.js). Telling a model that up front is the
+ * classifyError in bridge/runtimes/claude/process.js). Telling a model that up front is the
  * difference between it picking another recipient and it watching a spawn fail.
  *
  * @param {{live: object|null}} summary from the session index

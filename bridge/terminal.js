@@ -153,7 +153,8 @@ class Terminal {
         delete env.CLAUDE_CODE_ENTRYPOINT;
         // And this pane is the likeliest place of all for someone to type
         // `bash bridge/launch.sh`. Inheriting the port would aim that at the
-        // everyday instance without saying so — see sessionEnv in runner.js.
+        // everyday instance without saying so — see sessionEnv in
+        // bridge/runtimes/claude/process.js.
         // A declared `npm run dev` in *this* repo is the same accident with
         // nobody typing anything, which is why it is unconditional.
         deleteBoth(env, 'PORT');
