@@ -112,9 +112,9 @@ const CODEX_CAPABILITIES = Object.freeze({
     allowForSession: false,
     send: true,
     delete: false,
-    // Nothing compares a Codex version with Codex's latest yet (Phase 4), so a
-    // client shows the version as it is rather than as old or current.
-    updateCheck: false,
+    // Compared with Codex's own releases (bridge/codex/version.js,
+    // `GET /api/codex-version`); there is no update button, only how to.
+    updateCheck: true,
 });
 
 /**

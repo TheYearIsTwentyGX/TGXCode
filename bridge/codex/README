@@ -9,7 +9,8 @@ plan (docs/plans/23-codex.md) has the bridge show a banner in that case rather
 than refuse.
 
 What is here. The first three are Phase 0 of the plan; items.js is Phase 2's,
-shared by the rollout reader and the process adapter; models.js is Phase 3's.
+shared by the rollout reader and the process adapter; models.js is Phase 3's; quota.js and
+version.js are Phase 4's.
 A conversation's own app-server is spawned by the runner from the adapter
 (bridge/runtimes/codex/process.js), which reuses protocol.js and items.js and
 frames nothing itself; client.js serves an app-server outside any conversation
@@ -27,6 +28,12 @@ frames nothing itself; client.js serves an app-server outside any conversation
                method lists copied from the schema for that version.
   models.js    `model/list` for the pickers (GET /api/models?runtime=codex),
                asked of a short-lived app-server and cached ten minutes.
+  quota.js     The Codex meter and whether Codex is signed in
+               (`runtimes.codex` on GET /api/quota): `account/read` and
+               `account/rateLimits/read` from a short-lived app-server, with
+               `account/rateLimits/updated` from live conversations over them.
+  version.js   `codex --version` against npm's @openai/codex and against the
+               tested range above (GET /api/codex-version).
   items.js     The v2 ThreadItem kinds as the bridge's `tool` events, in one
                table. `fromRollout` turns the rollout's form of an item
                (`item_completed`: PascalCase type, snake_case fields, a
@@ -57,7 +64,8 @@ Upgrading Codex
 4. Update TESTED and the two lists in protocol.js, and the range above.
 5. Re-record the fixtures (test/fixtures/codex/record.js --list), read them
    before committing (the repo is public; the recorder scrubs what it knows
-   about), and run `node test/codex-rpc.test.js`.
+   about), and run `node test/codex-rpc.test.js` and
+   `node test/codex-quota.test.js` (which reads the recorded token counts).
 6. Re-check the plan's *Measured on* table, and move what changed into it.
 
 Fit with the runtime contract

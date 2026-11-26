@@ -957,6 +957,17 @@ html[data-titlebar="custom"][data-window-focus="off"] :is(
 .cv-stale-ver { flex: none; font: 400 var(--fs-xs)/var(--lh-prose) var(--mono); color: var(--text-4); }
 .cv-old { color: var(--yellow); }
 
+/* The second meter: Codex's, after Claude's in the pill and under it in the
+   popover. Named, because two sets of bars with no names are one confusing set. */
+.q-runtime { color: var(--text-3); font-size: var(--fs-sm); }
+.q-runtime.after { padding-left: var(--sp-5); border-left: 1px solid var(--s4); }
+.q-signin { color: var(--yellow); }
+.quota-codex { margin-top: var(--sp-6); padding-top: var(--sp-6); border-top: 1px solid var(--s4); }
+.quota-codex[hidden] { display: none; }
+
+/* The header's context-window figure, tinted once there is little room left. */
+.ctx-use.full { color: var(--yellow); }
+
 /* Phone installs — the quota pill's shape again. Quiet while nothing is moving
    (an install from earlier today, listed for the record), in the normal text
    colour while one is in flight, and yellow for the three things a person has

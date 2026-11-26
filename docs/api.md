@@ -492,6 +492,7 @@ project filter on `GET /api/sessions?project=`.
 | `runtime` | string — the CLI that wrote this conversation: `"claude"`, or `"codex"` for a Codex thread. See §*`runtime` and `capabilities`* |
 | **`capabilities`** | **object** of booleans — what a client may offer on this session, **on every row whether or not a process is live**. Same object as on `GET /api/sessions/:id`. Absent from a bridge older than Codex sessions, where every flag is true |
 | `agent` | **object** `{name: string, product: string}` — what to call this session's agent (§*`runtime` and `capabilities`*). Absent from an older bridge, where it is `{name: "Claude", product: "Claude Code"}` |
+| **`context`** | **object or absent** — `{usedTokens: number, windowTokens: number\|null}`, how full the model's context window was after the session's last request, read from its transcript. Present on Codex sessions that have run a turn; **absent for Claude**. See §*Context use* |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — six fields plus `runtime` and `capabilities`, see below |
 
@@ -761,7 +762,7 @@ written today, as long as the client reads the flags.
 | `images` | images attached to a turn reach the model inline |
 | `allowForSession` | the "allow always" answer on a tool ask (`decision: "allow-always"`) |
 | `send` | **any message at all**: the composer, `POST …/send`, `…/later`, `…/wake`, `…/handoff`, `…/attachments`. False means the session can only be read — draw no composer, no Edit-and-resend, no queue, no mode or model picker |
-| `updateCheck` | the bridge compares the process's version with the latest release (`GET /api/claude-version`'s `staleSessions`). False: show `runner.claudeVersion` as it is, labelled with `agent.product`, and call nothing old |
+| `updateCheck` | the bridge compares the process's version with its CLI's releases and says when one is older: the session is then in `staleSessions` of `GET /api/claude-version` (Claude) or `GET /api/codex-version` (Codex). **Look the session id up in both** rather than choosing by `runtime`. False: show `runner.claudeVersion` as it is, labelled with `agent.product`, and call nothing old |
 | `delete` | `DELETE /api/sessions/:id`. False for a runtime whose transcripts are another program's store (a Codex rollout has projections in Codex's own databases) |
 
 - **Every flag is `true` for `"claude"`**, `send`, `delete` and `updateCheck` included. For
@@ -771,8 +772,8 @@ written today, as long as the client reads the flags.
   `allowForSession` is `false` because a Codex tool ask carries its own `decisions`
   (§`POST /api/sessions/:id/permission`) and a card draws those instead of the
   generic "allow always"; and `delete` is `false` because a rollout is Codex's store,
-  with projections of it in Codex's own databases; `updateCheck` is `false` because
-  nothing compares a Codex version with Codex's latest yet.
+  with projections of it in Codex's own databases; `updateCheck` is `true`, against
+  Codex's own releases (`GET /api/codex-version`; it was `false` before that route).
   (A bridge from before this change sent Claude's object without `send` and `delete`,
   and every Codex flag `false`; by the next rule, the missing ones mean true.)
 - **A flag a client does not recognise is ignored**, and **a flag that is missing
@@ -808,9 +809,23 @@ written today, as long as the client reads the flags.
   runtime names of your own. Absent from an older bridge: then it is Claude's,
   `{name: "Claude", product: "Claude Code"}`.
 - **Codex's version rides in `runner.claudeVersion`**, the field that has always
-  meant "the version of the CLI running this process". The stale-binary hint
-  (`GET /api/claude-version`'s `staleSessions`) counts Claude runners only.
+  meant "the version of the CLI running this process". `GET /api/claude-version`'s
+  `staleSessions` counts Claude runners only, and `GET /api/codex-version`'s counts
+  Codex runners only.
   What its events look like is under *Codex sessions*, after the event kinds.
+
+#### Context use
+
+`{usedTokens, windowTokens}` says how full the model's context window is, today for
+Codex only. `usedTokens` is the **last** model request's total, which is what the next
+one starts from, not the conversation's running total (that counts every request again
+and passes the window within a few turns). `windowTokens` is the model's window, or
+**null** when Codex does not say — show the count alone then.
+
+It comes in two places: `runner.context` while a process is live, and `summary.context`
+from the transcript otherwise. **Prefer the runner's when it is non-null.** A change in
+`runner.context` arrives as a `runner-status` event. `web/` draws `NN% context` in the
+conversation header, tinted from 80%.
 
 ### `GET /api/sessions/:id/range?from=A&to=B`
 
@@ -3822,8 +3837,13 @@ start another one of these".
   events:  [ { type, label, from, to, usedPercent, at } ],
   statusLine: { present: boolean, capturedAt: number|null, path: string },
   beacon:  { enabled, suppressed, dir, everyMinutes, running,
-             at, ok, probed, reaped, reason, screen, ms } }
+             at, ok, probed, reaped, reason, screen, ms },
+  runtimes: { codex?: <CodexMeter, below> } }
 ```
+
+`windows`, `events`, `statusLine` and `beacon` are **Claude's**. Every other runtime's
+meter is under **`runtimes`**, keyed by runtime (absent from an older bridge; `{}`
+when there is nothing to show).
 
 An **array**, not an object keyed by window — the order is meaningful (5-hour
 first, then the weekly ones, then anything unrecognised) and a client should
@@ -3902,6 +3922,43 @@ reading stands and ages visibly. Draw the reason, do not raise anything.
 no machine, and deciding from a phone whether there is room to release a draft is
 the same case the draft routes are open for.
 
+#### `runtimes.codex` — the Codex meter
+
+**Present only where Codex is installed** (`codex --version` runs) and has been asked
+at least once. Absent means draw nothing about Codex.
+
+```
+{ signedIn: boolean | null,        // false: show "Sign in to Codex: run `codex login`"
+  accountType: string | null,      // "chatgpt" | "apiKey" | "amazonBedrock" | "gcp" | …
+  planType: string | null,         // "free", "plus", "pro", …: not a closed set
+  windows: [ { type: "primary" | "secondary", label: string, shortLabel: string,
+               windowDurationMins: number | null, usedPercent: number,
+               usedPercentAt: number, resetsAt: number | null,
+               status: "rejected" | null } ],
+  credits: { hasCredits: boolean, unlimited: boolean, balance: string | null } | null,
+  limitReached: string | null,     // Codex's rateLimitReachedType, when it has hit one
+  at: number | null,               // unix seconds of the last reading
+  error: string | null }           // why the last attempt failed; the reading is the last good one
+```
+
+- **Do not assume Claude's five-hour and weekly shape.** Which windows exist depends on
+  the plan: a ChatGPT Free account has **one** window of 43200 minutes (30 days) and no
+  second one. Draw whatever `windows` holds, labelled from `label`/`shortLabel`, which
+  are made from `windowDurationMins` (`"30-day"`/`"30d"`, `"5-hour"`/`"5h"`; unknown
+  length `"Usage limit"`/`"Limit"`). `windows` can be **empty** while signed in (an API
+  key has none).
+- **`signedIn` is `false` only when Codex's `account/read` says `account: null`.**
+  `windows` is then empty. `null` means Codex could not be asked (`error` says why). No
+  email or account id is ever sent.
+- `usedPercent` is 0–100, `usedPercentAt`, `resetsAt` and `at` are unix seconds, as in
+  `windows` above. A window whose `resetsAt` has passed is left out. `status` is
+  `"rejected"` at 100% and null otherwise; there is no warning level.
+- **Where it comes from:** a short-lived `codex app-server` (`account/read`,
+  `account/rateLimits/read`) at bridge start, on refresh, and every ten minutes when
+  nothing newer has landed; plus `account/rateLimits/updated` pushed by live Codex
+  conversations after their turns. Asking spends no quota and creates no session, so a
+  development bridge does it too. Each change is a `quota` event.
+
 ### `POST /api/quota/refresh`
 
 Harvest a percentage **now**, rather than waiting out `beacon.everyMinutes`.
@@ -3912,6 +3969,14 @@ Body is ignored. Like every non-GET under `/api/`, it needs
 200 { ok: boolean, quota: <the GET /api/quota payload> }
 409 { error: string, needsSetup?: true, running?: true, quota: <same> }
 ```
+
+**`?runtime=codex`** refreshes the Codex meter instead and leaves Claude's alone: it
+asks Codex now (a few seconds; one in flight is shared, not refused) and answers
+`200 {ok, quota}`, `ok: false` with `quota.runtimes.codex.error` when Codex could not
+be asked, or `409 {error, notInstalled: true, quota}` where there is no `codex`. Open
+to a remote caller like the rest of this route. `?runtime=claude` is the same as no
+parameter; any other value is `400 {error: "unknown runtime: …"}`. What follows is
+about Claude's.
 
 The response carries the **whole quota payload**, so one round trip both runs
 the refresh and returns what it produced — do not follow it with a `GET
@@ -4056,6 +4121,33 @@ reports; a channel whose tag the registry lacks falls back to `latest`.
 with a live process. **Open to remote callers** — which version is installed is not
 sensitive, and a phone is a reasonable place to notice that sessions are on an old
 binary.
+
+### `GET /api/codex-version[?refresh=1]`
+
+The same question about Codex, against **Codex's own releases** (npm's `latest`
+dist-tag for `@openai/codex`), plus whether the installed one is inside the range this
+bridge was tested with.
+
+```
+200 {
+  installed: string | null,     // `codex --version`, e.g. "0.172.0"; null where there is no codex
+  latest: string | null,        // npm's `latest`; null if never reached
+  tag: 'latest',
+  behind: boolean,              // installed < latest. False when either is unknown
+  staleSessions: [{ id: string, version: string }],  // live Codex processes older than `installed`
+  tested: { min: string, below: string },   // tested versions: >= min, < below
+  outsideTested: 'older' | 'newer' | null,  // warn when set; it may still work
+  howToUpdate: string,          // a sentence to show; may contain `code` in backticks
+  checkedAt: number | null,     // epoch ms of the last registry attempt
+  error: string | null          // why it failed; `latest` is then the last good answer
+}
+```
+
+`installed: null` means draw nothing. As with Claude's, `behind: false` does not mean
+current when `latest` is null or `error` is set. The same caching and `?refresh=1`.
+Open to remote callers. **There is no update route:** Codex is installed by npm, brew or
+a release tarball, so a client says how (`howToUpdate`) and runs nothing. Each change is
+a `codex-version` event.
 
 ### `POST /api/claude-version/update`
 
@@ -4212,7 +4304,8 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `secret-resolved` | `{id, requestId, sessionId, name, outcome, reason?}` — `outcome` is `"saved"` (the value is stored; the agent is told it is set), `"denied"` or `"cancelled"` (the agent's tool call went away; `reason` says so). Take the card down. Its notification row is resolved `allow`, `deny` or `cancelled` |
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred` and `session_moved`, which are `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `session_moved` and `move_failed` (a move queued for the end of an orchestrator's turn was made, or dropped because its directory had gone — see `POST …/orchestrator/move`), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
-| `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
+| `codex-version` | **the whole `GET /api/codex-version` payload**. Ungated, no `sessionId`. Sent when it moved, like `claude-version` |
+| `quota` | **the whole `GET /api/quota` payload** (`runtimes.codex` included, which moves on its own readings), so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, a worker's PR changing status in the bridge's PR cache, settings, the summary or a decision answered, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason, usageLimit}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError`. `usageLimit` as in `lastResult` (§*`runner-status`*) |
@@ -4248,6 +4341,7 @@ down from:
 | `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
 | **`pendingSettings`** | **object or null** — `{model, effort}` (each a string or null), a model/effort change the bridge is holding until `background` reaches zero, because applying it restarts the process and would stop that work. When it is applied, a status with the new `model`/`effort` follows |
 | `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
+| **`context`** | **object or null** — `{usedTokens: number, windowTokens: number\|null}`, the context window as the live process last reported it (Codex's `thread/tokenUsage/updated`, after each model request). Always null for Claude, and null with no process. Not on the narrow `runner` of list rows. See §*Context use* |
 | **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
 | **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason, usageLimit}` for the turn that most recently finished. **`usageLimit` is an object or null**: `{resetsAt, window}` when the turn ended because the account hit its usage limit — `resetsAt` epoch **ms** or null (known from the stream's `rejected` rate-limit event; null when only the CLI's "You've hit your … limit" text said so), `window` the `rateLimitType` string or null. Null for every other turn. It is what sets a `limit` wake-up (§*Wake-ups* under `GET /api/later`) |
 | **`stalled`** | **bool** — the turn is `busy` and has said nothing for longer than the threshold, with nothing waiting on you and no tool call open. See below. Always `false` when `state` is not `busy` |

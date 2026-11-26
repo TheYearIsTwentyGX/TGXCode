@@ -61,6 +61,7 @@ import {
 import {
     renderQuota, showQuota, loadQuota, applyQuotaSnapshot,
     applyCv, loadCv, showCv,
+    applyCodexVersion, loadCodexVersion, showCodexVersion,
 } from './quota.js';
 import { claudeMayLeave, claudeTargetRow, loadClaudeConfig } from './settings/claude-config.js';
 import { RAIL_SORTS, settingRow, SETTINGS } from './settings/general.js';
@@ -92,7 +93,7 @@ import {
 import { closeContextMenu, CTX_OWNERS, openContextMenu } from './transcript/context-menu.js';
 import {
     AGENT_VIEW, appendEvents, closeRun, isBusy, loadPrStatus, openSession, openSessionSoon,
-    renderHeaderActions, SESSION_VIEW,
+    renderHeader, renderHeaderActions, SESSION_VIEW,
 } from './transcript/conversation.js';
 import {
     closeFind, flushFind, gotoHit, hitFromHere, loadFindSubs, markFindDirty, openFind,
@@ -2733,6 +2734,7 @@ function connect() {
         // The version check has the same missed-push problem, and this is also
         // how the first answer arrives at all.
         loadCv();
+        loadCodexVersion();
         // And the phone installs: a `phone_install` missed while the stream was
         // down is not sent again, and the pill is the only sign one went quiet.
         loadPhoneInstalls();
@@ -3149,6 +3151,9 @@ function connect() {
     es.addEventListener('claude-version', (e) => {
         applyCv(JSON.parse(e.data));
     });
+    es.addEventListener('codex-version', (e) => {
+        applyCodexVersion(JSON.parse(e.data));
+    });
 
     // A process reported a command list that differs from the one we hold —
     // a plugin installed, a command file added. Dropped rather than refetched:
@@ -3320,7 +3325,11 @@ export async function subscribe() {
 
 export function applyRunner(s) {
     const wasBusy = isBusy();
+    const contextWas = JSON.stringify((state.runner && state.runner.context) || null);
     state.runner = s;
+    // The header's context-window figure is the one thing in it that moves with
+    // the process rather than with the summary.
+    if (state.current && JSON.stringify((s && s.context) || null) !== contextWas) renderHeader();
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
     const stalled = Boolean(busy && s.stalled);
@@ -4564,6 +4573,7 @@ document.addEventListener('keydown', (e) => {
     // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.cvMenu.hidden) { showCv(false); dom.cvPill.focus(); return; }
+    if (e.key === 'Escape' && !dom.cxvMenu.hidden) { showCodexVersion(false); dom.cxvPill.focus(); return; }
     if (e.key === 'Escape' && !dom.piMenu.hidden) {
         showPhoneInstalls(false);
         (dom.piMenu.classList.contains('pi-detached') ? dom.barMore : dom.piPill).focus();

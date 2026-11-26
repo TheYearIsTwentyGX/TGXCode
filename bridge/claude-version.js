@@ -122,9 +122,9 @@ function run(cmd, args, timeout) {
     });
 }
 
-function fetchTags() {
+function fetchTags(url = REGISTRY_URL) {
     return new Promise((resolve, reject) => {
-        const req = https.get(REGISTRY_URL, { timeout: FETCH_TIMEOUT_MS,
+        const req = https.get(url, { timeout: FETCH_TIMEOUT_MS,
             headers: { accept: 'application/json' } }, (res) => {
             let body = '';
             res.setEncoding('utf8');
@@ -144,8 +144,16 @@ class ClaudeVersion {
      * @param {object} o
      * @param {() => (string|null)} o.channel   the configured autoUpdatesChannel
      * @param {() => object} o.runners          pool.statuses()
+     * @param {string} [o.bin]                  asked `--version`
+     * @param {() => Promise<object>} [o.tagsOf]  the registry's dist-tags
+     *
+     * `bin` and `tagsOf` are what bridge/codex/version.js swaps to ask the same
+     * two questions about Codex.
      */
-    constructor({ channel = () => null, runners = () => ({}) } = {}) {
+    constructor({ channel = () => null, runners = () => ({}),
+        bin = cfg.CLAUDE_BIN, tagsOf = () => fetchTags() } = {}) {
+        this.bin = bin;
+        this.tagsOf = tagsOf;
         this.channelOf = channel;
         this.runnersOf = runners;
         this.store = new Map();
@@ -159,7 +167,7 @@ class ClaudeVersion {
     installed({ fresh = false } = {}) {
         if (fresh) this.store.delete('installed');
         return cached(this.store, 'installed', INSTALLED_TTL_MS, async () => {
-            const r = await run(cfg.CLAUDE_BIN, ['--version'], VERSION_TIMEOUT_MS);
+            const r = await run(this.bin, ['--version'], VERSION_TIMEOUT_MS);
             return r.ok ? parseVersion(r.stdout) : null;
         });
     }
@@ -168,7 +176,7 @@ class ClaudeVersion {
         if (fresh) this.store.delete('tags');
         return cached(this.store, 'tags', LATEST_TTL_MS, async () => {
             try {
-                this.tags = await fetchTags();
+                this.tags = await this.tagsOf();
                 this.error = null;
             } catch (err) {
                 this.error = err.message;
@@ -220,4 +228,4 @@ class ClaudeVersion {
     }
 }
 
-module.exports = { ClaudeVersion, summarize, compareVersions, tagForChannel, parseVersion, REGISTRY_URL };
+module.exports = { ClaudeVersion, summarize, compareVersions, tagForChannel, parseVersion, fetchTags, REGISTRY_URL };

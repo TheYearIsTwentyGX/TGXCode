@@ -265,6 +265,7 @@ class Runner extends EventEmitter {
         // to it: a session outlives the binary it started on, and the question
         // claude-version.js asks is whether *this process* predates an update.
         this.claudeVersion = null;
+        this.context = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
         this.activity = null;          // human-readable "what is it doing right now"
         this.lastError = null;
@@ -554,6 +555,8 @@ class Runner extends EventEmitter {
         proc.on('close', (code) => {
             this.proc = null;
             this.claudeVersion = null;
+            // The transcript's reading takes over once nobody is saying it live.
+            this.context = null;
             this._pendingTools.clear();
             // Whatever it was running in the background went with it.
             this.background.clear();
@@ -1700,6 +1703,9 @@ class Runner extends EventEmitter {
                         // was still running.
                         this._noteTask(ev, { quiet: true });
                         break;
+                    case 'context':
+                        this.context = ev.context;
+                        break;
                     case 'init':
                         if (ev.version) this.claudeVersion = ev.version;
                         // A fork the previous bridge had already followed is in
@@ -1927,6 +1933,18 @@ class Runner extends EventEmitter {
                 this.emit('turn-complete', this.lastResult);
                 break;
             }
+
+            // How full the thread's context window is, from a runtime that says.
+            case 'context':
+                this.context = ev.context;
+                this.emit('status', this.status());
+                break;
+
+            // Another runtime's account-wide usage windows. Not `quota`, which is
+            // Claude's and drives its meter and the orchestrators' usage cutoff.
+            case 'limits':
+                this.emit('limits', ev.limits);
+                break;
 
             case 'quota':
                 // Account-wide; bridge/usage.js decides what is worth showing.
@@ -2219,6 +2237,8 @@ class Runner extends EventEmitter {
             // nothing running is never reported as on an old binary: its next
             // message starts whatever is installed then.
             claudeVersion: this.claudeVersion,
+            // `{usedTokens, windowTokens}` or null: Codex says, Claude does not.
+            context: this.context,
             cwd: this.cwd,
             error: this.lastError,
             errorKind: this.errorKind,
@@ -2608,6 +2628,7 @@ class RunnerPool extends EventEmitter {
         // Quota is account-wide, so this one deliberately does not carry a
         // sessionId: which session happened to observe it says nothing.
         r.on('quota', (info) => this.emit('quota', info));
+        r.on('limits', (limits) => this.emit('limits', limits));
         r.on('permission-request', (p) => this.emit('permission-request', p));
         r.on('permission-resolved', (p) => this.emit('permission-resolved', p));
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));

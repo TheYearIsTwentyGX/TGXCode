@@ -138,6 +138,7 @@ export function registerBuiltins() {
     });
     pill('bar.quota', dom.quotaPill, 'Usage quota', 'limits tokens');
     pill('bar.version', dom.cvPill, 'Claude Code version', 'update changelog');
+    pill('bar.codexVersion', dom.cxvPill, 'Codex version', 'update tested');
     pill('bar.devbrowser', dom.dbStatus, 'Refresh DevBrowser status', 'devbrowser');
     // Always offered, unlike the pills above: "is my install still going?" is
     // asked most when the answer is that there is none, and saying so beats an

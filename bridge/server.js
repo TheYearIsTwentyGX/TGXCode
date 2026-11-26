@@ -25,6 +25,8 @@ const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
 const { ClaudeVersion } = require('./claude-version');
+const { CodexVersion } = require('./codex/version');
+const { CodexQuota } = require('./codex/quota');
 const { ClaudeDocs } = require('./claude-docs');
 const { HookScripts } = require('./hook-scripts');
 const { HookSources } = require('./hook-sources');
@@ -181,6 +183,11 @@ const claudeVersion = new ClaudeVersion({
     },
     runners: () => pool.statuses(),
 });
+// The same question about Codex (bridge/codex/version.js), and what is left of
+// its quota (bridge/codex/quota.js), which is only asked for where there is a
+// `codex` to ask.
+const codexVersion = new CodexVersion({ runners: () => pool.statuses() });
+const codexQuota = new CodexQuota({ installed: async () => !!(await codexVersion.installed()) });
 const terminals = new TerminalPool();
 const slashCommands = new SlashCommandCache();
 // State only, never bytes: a run's output goes down its own stream. This is what
@@ -782,7 +789,7 @@ const ROUTE_DEPS = {
     index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, hookScripts, hookSources,
     spinner, suggestions,
     beacon, drafts, later, standing, snippetStore, templates, schedules, claudeVersion, terminals,
-    slashCommands, runs, notifications, reads, orchestrators,
+    codexVersion, codexQuota, slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent, keepAwake, evaluateKeepAwake,
     phoneInstalls, briefFor, sudoAsks, secretAsks,
@@ -1110,6 +1117,13 @@ pool.on('quota', (info) => {
     if (usage.noteRateLimitEvent(info)) broadcast('quota', quotaPayload());
 });
 
+// Codex's windows, pushed by its live processes and read from a short-lived
+// app-server otherwise. Both land on the same `quota` event as Claude's.
+pool.on('limits', (limits) => codexQuota.notePush(limits));
+codexQuota.on('changed', () => broadcast('quota', quotaPayload()));
+// A process that found Codex signed out knows before the timer does.
+pool.on('failed', (f) => { if (f.kind === 'codex-signed-out') codexQuota.refresh(); });
+
 // How often to *consider* running the beacon. Not how often it runs — that is
 // `quota.beaconEveryMinutes`, read fresh each time so an edit to the settings
 // file lands without a restart. Checking on a shorter clock than the interval
@@ -1153,6 +1167,11 @@ function quotaPayload() {
         everyMinutes: q.beaconEveryMinutes || null,
         ...beacon.status(),
     };
+    // Meters for other runtimes, keyed by runtime. A key is absent when there is
+    // nothing to say, which is every machine without that CLI.
+    snap.runtimes = {};
+    const codex = codexQuota.snapshot();
+    if (codex) snap.runtimes.codex = codex;
     return snap;
 }
 
@@ -1244,6 +1263,22 @@ function pushClaudeVersion() {
     claudeVersionTimer.unref();
 }
 pool.on('status', pushClaudeVersion);
+// Codex's, on the same terms.
+let codexVersionSent = '';
+let codexVersionTimer = null;
+function pushCodexVersion() {
+    if (codexVersionTimer) return;
+    codexVersionTimer = setTimeout(() => {
+        codexVersionTimer = null;
+        const now = codexVersion.summaryNow();
+        const text = JSON.stringify(now);
+        if (text === codexVersionSent) return;
+        codexVersionSent = text;
+        broadcast('codex-version', now);
+    }, 1000);
+    codexVersionTimer.unref();
+}
+pool.on('status', pushCodexVersion);
 pool.on('init', ({ cwd, init }) => {
     const entry = slashCommands.note(cwd, init);
     if (entry) broadcast('slash-commands', { cwd, at: entry.at });
@@ -1624,6 +1659,17 @@ takeBackHeld().catch((err) => {
         .catch(err => console.error(`[tgxcode] version check failed: ${err.message}`));
     checkClaudeVersion();
     setInterval(checkClaudeVersion, 60 * 60 * 1000).unref();
+    const checkCodexVersion = () => codexVersion.summary({ fresh: true })
+        .then(pushCodexVersion)
+        .catch(err => console.error(`[tgxcode] Codex version check failed: ${err.message}`));
+    checkCodexVersion();
+    setInterval(checkCodexVersion, 60 * 60 * 1000).unref();
+
+    // Codex's quota: now, and again whenever neither a read nor a push from a
+    // live process has landed for a while. On a dev bridge too — unlike the
+    // beacon, asking spends no quota.
+    codexQuota.refresh();
+    setInterval(() => { codexQuota.refreshIfStale(); }, BEACON_TICK_MS).unref();
 
     // Reap before anything else, and on *every* bridge including a dev one that
     // will never run a beacon of its own. A leaked beacon is machine-wide

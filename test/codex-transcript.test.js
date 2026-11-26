@@ -144,7 +144,7 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
     const caps = runtimes.capabilitiesOf('codex');
     assert.deepStrictEqual(caps, { fork: false, branchFromTurn: false, planMode: true, askUser: true,
         peers: false, tasks: false, scratchpad: false, slashCommands: false, steer: true, images: true,
-        allowForSession: false, send: true, delete: false, updateCheck: false });
+        allowForSession: false, send: true, delete: false, updateCheck: true });
     assert.ok(Object.isFrozen(caps));
     assert.ok(runtimes.readable('codex') && runtimes.known('codex'), 'read, and run');
     assert.strictEqual(runtimes.get('codex').adapter.Adapter.name, 'CodexAdapter', 'with a process adapter');

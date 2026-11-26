@@ -33,7 +33,7 @@ import { PR_ICON } from '../icons.js';
 import { html, render } from '../vendor/preact.js';
 import { icon } from '../boards/parts.js';
 import * as keys from '../keys.js';
-import { cvStaleFor } from '../quota.js';
+import { staleFor } from '../quota.js';
 import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
 import { renderHeaderReview, reviewChip, reviewKey, toggleHeaderReview } from '../pr-review.js';
@@ -41,7 +41,7 @@ import { loadCommands } from '../commands.js';
 import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
 import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
-import { loadSessionSpend, spendBit } from '../boards/analytics.js';
+import { loadSessionSpend, spendBit, tokens } from '../boards/analytics.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
     paintPanels, prUnknownWhy, rememberView, renderRail, saveDraft, scrollToEnd,
@@ -434,6 +434,23 @@ export async function openSessionSoon(id, { timeoutMs = 25000 } = {}) {
     return false;
 }
 
+/**
+ * How full the context window is, where the agent says (`context`, Codex only
+ * today): the live process's reading while there is one, else the transcript's.
+ */
+function contextBit(s) {
+    const live = state.runner && state.runner.sessionId === s.sessionId ? state.runner.context : null;
+    const c = live || s.context;
+    if (!c) return null;
+    const used = tokens(c.usedTokens);
+    const pct = c.windowTokens ? Math.min(100, Math.round((c.usedTokens / c.windowTokens) * 100)) : null;
+    return html`<span key="context" class=${'ctx-use' + (pct !== null && pct >= 80 ? ' full' : '')}
+        title=${c.windowTokens
+            ? `${c.usedTokens.toLocaleString()} of ${c.windowTokens.toLocaleString()} tokens in the context window`
+            : `${c.usedTokens.toLocaleString()} tokens in the context window`}
+        >${pct === null ? `${used} context` : `${pct}% context`}</span>`;
+}
+
 export function renderHeader() {
     const s = state.current;
     dom.convTitle.textContent = s.title;
@@ -453,14 +470,14 @@ export function renderHeader() {
     // the case where a feature somebody just read about is not here yet.
     // Named by the agent's product, from the bridge, never by a runtime check.
     // Where the bridge does not compare this agent's version with a release
-    // (`updateCheck` false — Codex), the version is shown plainly instead, so a
-    // Codex process says which Codex it is and nothing calls it old.
+    // (`updateCheck` false), the version is shown plainly instead, so the
+    // process says which version it is and nothing calls it old.
     const product = agentOf(s).product;
-    const oldClaude = can('updateCheck', s) ? cvStaleFor(s.sessionId) : null;
-    if (oldClaude) {
+    const old = can('updateCheck', s) ? staleFor(s.sessionId) : null;
+    if (old) {
         bits.push(sep('cv'), html`<span key="cv" class="cv-old" title=${`This session's process is ${product} `
-            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.`}
-            >${`${product} ${oldClaude.version} (older)`}</span>`);
+            + `${old.version}; ${old.installed} is installed. It moves over when the process restarts.`}
+            >${`${product} ${old.version} (older)`}</span>`);
     } else if (!can('updateCheck', s)) {
         const v = state.runner && state.runner.sessionId === s.sessionId ? state.runner.claudeVersion : null;
         if (v) bits.push(sep('cv'), html`<span key="cv" title=${`This session's process is ${product} ${v}`}>${`${product} ${v}`}</span>`);
@@ -473,6 +490,8 @@ export function renderHeader() {
             title="Read-only here: this bridge reads this session but does not run it">${`${s.runtime} · read-only`}</span>`);
     }
     bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
+    const context = contextBit(s);
+    if (context) bits.push(sep('context'), context);
     const spend = spendBit(sep);
     if (spend) bits.push(...spend);
     const prs = headerPrs();

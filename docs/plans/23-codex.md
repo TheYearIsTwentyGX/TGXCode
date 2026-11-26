@@ -435,6 +435,11 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
   dist-tags. This is the same shape as `claude-version.js`, minus `claude
   update`: Codex installs vary (npm, brew, a release tarball), so tell the user
   how to update rather than doing it.
+
+  *Built* (quota, context use, version, and Phase 5's sign-in notice): see
+  `bridge/codex/quota.js` and `version.js`. The meter is `runtimes.codex` on
+  `GET /api/quota`. Its reads come from a short-lived app-server and a live
+  conversation only adds its pushes, so the adapter's handshake did not change.
 - **Slash palette.** There is no `init.slash_commands` equivalent. Build the
   palette from `skills/list {cwds}`, whose entries have name, description and
   scope. A chosen skill is sent as a `{type:"skill"}` input rather than as a

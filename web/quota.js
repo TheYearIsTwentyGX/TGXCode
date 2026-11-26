@@ -3,6 +3,13 @@
 // installed `claude` is behind. Moved out of app.js as it was; the bridge side
 // is bridge/usage.js and bridge/claude-version.js.
 //
+// **A second meter for Codex**, in the same pill and popover, from the
+// snapshot's `runtimes.codex` (bridge/codex/quota.js), and a second version pill
+// from `state.codexVersion` (bridge/codex/version.js). Codex's windows are
+// whatever its account has — one 30-day window on a Free plan — so nothing here
+// assumes five hours or a week: the labels come from the bridge, made out of
+// `windowDurationMins`.
+//
 // `loadQuota` and `loadCv` are called by connect() in app.js on every
 // reconnect, and the `apply*` pair by the event stream, so those names are
 // the module's contract with the streaming code.
@@ -92,6 +99,8 @@ const quota = {
     // beacon that ran and failed. That one reports itself through
     // `beacon.reason`, which the panel already draws.
     refreshError: null,
+    // The same for Codex's own Refresh, in its section of the popover.
+    codexRefreshing: false,
     // The handle that takes the flash back off the pill. Held so that two
     // windows going bad moments apart cannot leave the first one's timer
     // stripping the second one's highlight.
@@ -166,6 +175,12 @@ function quotaBar(pct, stale) {
     return html`<span class="q-bar"><i style=${`width:${Math.max(stale ? 0 : 2, Math.min(100, pct))}%`}></i></span>`;
 }
 
+/**
+ * Codex's meter, `{signedIn, planType, windows, …}`, or null where Codex is not
+ * installed (the bridge leaves the key out) and on a bridge too old to say.
+ */
+const codexMeter = () => (quota.snap && quota.snap.runtimes && quota.snap.runtimes.codex) || null;
+
 /** The windows the pill draws: any with a percentage or a status. */
 function quotaShown() {
     const windows = (quota.snap && quota.snap.windows) || [];
@@ -179,7 +194,8 @@ function quotaShown() {
  */
 function drawQuotaPill() {
     const shown = quotaShown();
-    if (!shown.length) {
+    const codex = codexMeter();
+    if (!shown.length && !codex) {
         // The same label-then-number shape a window gets below, so an empty pill
         // reads as "quota: nothing yet" rather than as a stray mark in the bar.
         // The dash is already this file's word for a window with no percentage.
@@ -189,16 +205,7 @@ function drawQuotaPill() {
         return;
     }
 
-    const groups = shown.map((w) => {
-        const age = quotaAge(w.usedPercentAt);
-        const stale = age !== null && age > QUOTA_STALE_AFTER;
-        const pct = w.usedPercent;
-        return html`<span key=${w.type} class=${'q-win' + (stale ? ' stale' : '')} data-status=${w.status || ''}>
-            <span class="q-label">${w.shortLabel}</span>
-            ${quotaBar(pct, stale)}
-            <span class="q-num">${pct === null ? '—' : `${Math.round(pct)}%`}</span>
-        </span>`;
-    });
+    const groups = shown.map(w => pillWindow(w, w.type));
 
     // When the window comes back. The percentage says whether to worry; this
     // says whether to wait, and it is the half you plan an afternoon around.
@@ -211,8 +218,27 @@ function drawQuotaPill() {
     // data-resets-at is what quotaClockNodes finds. It carries the timestamp
     // rather than the rendered text, so the clock needs to know nothing about
     // the shape of a snapshot.
-    const clock = shown.find(w => typeof w.resetsAt === 'number');
-    const reset = clock && html`<span key="reset" class="q-reset" title=${`${clock.label} resets`}>
+    const reset = pillReset(shown, 'reset');
+
+    render([...groups, reset, ...codexPill(codex, shown.length > 0)], dom.quotaPillBody);
+}
+
+/** One window's group in the pill: label, bar, number. */
+function pillWindow(w, key) {
+    const age = quotaAge(w.usedPercentAt);
+    const stale = age !== null && age > QUOTA_STALE_AFTER;
+    const pct = w.usedPercent;
+    return html`<span key=${key} class=${'q-win' + (stale ? ' stale' : '')} data-status=${w.status || ''}>
+        <span class="q-label">${w.shortLabel}</span>
+        ${quotaBar(pct, stale)}
+        <span class="q-num">${pct === null ? '—' : `${Math.round(pct)}%`}</span>
+    </span>`;
+}
+
+/** The countdown after a meter's windows, for the first that has a reset. */
+function pillReset(windows, key) {
+    const clock = windows.find(w => typeof w.resetsAt === 'number');
+    return clock && html`<span key=${key} class="q-reset" title=${`${clock.label} resets`}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
             <path d="M12 7v5.2l3.4 2" stroke="currentColor" stroke-width="2"
@@ -220,8 +246,23 @@ function drawQuotaPill() {
         </svg>
         <span data-resets-at=${String(clock.resetsAt)}>${fmtLeft(clock.resetsAt)}</span>
     </span>`;
+}
 
-    render([...groups, reset], dom.quotaPillBody);
+/** The Codex half of the pill: its name, then its windows or what is wrong. */
+function codexPill(codex, afterClaude) {
+    if (!codex) return [];
+    const name = html`<span key="codex-name" class=${'q-runtime' + (afterClaude ? ' after' : '')}>Codex</span>`;
+    if (codex.signedIn === false) {
+        return [name, html`<span key="codex-signin" class="q-signin">sign in</span>`];
+    }
+    if (!codex.windows.length) {
+        return [name, html`<span key="codex-empty" class="q-win"><span class="q-num">—</span></span>`];
+    }
+    return [name,
+        ...codex.windows.map(w => pillWindow(w, `codex-${w.type}`)),
+        // One countdown is all the bar has room for beside two meters; Codex's
+        // is in the popover and the tooltip. It gets one when it is alone.
+        !afterClaude && pillReset(codex.windows, 'codex-reset')];
 }
 
 /** The pill: one compact group per window, worst first is not needed — the
@@ -230,7 +271,8 @@ function renderQuotaPill() {
     drawQuotaPill();
 
     const shown = quotaShown();
-    if (!shown.length) {
+    const codex = codexMeter();
+    if (!shown.length && !codex) {
         // The restart row lives in this popover now, so a local window keeps the
         // pill even with nothing to report — hiding it would hide the only way
         // to restart the bridge from the UI, and a machine with the beacon off
@@ -262,6 +304,16 @@ function renderQuotaPill() {
         }
     }
 
+    if (codex) {
+        if (codex.signedIn === false) titles.push('Codex: not signed in, run codex login');
+        else if (!codex.windows.length) titles.push('Codex: no usage reading');
+        for (const w of codex.windows) {
+            titles.push(`Codex ${w.label}: ${Math.round(w.usedPercent)}% used`
+                + (typeof w.resetsAt === 'number' ? `, resets in ${fmtLeft(w.resetsAt)}` : '')
+                + (w.status === 'rejected' ? ' — limit reached' : ''));
+        }
+    }
+
     const summary = titles.join(' · ');
     dom.quotaPill.title = summary;
     // The button's own text is "5h 98% 12m", which is a fine glance and a poor
@@ -283,41 +335,98 @@ function drawQuotaWindows() {
         return;
     }
 
-    render(windows.map((w) => {
-        const age = quotaAge(w.usedPercentAt);
-        const stale = age !== null && age > QUOTA_STALE_AFTER;
-        const pct = w.usedPercent;
-        const bar = quotaBar(pct, stale);
+    // Left: where the number came from and when. Right: the reset, which is
+    // the other half of the question and comes from the stream, so it stays
+    // current even when the percentage does not.
+    render(windows.map(w => panelWindow(w, w.type, w.usedPercent === null
+        ? (w.status ? 'status only — no percentage sent' : 'not observed yet')
+        : `${w.usedPercentSource === 'stream' ? 'from a turn' : 'from the status line'}, `
+            + fmtAge(quotaAge(w.usedPercentAt)))), dom.quotaWindows);
+}
 
-        // Left: where the number came from and when. Right: the reset, which is
-        // the other half of the question and comes from the stream, so it stays
-        // current even when the percentage does not.
-        const left = pct === null
-            ? (w.status ? 'status only — no percentage sent' : 'not observed yet')
-            : `${w.usedPercentSource === 'stream' ? 'from a turn' : 'from the status line'}, ${fmtAge(age)}`;
+/** One window's row in the popover, either meter's. `left` says where it is from. */
+function panelWindow(w, key, left) {
+    const age = quotaAge(w.usedPercentAt);
+    const stale = age !== null && age > QUOTA_STALE_AFTER;
+    const pct = w.usedPercent;
+    const bar = quotaBar(pct, stale);
 
-        // The reset gets an element of its own rather than being joined into
-        // one string, so the countdown is one text node the tick's diff moves
-        // and the overage note beside it is left alone.
-        return html`<div key=${w.type} class=${'q-row' + (stale ? ' stale' : '')}>
-            <div class="q-row-top">
-                <span>${w.label}</span>
-                <span class="q-pct">${pct === null ? 'no reading' : `${pct.toFixed(1)}%`}</span>
-            </div>
-            ${bar && html`<span class="q-win" data-status=${w.status || ''}>${bar}</span>`}
-            <div class="q-row-sub">
-                <span class=${stale ? 'warn' : ''}>${left}</span>
-                <span class=${w.status === 'rejected' ? 'bad' : w.status === 'allowed_warning' ? 'warn' : ''}>
-                    ${w.resetsAt ? html`resets in <span data-resets-at=${String(w.resetsAt)}>${fmtLeft(w.resetsAt)}</span>` : null}
-                    ${w.isUsingOverage ? (w.resetsAt ? ' · on overage' : 'on overage') : null}
-                </span>
-            </div>
-        </div>`;
-    }), dom.quotaWindows);
+    // The reset gets an element of its own rather than being joined into
+    // one string, so the countdown is one text node the tick's diff moves
+    // and the overage note beside it is left alone.
+    return html`<div key=${key} class=${'q-row' + (stale ? ' stale' : '')}>
+        <div class="q-row-top">
+            <span>${w.label}</span>
+            <span class="q-pct">${pct === null ? 'no reading' : `${pct.toFixed(1)}%`}</span>
+        </div>
+        ${bar && html`<span class="q-win" data-status=${w.status || ''}>${bar}</span>`}
+        <div class="q-row-sub">
+            <span class=${stale ? 'warn' : ''}>${left}</span>
+            <span class=${w.status === 'rejected' ? 'bad' : w.status === 'allowed_warning' ? 'warn' : ''}>
+                ${w.resetsAt ? html`resets in <span data-resets-at=${String(w.resetsAt)}>${fmtLeft(w.resetsAt)}</span>` : null}
+                ${w.isUsingOverage ? (w.resetsAt ? ' · on overage' : 'on overage') : null}
+            </span>
+        </div>
+    </div>`;
+}
+
+/**
+ * Codex's section of the popover, into #quota-codex: its windows, or how to sign
+ * in. Hidden where there is no Codex. The tick calls this too, for the countdown.
+ */
+function drawQuotaCodex() {
+    const codex = codexMeter();
+    dom.quotaCodex.hidden = !codex;
+    if (!codex) { render(null, dom.quotaCodex); return; }
+
+    const plan = codex.planType ? `${codex.planType} plan` : codex.accountType;
+    const busy = quota.codexRefreshing;
+    render([
+        html`<div key="head" class="quota-head">
+            <span>${plan ? `Codex · ${plan}` : 'Codex'}</span>
+            <button class=${'quota-refresh' + (busy ? ' busy' : '')} type="button" disabled=${busy}
+                    title="Ask Codex for its current usage"
+                    onClick=${(e) => { e.stopPropagation(); refreshCodexQuota(); }}
+                >${busy ? 'Refreshing…' : 'Refresh'}</button>
+        </div>`,
+        codex.signedIn === false && html`<div key="signin" class="quota-note">
+            <div class="warn">Sign in to Codex: run <code>codex login</code></div>
+            <div>Where no browser opens, <code>codex login --device-auth</code>. Then press Refresh.</div>
+        </div>`,
+        ...codex.windows.map(w => panelWindow(w, w.type,
+            `from Codex, ${fmtAge(quotaAge(w.usedPercentAt))}`)),
+        codex.signedIn && !codex.windows.length && !codex.error && html`<div key="none" class="q-row-sub">
+            <span>Codex reports no usage windows for this account.</span>
+        </div>`,
+        codex.limitReached && html`<div key="limit" class="quota-note">
+            <div class="warn">${`Limit reached: ${codex.limitReached.replace(/_/g, ' ')}`}</div>
+        </div>`,
+        codex.credits && codex.credits.hasCredits && html`<div key="credits" class="quota-note">
+            ${codex.credits.unlimited ? 'Credits: unlimited'
+                : `Credits: ${codex.credits.balance ?? 'available'}`}
+        </div>`,
+        codex.error && html`<div key="error" class="quota-note"><div class="warn">${codex.error}</div></div>`,
+    ], dom.quotaCodex);
+}
+
+async function refreshCodexQuota() {
+    if (quota.codexRefreshing) return;
+    quota.codexRefreshing = true;
+    drawQuotaCodex();
+    try {
+        const out = await post('/api/quota/refresh?runtime=codex');
+        if (out && out.quota) applyQuotaSnapshot(out.quota);
+    } catch (err) {
+        toast(err.message || 'Codex could not be asked', 'warn');
+    } finally {
+        quota.codexRefreshing = false;
+        drawQuotaCodex();
+    }
 }
 
 function renderQuotaPanel() {
     drawQuotaWindows();
+    drawQuotaCodex();
 
     // The history. Only status changes are kept, so this is short by
     // construction and empty most of the time.
@@ -487,7 +596,10 @@ function quotaLeft(resetsAt) {
  */
 function quotaClockNodes() {
     const nodes = [...dom.quotaPillBody.querySelectorAll('[data-resets-at]')];
-    if (!dom.quotaMenu.hidden) nodes.push(...dom.quotaWindows.querySelectorAll('[data-resets-at]'));
+    if (!dom.quotaMenu.hidden) {
+        nodes.push(...dom.quotaWindows.querySelectorAll('[data-resets-at]'),
+            ...dom.quotaCodex.querySelectorAll('[data-resets-at]'));
+    }
     return nodes;
 }
 
@@ -511,7 +623,7 @@ function tickQuotaClocks() {
     if (!quota.snap) return stopQuotaClock();
 
     drawQuotaPill();
-    if (!dom.quotaMenu.hidden) drawQuotaWindows();
+    if (!dom.quotaMenu.hidden) { drawQuotaWindows(); drawQuotaCodex(); }
 
     let counting = false;
     let last = 0;
@@ -757,6 +869,7 @@ dom.quotaPill.addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
     if (!dom.quotaMenu.hidden && !e.target.closest('#quota-wrap')) showQuota(false);
     if (!dom.cvMenu.hidden && !e.target.closest('#cv-wrap')) showCv(false);
+    if (!dom.cxvMenu.hidden && !e.target.closest('#cxv-wrap')) showCodexVersion(false);
 });
 
 // ---------------------------------------------------------------------------
@@ -773,9 +886,6 @@ state.cv = null;
 state.cvBusy = false;
 
 const cvStale = () => (state.cv && state.cv.staleSessions) || [];
-
-/** The stale-session entry for this id, or null. */
-export const cvStaleFor = (id) => cvStale().find(x => x.id === id) || null;
 
 export function applyCv(summary) {
     if (!summary || typeof summary !== 'object') return;
@@ -861,10 +971,12 @@ function renderCvPanel() {
 }
 
 export function showCv(on) {
+    // Whoever closes the version panel closes both of them.
+    if (!on) showCodexVersion(false);
     if (on === isUp(dom.cvMenu)) return;
     present(dom.cvMenu, on, { as: 'menu' });
     dom.cvPill.setAttribute('aria-expanded', String(on));
-    if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); showPhoneInstalls(false); }
+    if (on) { renderCvPanel(); showCodexVersion(false); showQuota(false); showNewMenu(false); showBarMore(false); showPhoneInstalls(false); }
 }
 
 async function updateClaudeNow() {
@@ -966,6 +1078,117 @@ dom.cvCheck.addEventListener('click', async (e) => {
 dom.cvUpdate.addEventListener('click', (e) => {
     e.stopPropagation();
     updateClaudeNow();
+});
+
+// ---------------------------------------------------------------------------
+// Codex version
+// ---------------------------------------------------------------------------
+//
+// The same badge for Codex (bridge/codex/version.js), with two differences: it
+// also says when the installed one is outside the range this bridge was tested
+// with, and it has no update button — it says how.
+
+state.codexVersion = null;
+
+/**
+ * The stale-process entry for this session from either version check, with the
+ * installed version it is behind: `{id, version, installed}`, or null. A caller
+ * asks by id and never has to know which CLI the session runs on.
+ */
+export function staleFor(id) {
+    for (const summary of [state.cv, state.codexVersion]) {
+        const hit = summary && (summary.staleSessions || []).find(x => x.id === id);
+        if (hit) return { ...hit, installed: summary.installed };
+    }
+    return null;
+}
+
+export function applyCodexVersion(summary) {
+    if (!summary || typeof summary !== 'object') return;
+    state.codexVersion = summary;
+    renderCodexVersion();
+}
+
+export async function loadCodexVersion({ fresh = false } = {}) {
+    try {
+        applyCodexVersion(await get(`/api/codex-version${fresh ? '?refresh=1' : ''}`));
+    } catch {
+        // A bridge without the route. Nothing appears, which is the right answer.
+    }
+}
+
+/** "0.172.0 up to (not including) 0.173.0". */
+const testedRange = (t) => (t ? `${t.min} up to, not including, ${t.below}` : '—');
+
+function renderCodexVersion() {
+    const v = state.codexVersion;
+    const stale = (v && v.staleSessions) || [];
+    const show = !!v && !!v.installed && (v.behind || !!v.outsideTested || stale.length > 0);
+    dom.cxvWrap.hidden = !show;
+    if (!show) showCodexVersion(false);
+    if (v) {
+        dom.cxvPill.textContent = v.outsideTested ? `Codex ${v.installed} untested`
+            : v.behind ? `Codex ↑ ${v.latest}`
+            : `${stale.length} on old Codex`;
+        dom.cxvPill.title = v.outsideTested
+            ? `Codex ${v.installed} is ${v.outsideTested} than this bridge was tested with (${testedRange(v.tested)})`
+            : v.behind ? `Codex ${v.installed} is installed; ${v.latest} is the newest`
+            : `${stale.length} running ${stale.length === 1 ? 'session is' : 'sessions are'} `
+                + `on an older Codex than the installed ${v.installed}`;
+    }
+    if (!dom.cxvMenu.hidden) renderCodexVersionPanel();
+    if (state.current) renderHeader();
+}
+
+function renderCodexVersionPanel() {
+    const v = state.codexVersion;
+    if (!v) return;
+    const stale = v.staleSessions || [];
+    const byId = new Map(state.sessions.map(s => [s.sessionId, s]));
+    render([
+        html`<div key="installed" class="q-row cv-row"><span>Installed</span><b>${v.installed || 'unknown'}</b></div>`,
+        html`<div key="newest" class="q-row cv-row"><span>Newest</span><b>${v.latest || '—'}</b></div>`,
+        html`<div key="tested" class="q-row cv-row"><span>Tested</span><b>${v.tested ? `${v.tested.min} – <${v.tested.below}` : '—'}</b></div>`,
+        v.outsideTested && html`<div key="outside" class="quota-note">
+            <div class="warn">${`This Codex is ${v.outsideTested} than the versions this bridge was tested with. `
+                + 'It may work; it has not been looked at.'}</div>
+        </div>`,
+        v.error && html`<div key="error" class="quota-note">
+            <div class="warn">${`Could not ask the registry: ${v.error}`}</div>
+        </div>`,
+        v.behind && html`<div key="how" class="quota-note">${v.howToUpdate}</div>`,
+        stale.length > 0 && html`<div key="stale" class="q-row">
+            <div class="cv-stale-head">${`Running an older Codex (${stale.length})`}</div>
+            ${stale.map((x) => {
+                const s = byId.get(x.id);
+                return html`<button key=${x.id} class="cv-stale" type="button" title="Open this session"
+                        onClick=${(e) => { e.stopPropagation(); showCodexVersion(false); openSession(x.id); }}>
+                    <span class="cv-stale-title">${s ? s.title : x.id.slice(0, 8)}</span>
+                    <span class="cv-stale-ver">${x.version}</span>
+                </button>`;
+            })}
+            <div class="quota-note">Each keeps the Codex it started on until its process ends.</div>
+        </div>`,
+    ], dom.cxvBody);
+}
+
+export function showCodexVersion(on) {
+    if (on === isUp(dom.cxvMenu)) return;
+    // The others first: showCv(false) closes this panel too, so it goes before.
+    if (on) { showCv(false); showQuota(false); showNewMenu(false); showBarMore(false); showPhoneInstalls(false); }
+    present(dom.cxvMenu, on, { as: 'menu' });
+    dom.cxvPill.setAttribute('aria-expanded', String(on));
+    if (on) renderCodexVersionPanel();
+}
+
+dom.cxvPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showCodexVersion(!isUp(dom.cxvMenu));
+});
+dom.cxvCheck.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    dom.cxvCheck.disabled = true;
+    try { await loadCodexVersion({ fresh: true }); } finally { dom.cxvCheck.disabled = false; }
 });
 
 // Ages move on their own, so the pill is repainted on a clock rather than only

@@ -357,6 +357,19 @@ function toolEvent(item) {
     return { name: k.tool(item), input: k.input(item), status: statusOf(item), result: k.result(item) };
 }
 
+/**
+ * How full a thread's context window is, from a token count: `{usedTokens,
+ * windowTokens}`, `windowTokens` null when Codex does not say, or null when there
+ * is no count at all. `used` is the **last** request's total, what the next one
+ * starts from; the thread's running total counts every request again and passes
+ * the window within a few turns.
+ */
+function contextOf(used, window) {
+    if (typeof used !== 'number' || !(used >= 0)) return null;
+    return { usedTokens: used, windowTokens: typeof window === 'number' && window > 0 ? window : null };
+}
+
 module.exports = {
+    contextOf,
     TOOL, KINDS, fromRollout, toolEvent, roleOf, statusOf, scriptOf, countDiff, textOf, camel,
 };

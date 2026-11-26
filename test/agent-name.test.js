@@ -23,8 +23,8 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
     assert.deepStrictEqual(runtimes.agentOf('codex'), { name: 'Codex', product: 'Codex' });
     assert.strictEqual(runtimes.agentOf(), runtimes.agentOf('claude'), 'claude when none is named');
     assert.strictEqual(runtimes.capabilitiesOf('claude').updateCheck, true);
-    assert.strictEqual(runtimes.capabilitiesOf('codex').updateCheck, false,
-        'nothing compares a Codex version with a release, so nothing may call one old');
+    assert.strictEqual(runtimes.capabilitiesOf('codex').updateCheck, true,
+        'Codex is compared with its own releases (test/codex-quota.test.js)');
     ok('each runtime has a display name and says whether its version is checked');
 
     // --- the client reads them, and falls back to Claude for an older bridge ----------------------
