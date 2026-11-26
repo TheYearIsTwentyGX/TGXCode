@@ -8,7 +8,7 @@
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 
-import { can } from '../capabilities.js';
+import { agentOf, can } from '../capabilities.js';
 import { el, toast } from '../dom.js';
 import { clip, clockOf, dateOf, dur } from '../format.js';
 import { escapeHtml } from '../highlight.js';
@@ -315,12 +315,8 @@ function attachCards(ev) {
     )));
 }
 
-/** Who wrote a reply: the open session's CLI by name, Claude when it says none. */
-const AGENT_NAME = { claude: 'Claude', codex: 'Codex' };
-function agentName() {
-    const rt = state.current && state.current.runtime;
-    return AGENT_NAME[rt] || (rt ? rt[0].toUpperCase() + rt.slice(1) : 'Claude');
-}
+/** Who wrote a reply: the open session's agent, by the name the bridge gives it. */
+const agentName = () => agentOf().name;
 
 function renderAssistant(ev) {
     return row(ev, 'assistant',

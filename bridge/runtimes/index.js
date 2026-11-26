@@ -2,8 +2,9 @@
 
 // The agent CLIs a session can run on, and what each one can do.
 //
-// Every session has a `runtime`: `claude`, or `codex` for a Codex thread the bridge
-// can read but not yet drive. Everything the bridge knows about one CLI that is
+// Every session has a `runtime`: `claude`, or `codex` for a Codex thread, which
+// the bridge reads (Phase 2 of docs/plans/23-codex.md) and drives over
+// `codex app-server` (Phase 3). Everything the bridge knows about one CLI that is
 // *about that CLI* rather than about a coding agent in a directory sits behind
 // three things this registry hands out per runtime (docs/plans/23-codex.md, D1):
 //
@@ -33,14 +34,14 @@
 // pulls in bridge/attachments.js, which pulls in bridge/transcript.js, which is
 // one of this registry's own callers.
 //
-// **Two tables, because Codex is read-only for now.** `RUNTIMES` is what a session
-// can be *run* on: a process adapter and a reader. `READ_ONLY` is what the bridge
-// can read and never start — Codex, until Phase 3 of docs/plans/23-codex.md gives
-// it an adapter. `get` and `known` answer for the first table only, so a Runner
-// asked for `codex` is refused by name ("unknown runtime: codex") instead of
-// failing on a missing adapter, and nothing that starts a process can be talked
-// into starting one. Everything that only reads — `capabilitiesOf`, `toolsOf`,
-// `describe` and the reader seam — answers for both.
+// **Two tables, one of them empty now.** `RUNTIMES` is what a session can be
+// *run* on: a process adapter and a reader. `READ_ONLY` is what the bridge can
+// read and never start — Codex was there for Phase 2, and moved across when
+// Phase 3 gave it an adapter. The table stays for the next runtime that is read
+// before it is driven. `get` and `known` answer for the first table only, so a
+// Runner asked for a read-only runtime is refused by name ("unknown runtime: …")
+// instead of failing on a missing adapter. Everything that only reads —
+// `capabilitiesOf`, `toolsOf`, `describe` and the reader seam — answers for both.
 
 const claudeTools = require('./claude/tools');
 const codexTools = require('./codex/tools');
@@ -75,42 +76,59 @@ const CLAUDE_CAPABILITIES = Object.freeze({
     images: true,
     // "Allow always" on a tool ask: allowed for the rest of the session.
     allowForSession: true,
+    // A message can be sent at all: the composer, `POST …/send`, `…/later`, a
+    // wake, a handoff to it. False is a session the bridge can only show.
+    send: true,
+    // Deleting the session's transcript (`DELETE /api/sessions/:id`).
+    delete: true,
+    // The bridge compares the running process's version with the latest
+    // release and says when one is older (`GET /api/claude-version`).
+    updateCheck: true,
 });
 
 /**
- * Codex, read-only (docs/plans/23-codex.md, Phase 2). Every feature flag is false:
- * the bridge reads a Codex session's rollout and starts no Codex process, so there
- * is nothing to send to, fork, branch or steer.
+ * Codex, driven (docs/plans/23-codex.md, Phase 3): sent to, steered, stopped,
+ * with its approvals, questions, plans and images. Everything still false is
+ * Phase 4's (fork, branch, the checklist, the slash palette) or has no Codex
+ * equivalent (peers, the scratchpad).
  *
- * `send` and `delete` are two flags Claude's object does not carry yet. By the
- * contract in docs/api.md a missing flag means true, which is Claude's answer;
- * test/runtimes.test.js pins Claude's object to the eleven flags it shipped with,
- * so they are added there when that test next moves (Phase 3).
+ * `allowForSession` is false because a Codex ask carries its own `decisions`,
+ * and a card draws those instead of the generic "Allow always" button. `delete`
+ * stays false: a rollout is Codex's store, with projections of it in Codex's own
+ * databases, and removing the file behind Codex's back would leave those
+ * pointing at nothing. A Codex thread is deleted through Codex.
  */
 const CODEX_CAPABILITIES = Object.freeze({
     fork: false,
     branchFromTurn: false,
-    planMode: false,
-    askUser: false,
+    planMode: true,
+    askUser: true,
     peers: false,
     tasks: false,
     scratchpad: false,
     slashCommands: false,
-    steer: false,
-    images: false,
+    steer: true,
+    images: true,
     allowForSession: false,
-    // A message can be sent at all: the composer, `POST …/send`, `…/later`, a
-    // wake, a handoff to it. False is a session the bridge can only show.
-    send: false,
-    // Deleting the session's transcript (`DELETE /api/sessions/:id`). Codex's
-    // rollouts are Codex's store, with projections of them in its own databases,
-    // so a read-only bridge does not remove them.
+    send: true,
     delete: false,
+    // Nothing compares a Codex version with Codex's latest yet (Phase 4), so a
+    // client shows the version as it is rather than as old or current.
+    updateCheck: false,
 });
+
+/**
+ * What a client calls each runtime, so no client keeps its own table of names:
+ * `name` is who said something ("Claude", "Codex"), `product` the program a
+ * version belongs to ("Claude Code", "Codex"). Sent as `agent` beside `runtime`.
+ */
+const CLAUDE_AGENT = Object.freeze({ name: 'Claude', product: 'Claude Code' });
+const CODEX_AGENT = Object.freeze({ name: 'Codex', product: 'Codex' });
 
 const RUNTIMES = {
     claude: {
         name: 'claude',
+        agent: CLAUDE_AGENT,
         capabilities: CLAUDE_CAPABILITIES,
         tools: {
             asks: claudeTools.ASKS,
@@ -121,22 +139,27 @@ const RUNTIMES = {
         get adapter() { return require('./claude/process'); },
         get reader() { return require('./claude/transcript'); },
     },
-};
-
-const READ_ONLY = {
     codex: {
         name: 'codex',
+        agent: CODEX_AGENT,
         capabilities: CODEX_CAPABILITIES,
+        // Codex names the session at `thread/start`, so what a runner is created
+        // with is a placeholder until its `init` says `minted`. The create route
+        // waits for that rather than answering with the placeholder.
+        mintsId: true,
         tools: {
             asks: codexTools.ASKS,
             edits: codexTools.EDITS,
             alwaysAllow: codexTools.ALWAYS_ALLOW,
             describe: codexTools.describeTool,
         },
-        adapter: null,
+        get adapter() { return require('./codex/process'); },
         get reader() { return require('./codex/transcript'); },
     },
 };
+
+// Read, never run. Empty since Phase 3 moved Codex into RUNTIMES.
+const READ_ONLY = {};
 
 /** A runtime by name from either table, or undefined. */
 function lookup(name) {
@@ -175,12 +198,26 @@ function capabilitiesOf(name) {
     return describe(name).capabilities;
 }
 
+/**
+ * `{name, product}`, what a client calls a runtime. A runtime registered
+ * without names (a test's fake) is called by its own.
+ */
+function agentOf(name) {
+    const r = describe(name);
+    return r.agent || Object.freeze({ name: r.name, product: r.name });
+}
+
 /** The tool tables for a runtime name. */
 function toolsOf(name) {
     return describe(name).tools;
 }
 
+/** Whether a runtime names its own sessions (the create route waits for the id). */
+function mintsId(name) {
+    return !!get(name).mintsId;
+}
+
 module.exports = {
-    DEFAULT, RUNTIMES, READ_ONLY, get, known, readable, describe, capabilitiesOf, toolsOf,
+    DEFAULT, RUNTIMES, READ_ONLY, get, known, readable, describe, capabilitiesOf, toolsOf, mintsId, agentOf,
     CLAUDE_CAPABILITIES, CODEX_CAPABILITIES,
 };

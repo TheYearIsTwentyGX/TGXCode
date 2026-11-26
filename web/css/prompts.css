@@ -89,6 +89,28 @@
 .perm-btn.allow:hover:not(:disabled) { background: var(--blue-cont-hover); }
 .perm-btn.deny { color: var(--red); }
 .perm-btn.deny:hover:not(:disabled) { background: var(--red-cont); }
+/* An answer the agent keeps beyond this session (Codex's execpolicy amendment).
+   Outlined and labelled, so it never reads as the same weight as a one-off
+   allow; see decisionButtons in web/transcript/approvals.js. */
+.perm-btn.persistent { box-shadow: inset 0 0 0 1px var(--yellow); }
+.perm-persist {
+    font: 500 var(--fs-xs, 11px)/var(--lh-none) var(--sans);
+    color: var(--yellow);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+/* A file change's diff on its card. Short, scrolling, and the log's mono. */
+.perm-diff {
+    margin: var(--sp-2) 0 0;
+    padding: var(--sp-3);
+    max-height: 180px;
+    overflow: auto;
+    background: var(--s1);
+    border-radius: 6px;
+    font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
+    color: var(--text-2);
+    white-space: pre;
+}
 
 /* The keycap, one rule for every hint a blocked turn shows: the card's Y/A/N,
    the plan's Y/A/F/N and its Esc, the dock's and the feedback box's ⏎. A fixed

@@ -123,7 +123,16 @@ async function handle(req, res, url, pathname, seg, who) {
     // cannot tell those apart offers to clear things that were never set and
     // appears not to work when a stronger file has taken over.
     // The models and effort levels every picker offers — bridge/models.js.
-    if (pathname === '/api/models' && req.method === 'GET') return send(res, 200, models.payload());
+    // `?runtime=codex` asks Codex itself (`model/list`, cached; bridge/codex/models.js):
+    // its models depend on the account and move between versions, so they are
+    // never written down here. Claude's list is the bridge's own.
+    if (pathname === '/api/models' && req.method === 'GET') {
+        const runtime = url.searchParams.get('runtime');
+        if (!runtime || runtime === 'claude') return send(res, 200, models.payload());
+        if (runtime !== 'codex') return send(res, 400, { error: `unknown runtime: ${runtime}` });
+        const out = await require('../codex/models').list({ refresh: url.searchParams.get('refresh') === '1' });
+        return send(res, 200, { runtime, ...out });
+    }
 
     if (pathname === '/api/prefs' && req.method === 'GET') {
         const cwd = url.searchParams.get('cwd') || '';

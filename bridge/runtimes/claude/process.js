@@ -28,6 +28,13 @@
 // `response` — or rejects with `err.reason` `refused` | `timeout` | `closed` |
 // `gone`, which the runner's callers branch on. An adapter may keep state across
 // lines (a Codex one has to remember turn and item ids); this one does not.
+// The host also passes `notify(line)`, which writes a line and waits for nothing
+// — a JSON-RPC notification, such as Codex's `initialized`. This one ignores it.
+//
+// **Adopted processes.** An adapter that keeps state may define
+// `adopting({sessionId, cwd, model, effort, permissionMode})`, called before the
+// adoption replay with what the note says about the process it never saw start.
+// Optional; this one has none.
 //
 // **Requests of the adapter's own.** The runner only waits on the ids it minted
 // (`req_<tag>_<n>`), and a `response` event for any other id is dropped without a
@@ -115,7 +122,14 @@
 //                     A question ask carries `input.questions[]` in Claude's
 //                     shape ({question, header, options[{label, description}],
 //                     multiSelect}), each with an optional `id` when the runtime
-//                     answers by id rather than by text
+//                     answers by id rather than by text.
+//
+//                     `followUp: true` marks an ask nothing is blocked on — a
+//                     plan or question that arrives inside a turn rather than as
+//                     a request (Codex's `plan` item, its async question tool).
+//                     The runner holds it without going busy or auto-denying,
+//                     answers it by sending the next turn, and calls answer()
+//                     for it only to be told null: nothing goes on the wire
 //   {type:'ask-withdrawn', id}      the process stopped waiting for an answer
 //   {type:'request', id, method}    an inbound request the adapter does not
 //                                   handle; the runner writes `refuse(event)`
@@ -163,7 +177,7 @@
 //   request(id, verb, payload)                   an outbound request's line
 //   answer(ask, {behavior:'allow'|'deny', message, updatedInput, allowSession,
 //                choice, answers})
-//                        the line answering an ask. `choice` is the entry of
+//                        the line answering an ask, or null for nothing to write. `choice` is the entry of
 //                        `ask.decisions` it is, or null for an ask without them;
 //                        when the bridge answers by itself (a stop, an auto-deny)
 //                        the runner has already picked the nearest one. `answers`

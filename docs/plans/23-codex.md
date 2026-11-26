@@ -7,11 +7,12 @@
 `web/new-session/dialog.js`, `web/index.html`, `docs/api.md`, new
 `bridge/codex/*`, new `test/codex-*.test.js`
 
-> Roadmap. Phases 0–2 are done: the JSON-RPC client is in `bridge/codex/` (not
-> wired in), the schema in `docs/codex-schema/0.172.0/`, the recordings in
-> `test/fixtures/codex/`, the runtime seam in `bridge/runtimes/`, and Codex
-> sessions are listed and read (read-only) through
-> `bridge/runtimes/codex/transcript.js`. Phase 3 onwards is not built.
+> Roadmap. Phases 0–3 are done: the JSON-RPC client is in `bridge/codex/`, the
+> schema in `docs/codex-schema/0.172.0/`, the recordings in
+> `test/fixtures/codex/`, the runtime seam in `bridge/runtimes/`, Codex sessions
+> are listed and read through `bridge/runtimes/codex/transcript.js`, and they are
+> started and driven through `bridge/runtimes/codex/process.js`. Phase 4 onwards
+> is not built.
 
 ## Why
 
@@ -351,6 +352,34 @@ The card looks the same and the mechanism is ours.
 the next message delivered, the stopped turn not delivered again — pass against
 the Codex stub, and an approval survives `npm run dev` being restarted.
 
+**Done.** What was built, and where it went its own way:
+
+- `test/codex-runner.test.js` drives a real Runner against every recording through
+  `test/fixtures/codex/walker.js` (stub.js's walk, plus plain.ndjson's turn for any
+  `turn/start` past the end, so the three assertions can follow every scenario), and
+  `test/codex-host.test.js` restarts a pool with an approval pending.
+- **The note carries the pending ask whole** (`pending` in `_saveNote`), with Codex's
+  integer id as `rpcId`. The replay still finds it when the host's log has it; the
+  note is for when the log's 8 MiB cap dropped the request, which a chatty Codex turn
+  makes likelier than a Claude one.
+- **The plan card and the async question card are `followUp` asks**: the runner holds
+  them without blocking, never auto-denies them, takes them down when you type past
+  them, and answers them by sending the next turn (`Runner#_answerFollowUp`). That is
+  the "mechanism is ours" above, kept in the runner rather than `web/`, so the phone
+  gets it through the same `POST …/permission`.
+- **The handshake reads `account/read` before opening the thread**, so signed out is
+  a `codex-signed-out` failure that hands the message back, not thirteen seconds of
+  retries ending in a failed turn.
+- `collaborationMode` is sent only in plan mode and on the first turn after it
+  (`mode: "default"`). Sending it every turn would replace the thread's developer
+  instructions — our agent brief — with the mode's built-in ones.
+- Two runner hooks beyond #261's widening, both optional: `notify` in the adapter's
+  constructor (a line nobody waits on — `initialized`), and `adopting(o)` (what an
+  adopted process's adapter would have learned at its start: thread id, mode, model).
+- Not done here, and Phase 4's: drafts and schedules carry no `runtime`, so the
+  Start dialog offers the runtime picker to Start alone; an orchestrator cannot run
+  on Codex (its role is keyed by an id the create route mints before Codex does).
+
 ### Phase 4 — The features around the conversation
 
 - **Fork.** `thread/fork {threadId}`. The new id is in the response, alongside
@@ -549,11 +578,13 @@ they affect; this is the index.
 
 ## Still open
 
-1. **Do approvals survive host adoption?** The design in Phase 3 says yes,
-   because the process and its pending JSON-RPC id outlive the bridge. It cannot
-   be measured until the adapter exists. The client is ready for it: pending
-   server requests are a table keyed by id, and `respond(id, …)` answers one the
-   connection never handed to a handler.
+1. **Do approvals survive host adoption?** **Yes, measured** on 2026-11-26 with
+   0.172.0. A dev bridge was killed with a `touch two.txt` command approval
+   pending (server-request id 1); the app-server stayed in the session host, the
+   next bridge adopted it, redrew the card with the same id and decisions, and the
+   `accept` answered after adoption ran the command in the same process, which
+   finished the turn. `test/codex-host.test.js` pins the same, including the case
+   where only the note still has the request.
 2. **Can a still-loaded thread be compressed to `.jsonl.zst`?** Partly
    answered: on 0.172.0 compression is either the `local_thread_store_compression`
    feature (*under development*, off by default) or an explicit
@@ -581,3 +612,13 @@ they affect; this is the index.
    *under development* and off, and `code_mode_host` *stable* and on, so it is
    probably the second, or the model's metadata; which one, and whether a
    thread `config` can turn it off, was not tried.
+6. **Is `clientUserMessageId` echoed?** The adapter sends the runner's uuid on
+   every `turn/start` and `turn/steer`, and the schema has `clientId` on the
+   `userMessage` item. Whether Codex fills it in was not checked; nothing depends
+   on it yet, and the transcript reader could use it to match a queued chip to its
+   line.
+7. **Does a `collaborationMode` replace the thread's `developerInstructions`?**
+   The schema says it "takes precedence over model, reasoning_effort, and
+   developer instructions if set", which is why the adapter sends one only around
+   plan mode. Whether a plan turn loses our agent brief, and whether the default
+   turn after it gets it back, was not measured.

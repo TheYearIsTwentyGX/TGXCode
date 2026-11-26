@@ -1932,6 +1932,16 @@
            on the line below. -->
       <div class="opts">
         <span class="opt">
+          <label for="new-runtime">Agent</label>
+          <!-- Which CLI the session runs on. The model and effort lists below are
+               refilled for it: Claude's from the page, Codex's from Codex itself
+               (model/list), never written down here. -->
+          <select id="new-runtime">
+            <option value="claude" selected>Claude</option>
+            <option value="codex">Codex</option>
+          </select>
+        </span>
+        <span class="opt">
           <label for="new-model">Model</label>
           <!-- Filled in by web/dom.js, as the composer's is. -->
           <select id="new-model">

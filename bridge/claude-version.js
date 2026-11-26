@@ -93,6 +93,10 @@ function summarize({ installed = null, tags = null, channel = null, runners = {}
     const staleSessions = [];
     if (installed) {
         for (const [id, st] of Object.entries(runners || {})) {
+            // Claude's processes only. A Codex runner carries its own version in
+            // the same field (`claudeVersion` is the process's, whatever the CLI),
+            // and 0.172.0 is not an older Claude Code.
+            if (st && st.runtime && st.runtime !== 'claude') continue;
             const v = st && st.claudeVersion;
             if (v && compareVersions(v, installed) < 0) staleSessions.push({ id, version: v });
         }

@@ -12,6 +12,7 @@
 // function is called.
 
 import { state } from './state.js';
+import { agentOf } from './capabilities.js';
 import { clip, dur } from './format.js';
 import { openSession } from './transcript/conversation.js';
 import { toolSummary } from './transcript/tools.js';
@@ -142,7 +143,7 @@ export function announceSendFailure(f) {
     if (watching || !allowedNow(f.sessionId)) return;
     announce(
         `${clip(sessionTitle(f.sessionId), 60)} — could not run`,
-        clip(f.message || 'The message never reached Claude.', 160),
+        clip(f.message || `The message never reached ${agentOf(state.sessions.find(s => s.sessionId === f.sessionId)).name}.`, 160),
         'fail', f.sessionId,
     );
 }

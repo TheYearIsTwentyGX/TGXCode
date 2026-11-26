@@ -43,6 +43,7 @@ import { del, get, post } from '../api.js';
 import { dom, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
+import { agentOf } from '../capabilities.js';
 import { applyRunner, restoreToComposer } from '../app.js';
 import { sendMessage } from './send.js';
 import { flip, grow, morph } from '../motion.js';
@@ -88,7 +89,7 @@ export function renderQueue(s) {
         ? (q.length === 1 ? '1 message, read after the current step'
             : `${q.length} messages, read after the current step`)
         : q.length === 1
-            ? (busy ? '1 message waiting for Claude\'s next step' : '1 message waiting')
+            ? (busy ? `1 message waiting for ${agentOf().name}'s next step` : '1 message waiting')
             : `${q.length} messages waiting${busy ? ', in this order' : ''}`;
     dom.queueClear.textContent = q.length === 1 ? 'Drop it' : 'Drop all';
 
@@ -216,7 +217,7 @@ function queueItem(entry, i, total, roving) {
         onDragStart=${(e) => onChipDragStart(e, entry)}
         onDragEnd=${onChipDragEnd}>
         ${handed
-            ? html`<span class="queue-grip" title="Claude reads this after the current step">↳</span>`
+            ? html`<span class="queue-grip" title=${`${agentOf().name} reads this after the current step`}>↳</span>`
             : html`<span class="queue-grip" title="Drag to reorder" aria-hidden="true">⠿</span>`}
         <span class="queue-n">${String(i + 1)}</span>
         ${files.length ? html`<span class="queue-files"

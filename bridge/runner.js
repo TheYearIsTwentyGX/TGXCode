@@ -133,7 +133,12 @@ const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'b
 // added upstream is not silently erased from a draft by a build that predates it.
 // The list itself is bridge/models.js's, which every picker also reads.
 const { EFFORTS } = require('./models');
-const effortOrNull = (v) => (EFFORTS.includes(v) ? v : null);
+// Claude's levels are ours to list; another runtime's come from the runtime
+// itself (Codex's `model/list`), so anything word-shaped is passed on and the
+// runtime refuses what it does not offer.
+const effortOrNull = (v, runtime = runtimes.DEFAULT) => (runtime === runtimes.DEFAULT
+    ? (EFFORTS.includes(v) ? v : null)
+    : (typeof v === 'string' && /^[a-z][a-z0-9_-]{0,30}$/.test(v) ? v : null));
 
 /** Two held model/effort changes (either may be null) asking for the same thing. */
 function sameSettings(a, b) {
@@ -197,13 +202,18 @@ class Runner extends EventEmitter {
         // capabilities are what clients hide controls by.
         this.runtime = opts.runtime || runtimes.DEFAULT;
         this.capabilities = runtimes.capabilitiesOf(this.runtime);
+        // What clients call it, `{name, product}`; fixed for the runner's life too.
+        this.agent = runtimes.agentOf(this.runtime);
         this.tools = runtimes.toolsOf(this.runtime);
         this.adapter = new (runtimes.get(this.runtime).adapter.Adapter)({
             rpc: (verb, payload) => this._control(verb, payload),
+            // A line nobody waits on the answer to: JSON-RPC's notifications
+            // (Codex's `initialized`). See the contract.
+            notify: (line) => this._write(line),
         });
         this.isNew = !!opts.isNew;
         this.model = opts.model || null;
-        this.effort = effortOrNull(opts.effort);
+        this.effort = effortOrNull(opts.effort, this.runtime);
         this.permissionMode = opts.permissionMode || 'auto';
         // Branch off a copy instead of continuing in place. Needed when the
         // original is already live somewhere else.
@@ -667,6 +677,12 @@ class Runner extends EventEmitter {
         // `dropped` a stop reports — reads `.text`, and all of it keeps working
         // untouched. Only _flushQueue knows these are here.
         const entry = { id: `q${++queueSeq}`, uuid: randomUUID(), text, at: Date.now(), attachments };
+        // A card answered by the next turn (`followUp`) is answered by this one:
+        // typing past a plan or a question is the reply to it.
+        if (this.pendingPermission && this.pendingPermission.followUp) {
+            this._markAnswered(this.pendingPermission.id);
+            this._clearPermission('superseded');
+        }
         this.queue.push(entry);
         if (!this.proc) this.start();
         else { this._flushQueue(); this._handOver(); }
@@ -941,6 +957,10 @@ class Runner extends EventEmitter {
             pendingSettings: this.pendingSettings,
             answered: this._answered,
             sessionAllow: [...this._sessionAllow],
+            // The ask the process is blocked on, whole — its id is the runtime's
+            // own request id (an integer for Codex, kept as `rpcId`), which is
+            // what the next bridge answers. adopt() starts from it.
+            ...(this.pendingPermission && { pending: this.pendingPermission }),
             // Only when it is not the default, so a Claude session's note is the
             // one it always was. adoptHeld makes the runner from it.
             ...(this.runtime !== runtimes.DEFAULT && { runtime: this.runtime }),
@@ -1134,6 +1154,24 @@ class Runner extends EventEmitter {
         // other tool that wants its own dialog is one it does not.
         const kind = ask.kind;
 
+        // An ask nothing is blocked on: a runtime whose plan or question arrives
+        // as part of a turn rather than as a request (Codex's `plan` item and its
+        // async question tool). The card goes up and the session stays as it is;
+        // the answer is the next turn (_answerFollowUp), and with no window open
+        // it simply waits — denying it would send a turn nobody asked for.
+        if (ask.followUp) {
+            if (this.pendingPermission && this.pendingPermission.followUp) {
+                this._markAnswered(this.pendingPermission.id);
+                this._clearPermission('superseded');
+            }
+            if (this.pendingPermission) return;
+            this.pendingPermission = ask;
+            this._saveNote();
+            this.emit('permission-request', { sessionId: this.sessionId, ...publicAsk(ask) });
+            this.emit('status', this.status());
+            return;
+        }
+
         // Some MCP asks need a dialog of the server's own, which this channel
         // cannot carry. Offering Allow would be a lie — the call fails anyway —
         // so say what happened instead of pretending it was a choice.
@@ -1195,6 +1233,9 @@ class Runner extends EventEmitter {
         }
 
         this.pendingPermission = ask;
+        // So a bridge that goes before this is answered leaves the request — and
+        // the runtime's id for it — with the host. See adopt().
+        this._saveNote();
         this._setState('busy', waitingLabel(ask));
         this.emit('permission-request', { sessionId: this.sessionId, ...publicAsk(ask) });
     }
@@ -1244,6 +1285,7 @@ class Runner extends EventEmitter {
         this.lastUsedAt = Date.now();
         this._autoDenies = 0;   // somebody is here; the spin guard can reset
 
+        if (ask.followUp) return this._answerFollowUp(ask, decision, extra);
         if (ask.kind !== 'tool') return this._answerConversation(ask, decision, extra);
 
         if (decision === 'deny') {
@@ -1312,24 +1354,7 @@ class Runner extends EventEmitter {
             // [string]}]`, and the adapter says it in its runtime's shape: Claude
             // puts it in `updatedInput.answers` keyed by text, Codex in
             // `{answers: {<id>: {answers}}}`. The runner no longer builds either.
-            const byKey = new Map();
-            for (const q of ask.input.questions || []) {
-                if (!q) continue;
-                if (typeof q.question === 'string') byKey.set(q.question, q);
-                if (q.id != null && !byKey.has(String(q.id))) byKey.set(String(q.id), q);
-            }
-            const given = [];
-            const seen = new Set();
-            for (const [key, a] of Object.entries(answers || {})) {
-                const q = byKey.get(key);
-                if (!q || seen.has(q)) continue;
-                const values = Array.isArray(a)
-                    ? a.map(v => (v == null ? '' : String(v))).filter(v => v.trim())
-                    : (String(a || '').trim() ? [String(a)] : []);
-                if (!values.length) continue;
-                seen.add(q);
-                given.push({ id: q.id != null ? String(q.id) : null, question: q.question, answers: values });
-            }
+            const given = givenAnswers(ask, answers);
             if (!given.length) {
                 return { ok: false, error: 'no answers were given' };
             }
@@ -1358,6 +1383,50 @@ class Runner extends EventEmitter {
         // been told to do is refused. Leaving it there would approve a plan and
         // then block it, which is worse than not asking.
         if (mode && mode !== this.permissionMode) this._setPermissionMode(mode);
+        return { ok: true };
+    }
+
+    /**
+     * Answer an ask that nothing is blocked on (`followUp`) by sending the next
+     * turn — the plan card and the async question card of a runtime that has no
+     * request behind either (docs/plans/23-codex.md, Phase 3). The card is drawn
+     * the same and answered through the same route; what it does is ours.
+     *
+     *   plan, approved   switch out of plan mode (to `mode`, or acceptEdits) and
+     *                    send "Implement the plan.", with the note if there is one
+     *   plan, revised    send the feedback as another plan turn
+     *   question         send the answers as the next turn; dismissed sends nothing
+     */
+    _answerFollowUp(ask, decision, { answers, feedback, mode } = {}) {
+        const turnedDown = decision === 'deny';
+        let text = null;
+        let outcome;
+        if (ask.kind === 'plan') {
+            const said = String(feedback || '').trim();
+            if (turnedDown) {
+                text = said || 'Not yet — revise the plan.';
+                outcome = 'plan-rejected';
+            } else {
+                text = said ? `Implement the plan.\n\n${said}` : 'Implement the plan.';
+                outcome = said ? 'plan-approved-note' : 'plan-approved';
+            }
+        } else if (turnedDown) {
+            outcome = 'dismissed';
+        } else {
+            const given = givenAnswers(ask, answers);
+            if (!given.length) return { ok: false, error: 'no answers were given' };
+            text = given.map(g => (ask.input.questions.length > 1 || g.question
+                ? `${g.question}\n${g.answers.join(', ')}` : g.answers.join(', '))).join('\n\n');
+            outcome = 'answered';
+        }
+        this._markAnswered(ask.id);
+        this._clearPermission(outcome);
+        if (ask.kind === 'plan' && !turnedDown) {
+            const next = mode && mode !== 'plan' ? mode
+                : this.permissionMode === 'plan' ? 'acceptEdits' : this.permissionMode;
+            if (next !== this.permissionMode) this._setPermissionMode(next);
+        }
+        if (text) this.send(text);
         return { ok: true };
     }
 
@@ -1409,13 +1478,16 @@ class Runner extends EventEmitter {
         // Before the write, for _flushQueue's reason.
         this._markAnswered(ask.id);
         if (choice === undefined || choice === null) choice = choiceFor(ask, behavior, { allowSession });
-        this._write(this.adapter.answer(ask, { behavior, message, updatedInput, allowSession, choice, answers }));
+        const line = this.adapter.answer(ask, { behavior, message, updatedInput, allowSession, choice, answers });
+        // Null for an ask answered by the next turn rather than on the wire.
+        if (line) this._write(line);
     }
 
     _clearPermission(outcome, choice = null) {
         const ask = this.pendingPermission;
         if (!ask) return;
         this.pendingPermission = null;
+        this._saveNote();
         this.emit('permission-resolved', {
             sessionId: this.sessionId, requestId: ask.id, outcome,
             // Which of the ask's own decisions it was, when it carried a list.
@@ -1567,7 +1639,19 @@ class Runner extends EventEmitter {
         this.claudeVersion = note.claudeVersion || null;
         this.lastUsedAt = Date.now();
 
-        let ask = null;
+        // What an adapter with state of its own would have learned at the start
+        // it never saw (Codex's thread id, mode and model), before the replay.
+        if (typeof this.adapter.adopting === 'function') {
+            this.adapter.adopting({ sessionId: this.sessionId, cwd: this.cwd, model: this.model,
+                effort: this.effort, permissionMode: this.permissionMode });
+        }
+
+        // The ask the last bridge was holding, from its note. The replay below
+        // finds it again when its request is still in the host's log; this is
+        // for when it is not — a log that out-grew its cap dropped the front —
+        // and it carries the runtime's own id for the request (Codex's integer).
+        // Later lines settle it exactly as they would the replayed one.
+        let ask = note.pending && note.pending.id ? note.pending : null;
         let finished = null;       // a result the previous bridge never saw
         const tools = new Map();
         // The adapter's own reading of each line, the same one the live stream
@@ -1604,7 +1688,8 @@ class Runner extends EventEmitter {
                         break;
                     }
                     case 'turn-end':
-                        ask = null;
+                        // A card nothing was blocked on outlives its turn.
+                        if (!ask || !ask.followUp) ask = null;
                         tools.clear();
                         if (r.seq > noteSeq) finished = ev.result;
                         break;
@@ -1637,7 +1722,7 @@ class Runner extends EventEmitter {
             setImmediate(() => this.emit('turn-complete', this.lastResult));
         }
 
-        if (ask) {
+        if (ask && !ask.followUp) {
             this.pendingPermission = ask;
             this._setState('busy', waitingLabel(ask));
         } else if (this.inFlight.length || tools.size || this.queue.some(q => q.handed)) {
@@ -1646,6 +1731,7 @@ class Runner extends EventEmitter {
         } else {
             this._setState('idle', null);
         }
+        if (ask && ask.followUp) this.pendingPermission = ask;
         this._saveNote();
         this._flushQueue();
     }
@@ -2116,6 +2202,8 @@ class Runner extends EventEmitter {
             // life. See bridge/runtimes/index.js and docs/api.md.
             runtime: this.runtime,
             capabilities: this.capabilities,
+            // What clients call this CLI: `{name, product}`.
+            agent: this.agent,
             state: this.state,
             activity: this.activity,
             // The two halves `activity` is composed of, so a surface too narrow
@@ -2195,6 +2283,35 @@ function controlError(message, reason) {
 }
 
 /**
+ * A question ask's answers as the adapter takes them, `[{id, question,
+ * answers: [string]}]`, from a client's `answers` keyed by question text or by a
+ * question's `id`. A key that names no question is dropped rather than passed
+ * through, so a stale card cannot answer a live question; a value is one string
+ * or several.
+ */
+function givenAnswers(ask, answers) {
+    const byKey = new Map();
+    for (const q of (ask.input && ask.input.questions) || []) {
+        if (!q) continue;
+        if (typeof q.question === 'string') byKey.set(q.question, q);
+        if (q.id != null && !byKey.has(String(q.id))) byKey.set(String(q.id), q);
+    }
+    const given = [];
+    const seen = new Set();
+    for (const [key, a] of Object.entries(answers || {})) {
+        const q = byKey.get(key);
+        if (!q || seen.has(q)) continue;
+        const values = Array.isArray(a)
+            ? a.map(v => (v == null ? '' : String(v))).filter(v => v.trim())
+            : (String(a || '').trim() ? [String(a)] : []);
+        if (!values.length) continue;
+        seen.add(q);
+        given.push({ id: q.id != null ? String(q.id) : null, question: q.question, answers: values });
+    }
+    return given;
+}
+
+/**
  * The entry of an ask's `decisions` that an answer in the old words means, or
  * null for an ask with no list (every Claude ask). A decision is
  * `{id, label, behavior: 'allow'|'deny', scope: 'once'|'session'|'always',
@@ -2240,6 +2357,10 @@ function publicAsk(ask) {
         blockedPath: ask.blockedPath,
         agentId: ask.agentId,
         askedAt: ask.askedAt,
+        // Answered by sending the next turn rather than unblocking this one: a
+        // Codex plan, or a question its async tool asked. Nothing is waiting on
+        // it, so the session can be idle with this card up. Absent otherwise.
+        ...(ask.followUp && { followUp: true }),
         // The runtime's own answers, when it offers a list rather than allow and
         // deny (Codex's `availableDecisions`). Absent for every Claude ask. A card
         // draws one button per entry and answers with `choice: id`; `raw`, the
@@ -2306,6 +2427,13 @@ class RunnerPool extends EventEmitter {
         // rediscovering it the same expensive way.
         this.caps = { permissionPrompt: true, interrupt: true };
 
+        // Which runtime each session this pool has run is on, when it is not the
+        // default — so a session evicted and sent to again comes back on its own
+        // CLI. `runtimeOf` is the index's answer for one this pool never ran;
+        // replaced by the server.
+        this._runtimeOf = new Map();
+        this.runtimeOf = () => null;
+
         // Replaced by the server with the real answer. Whether anything is
         // listening decides between blocking on a person and denying, so
         // guessing "yes" here would hang turns nobody is watching.
@@ -2366,6 +2494,12 @@ class RunnerPool extends EventEmitter {
     } = {}) {
         ({ model, effort } = this._forced(sessionId, model, effort));
         let r = this.runners.get(sessionId);
+        // A caller that does not say which CLI keeps the one the session has: the
+        // live runner's, then the one this pool last ran it on (an evicted Codex
+        // session must not come back as `claude --resume <thread id>`), then the
+        // index's. Claude when none of them knows.
+        runtime = runtime || (r && r.runtime) || this._runtimeOf.get(sessionId)
+            || this.runtimeOf(sessionId) || undefined;
         let carried = [];
         // Absent and null are different answers for effort, unlike model: absent
         // is "as you were" — a board card's send, which has no selector to read —
@@ -2379,7 +2513,7 @@ class RunnerPool extends EventEmitter {
             // cost something.
             const wants = {
                 model: model ?? r.model,
-                effort: effort === undefined ? r.effort : effortOrNull(effort),
+                effort: effort === undefined ? r.effort : effortOrNull(effort, r.runtime),
                 permissionMode: permissionMode ?? r.permissionMode,
             };
             const settings = wants.model !== r.model || wants.effort !== r.effort;
@@ -2452,6 +2586,7 @@ class RunnerPool extends EventEmitter {
 
     /** A runner with the pool's listeners on it — shared by `ensure` and `adoptHeld`. */
     _make(opts) {
+        if (opts.runtime && opts.runtime !== runtimes.DEFAULT) this._runtimeOf.set(opts.sessionId, opts.runtime);
         const r = new Runner({ ...opts, caps: this.caps,
             thinking: (dir, last) => this.thinking(dir, last),
             rerollAfter: (dir) => this.rerollAfter(dir),
@@ -2513,6 +2648,10 @@ class RunnerPool extends EventEmitter {
         r.on('minted', ({ from, to }) => {
             if (this.runners.get(from) === r) this.runners.delete(from);
             this.runners.set(to, r);
+            if (this._runtimeOf.has(from)) {
+                this._runtimeOf.set(to, this._runtimeOf.get(from));
+                this._runtimeOf.delete(from);
+            }
             this.emit('minted', { from, to });
         });
         return r;

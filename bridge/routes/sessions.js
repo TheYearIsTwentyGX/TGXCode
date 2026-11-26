@@ -32,6 +32,7 @@ const { resolveAttachments } = require('./files');
 const { createWorktree } = require('../worktree');
 const { cleanTitle } = require('../flags');
 const fileSearch = require('../file-search');
+const runtimes = require('../runtimes');
 
 // Handed over by server.js — see the note above ROUTES there.
 let CREATE_LIMIT = null;
@@ -176,6 +177,18 @@ async function handle(req, res, url, pathname, seg, who) {
         }
         const title = cleanTitle(body.title);
 
+        // Which CLI to run it on. Absent is Claude, as it always was.
+        const runtime = body.runtime == null || body.runtime === '' ? runtimes.DEFAULT : String(body.runtime);
+        if (!runtimes.known(runtime)) {
+            return send(res, 400, { error: `unknown runtime: ${runtime}` });
+        }
+        // An orchestrator's role decides its argv before the process starts, keyed
+        // by an id this route mints — and a Codex session's id is not known until
+        // Codex names it. So neither half of an orchestration runs on Codex yet.
+        if (runtime !== runtimes.DEFAULT && body.orchestrator === true) {
+            return send(res, 400, { error: `an orchestrator cannot run on ${runtime} yet` });
+        }
+
         const mode = normalizeMode(body.permissionMode);
         const refusal = modeRefusal(mode, who);
         if (refusal) return send(res, 403, { error: refusal, remote: true });
@@ -245,7 +258,22 @@ async function handle(req, res, url, pathname, seg, who) {
                 effort: body.effort || null,
                 permissionMode: mode,
                 attachments: files,
+                runtime,
             });
+            // A runtime that names its own sessions (Codex mints the thread id at
+            // `thread/start`) was started under a placeholder. Answer with the id
+            // it chose, so the caller can navigate to it, label it and send to it;
+            // the placeholder would 404 for ever.
+            if (runtimes.mintsId(runtime)) {
+                const r = pool.get(out.sessionId);
+                const got = await mintedId(r, MINT_WAIT_MS);
+                if (got.error) {
+                    return send(res, 502, { error: got.error, kind: got.kind || 'unknown',
+                        unsent: got.unsent || [], ...(worktree ? { worktree } : {}) });
+                }
+                out.sessionId = got.id;
+                out.status = r.status();
+            }
             // Label it before it exists on disk, so it is never briefly visible
             // in the everyday window while the first rescan catches up. The name
             // is the same flag a rename from the rail writes, so a later rename
@@ -377,6 +405,37 @@ async function handle(req, res, url, pathname, seg, who) {
     }
 
     return NEXT;
+}
+
+
+// How long a create waits for a runtime to name the session it started. Codex
+// answers `thread/start` in tens of milliseconds once it is up; the time is in
+// spawning it and the handshake, a second or two, more on a cold machine.
+const MINT_WAIT_MS = 30_000;
+
+/**
+ * The id a runtime minted for the session `r` was started for: `{id}`, or
+ * `{error, kind, unsent}` when the start failed or took too long. A runner whose
+ * id is not a placeholder (it already moved) answers at once.
+ */
+function mintedId(r, ms) {
+    if (!r) return Promise.resolve({ error: 'the session did not start', kind: 'unknown' });
+    return new Promise((resolve) => {
+        const done = (v) => {
+            clearTimeout(timer);
+            r.off('minted', onMint);
+            r.off('failed', onFail);
+            resolve(v);
+        };
+        const onMint = ({ to }) => done({ id: to });
+        const onFail = (f) => done({ error: f.message || 'the session did not start', kind: f.kind, unsent: f.unsent });
+        const timer = setTimeout(() => done({
+            error: `${r.adapter.product} did not open the conversation within ${Math.round(ms / 1000)}s`,
+            kind: 'unknown',
+        }), ms);
+        r.on('minted', onMint);
+        r.on('failed', onFail);
+    });
 }
 
 module.exports = { init, handle };
