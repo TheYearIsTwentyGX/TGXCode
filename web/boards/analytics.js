@@ -22,6 +22,7 @@ import { html, render, useState } from '../vendor/preact.js';
 import { get } from '../api.js';
 import { state } from '../state.js';
 import { dom } from '../dom.js';
+import { agentOf } from '../capabilities.js';
 import { ago, clip } from '../format.js';
 import { showAnalytics } from '../app.js';
 import { openSession, renderHeader } from '../transcript/conversation.js';
@@ -96,7 +97,8 @@ export async function loadSessionSpend(id) {
 /** A `session-spend` push: the open conversation's new totals. */
 export function applySessionSpend(p) {
     if (!state.current || p.sessionId !== state.current.sessionId) return;
-    state.spend = { ...(state.spend || {}), sessionId: p.sessionId, totals: p.totals };
+    state.spend = { ...(state.spend || {}), sessionId: p.sessionId, totals: p.totals,
+        ...(p.basis && { basis: p.basis }) };
     renderHeader();
 }
 
@@ -106,6 +108,14 @@ export function spendBit(sep) {
     if (!sp || !state.current || sp.sessionId !== state.current.sessionId) return null;
     const t = sp.totals;
     if (!t || !t.messages) return null;
+    // A Codex session: tokens, and nothing that looks like money.
+    if (sp.basis === 'tokens') {
+        const said = `${tokens(t.tokens)} tokens over ${t.messages} responses, spawned agents included — `
+            + `${breakdown(t)}\nNo cost is shown: there are no prices here for ${agentOf(state.current).name}'s `
+            + 'models, and a ChatGPT plan is not billed per token.';
+        return [sep('spend'), html`<span key="spend" class="an-head-cost" title=${said}
+            >${`${tokens(t.tokens)} tok`}</span>`];
+    }
     const unpriced = t.unpricedTokens ? ` · ${tokens(t.unpricedTokens)} tokens on models with no known price` : '';
     const title = `API-equivalent cost: these tokens at API list prices`
         + `${sp.pricingAsOf ? ` (as of ${sp.pricingAsOf})` : ''}. Not what a subscription bills.\n`
@@ -150,6 +160,7 @@ export function renderAnalytics() {
     const when = d ? ago(d.generatedAt) : null;
     dom.anSub.textContent = 'API-equivalent: the tokens in your transcripts at API list prices'
         + `${d ? ` as of ${d.pricingAsOf}` : ''}. A subscription does not bill this.`
+        + (d && d.codex ? ' Codex sessions are counted at the foot, in tokens only.' : '')
         + (a.loading ? ' Reading…' : when ? ` Updated ${when === 'now' ? 'just now' : `${when} ago`}.` : '');
 
     if (a.error && !d) {
@@ -195,7 +206,40 @@ function Board({ d }) {
             <${Projects} d=${d} />
             <${Models} d=${d} />
         </div>
-        <${Sessions} d=${d} />`;
+        <${Sessions} d=${d} />
+        ${d.codex ? html`<${Codex} c=${d.codex} days=${d.days} />` : null}`;
+}
+
+/**
+ * Codex's own card: tokens, never dollars, and added to nothing above.
+ * "Codex" by name because this card is the one place the board is about one
+ * runtime, and `d.codex` is the field it draws.
+ */
+function Codex({ c, days }) {
+    const t = c.totals;
+    const open = (id) => { showAnalytics(false); openSession(id); };
+    return html`
+        <section class="an-card an-codex">
+            <header class="an-card-head"><h2 class="an-card-title">${`Codex tokens, last ${days} days`}</h2></header>
+            <p class="an-note">${`${tokens(t.tokens)} tokens over ${t.messages.toLocaleString('en-US')} responses `
+                + `(${tokens(c.allTime.tokens)} all time): ${breakdown(t)}. Not priced, and not in the figures above. `
+                + 'A ChatGPT plan is not billed per token.'}</p>
+            ${c.sessions.length ? html`<table class="an-table">
+                <thead><tr><th>Session</th><th>Project</th><th>Last active</th>
+                    <th class="num">Output</th><th class="num">Tokens</th></tr></thead>
+                <tbody>${c.sessions.slice(0, 10).map(s => html`<tr key=${s.sessionId} class="an-row-link"
+                    title=${breakdown(s)} onClick=${() => open(s.sessionId)}>
+                    <td class="an-name">${clip(s.title || s.sessionId, 70)}</td>
+                    <td>${s.projectName}</td><td>${s.lastDay ? dayLabel(s.lastDay) : ''}</td>
+                    <td class="num">${tokens(s.output)}</td><td class="num">${tokens(s.tokens)}</td></tr>`)}</tbody>
+            </table>` : html`<p class="an-empty">Nothing in this range.</p>`}
+            ${c.models.length ? html`<table class="an-table">
+                <thead><tr><th>Model</th><th class="num">Responses</th><th class="num">Tokens</th></tr></thead>
+                <tbody>${c.models.map(m => html`<tr key=${m.model} title=${breakdown(m)}>
+                    <td class="an-name">${m.model}</td><td class="num">${m.messages}</td>
+                    <td class="num">${tokens(m.tokens)}</td></tr>`)}</tbody>
+            </table>` : null}
+        </section>`;
 }
 
 function Daily({ d }) {

@@ -30,6 +30,9 @@ const CODEX_SESSIONS_DIR = process.env.TGXCODE_CODEX_SESSIONS_DIR
 // when only that one was overridden.
 const CODEX_SESSION_INDEX = CODEX_SESSIONS_DIR
     ? path.join(path.dirname(CODEX_SESSIONS_DIR), 'session_index.jsonl') : null;
+// Where `codex archive` moves a thread's rollout, flat, until `unarchive`.
+const CODEX_ARCHIVED_DIR = CODEX_SESSIONS_DIR
+    ? path.join(path.dirname(CODEX_SESSIONS_DIR), 'archived_sessions') : null;
 
 // And one file per *running* session here, named for its pid. Read-only to us,
 // like everything else under ~/.claude — see bridge/registry.js.
@@ -378,7 +381,7 @@ const VERSION = '1.0.0';
 
 module.exports = {
     HOME, PROJECTS_DIR, REGISTRY_DIR, CACHE_DIR, PORT, HOST, VERSION,
-    CODEX_HOME, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX,
+    CODEX_HOME, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX, CODEX_ARCHIVED_DIR,
     ROOT, IS_WORKTREE,
     STATE_DIR, TOKEN_FILE,
     TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,

@@ -481,7 +481,7 @@ project filter on `GET /api/sessions?project=`.
 | `sessionId`, `title`, `titleSource`, `cwd`, `projectCwd`, `projectName`, `gitBranch`, `model`, `permissionMode`, `version`, `sessionKind`, `lastPrompt` | strings, any of them null |
 | `firstTs`, `lastTs`, `lastUserTs` | ISO 8601 strings or null |
 | `userMessages`, `assistantMessages`, `toolCalls`, `bytes`, `mtimeMs` | numbers |
-| `pinned`, `archived`, `test`, `active` | bools. These flags live in one file every bridge on the machine shares, and a bridge picks up another's change within about a second — so a session labelled `test` on a development bridge is hidden from the everyday bridge's lists too. (Until this release a bridge read them only at startup, so a test session started after the everyday bridge did was listed there, unlabelled.) |
+| `pinned`, `archived`, `test`, `active` | bools. These flags live in one file every bridge on the machine shares, and a bridge picks up another's change within about a second — so a session labelled `test` on a development bridge is hidden from the everyday bridge's lists too. (Until this release a bridge read them only at startup, so a test session started after the everyday bridge did was listed there, unlabelled.) **`archived` is also true for a Codex thread Codex itself has archived** — see §*Codex archived threads* |
 | **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
 | **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
 | **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
@@ -512,6 +512,19 @@ is indistinguishable. **A title the user set by hand wins** — `custom-title` a
 reads `schedule.title`; one that wants to group scheduled runs tests `schedule` for
 null and needs nothing else. A name given through `POST /api/sessions/:id/flags`
 (`titleSource: "user"`) wins over the composed one too.
+
+#### Codex archived threads
+
+`codex archive` moves a thread's rollout to `$CODEX_HOME/archived_sessions/`. The
+bridge indexes that directory beside `sessions/`, so such a thread is listed, read,
+searched and counted like any other, with **`archived: true`** on its row (and on its
+tasks in `GET /api/suggestions`). Draw it where you draw any archived session. It stays
+sendable: resuming it un-archives it in Codex first, and the row follows.
+
+`POST /api/sessions/:id/flags` works on it and **never moves Codex's file**.
+`{archived: false}` shows the row as not archived, and the bridge remembers that until
+Codex itself un-archives the thread, so a later `codex archive` counts again. A pinned
+row is never `archived`; unpinned, it goes back.
 
 **`later` is the count and the clock, not the messages.** `{pending, nextAt}` when this
 session has messages waiting to be delivered to it — the number still `pending`, and the
@@ -734,7 +747,8 @@ life of a session. Two values exist:
 
 - **`"claude"`** — Claude Code. Every feature in this document.
 - **`"codex"`** — an OpenAI Codex thread, read from its rollout file under
-  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`), and **driven** over
+  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`, or `archived_sessions/`
+  beside it, §*Codex archived threads*), and **driven** over
   `codex app-server`: the bridge starts one app-server per conversation, sends to it,
   steers it, stops it, and draws its approvals, questions and plans as the cards
   below. Start one with `runtime: "codex"` on `POST /api/sessions`. What it cannot
@@ -998,6 +1012,11 @@ own:
   through the parent: `GET …/subagents` lists it with `toolUseId` the thread id, and
   `GET …/subagent?toolUseId=<thread id>` (and `agent` on `POST /api/subscribe`) reads its
   own lines, without the copy of the parent's history its rollout opens with.
+- **An attached image is in the `user` event's `images`**, and the `<image …>` tags
+  Codex writes around it are not in `text` (before this release they were).
+  `view_image`'s `input.path` is a plain path (it was a `file://` URL). Its `result`
+  has no `images`; the picture is in `GET …/images`, and `GET …/tool-image` serves it
+  by the row's `id`.
 - **An interrupted turn is a `system` event**, `subtype: "interrupted"`,
   `isError: false`, `text: "Interrupted."` — Codex records a stop as a line of its own,
   and it can land just before the row of the command it killed.
@@ -1099,6 +1118,16 @@ each entry has a `url` to fetch them from.
   repeat the request that carried a result; a Read's `toolUseResult.file.base64`,
   which repeats the block beside it; images named in assistant markdown; scratchpad
   files that the conversation never read.
+- **On a Codex session** the same list is read from the rollout: an `input_image` in
+  your message (an attached file included), or in a tool's output — what `view_image`,
+  or a script that passed a picture on, put in front of the model — in the thread's own
+  rollout and its spawned agents'. A result Codex only recorded and never showed the
+  model is not counted. For a tool's image, `toolUseId` and a `tool` anchor are the
+  `id` of the Codex `tool` event that made it (`view_image`, `mcp_tool_call`…), and
+  `uuid` is null; where no call can be named, `toolUseId` is null and the anchor is the
+  message that turn answered. A forked thread lists its own images only. (Generated
+  images, `image_generation_call`, are read from Codex's schema and have not been
+  seen.) An older bridge listed none for Codex.
 - **Dedup.** Two blocks are the same image when the sha256 of their **decoded bytes**
   is the same, whatever kind of block they were in. One screenshot attached twice and
   Read once is one entry, `count: 3`, three `occurrences`.
@@ -1162,7 +1191,8 @@ Response:
 
 ```
 { query: string, terms: [string], kinds: [string],
-  sessions: [{ sessionId: string, title: string|null, projectName: string|null,
+  sessions: [{ sessionId: string, runtime: string, agent: {name: string, product: string},
+               title: string|null, projectName: string|null,
                cwd: string|null, projectCwd: string|null, mtimeMs: number|null,
                test: boolean, turns: number,
                hitCount: number, more: number,
@@ -1173,6 +1203,9 @@ Response:
   matched: number, truncated: boolean, pending: number, elapsedMs: number }
 ```
 
+- **`runtime` and `agent`** are the session summary's (§*`runtime` and
+  `capabilities`*). An `assistant` hit is `agent.name` speaking — label it with that,
+  not with "Claude". An older bridge sends neither, and searched no Codex session.
 - **Order is the rail's order** — by when you last spoke in the session, newest
   first — not relevance. Hits within a session are in transcript order.
 - **`matched` counts every session with a hit; `sessions` holds at most `limit` of
@@ -1205,6 +1238,10 @@ Response:
 - **Which sessions:** exactly those `GET /api/sessions` would list. Sessions under a
   temporary directory are never searched; `test` sessions only on a development
   bridge, as with `/api/dashboard`. Subagent transcripts are not searched.
+- **On a Codex session** the turns, `turnId`s and `eventId`s are those of its rollout,
+  the same ones `?turns=K` and `/range` give. A message that ran a skill is found by
+  `$name args`. A forked thread is searched for its own lines only; what it inherited
+  is found in the parent.
 - **What is stored is clipped**: each message to its first 16 000 characters, each
   tool call to about 1 200 (input and output together). Words beyond those points
   are not found. A tool result over 1 MB on one line is not indexed at all.
@@ -4092,7 +4129,10 @@ waits for it.
   sessions: [ { sessionId, title: string|null, projectCwd: string|null,
                 projectName: string, lastDay: "YYYY-MM-DD", ...Totals } ],
   models: [ { model: string, ...Totals } ],
-  unpricedTokens: number }        // = totals.unpricedTokens
+  unpricedTokens: number,         // = totals.unpricedTokens
+  codex: null | {                 // Codex sessions, in tokens only. See below
+    totals: Totals, allTime: Totals,
+    daily: [...], projects: [...], sessions: [...], models: [...] } }  // shaped as above
 
 Totals = { input, output, cacheRead, cacheWrite, tokens, messages, costUsd, unpricedTokens }
 ```
@@ -4117,6 +4157,19 @@ Totals = { input, output, cacheRead, cacheWrite, tokens, messages, costUsd, unpr
   (`claude-haiku-4-5-20251001` → `claude-haiku-4-5`).
 - Sessions under `/tmp` are left out, as are test sessions except on a development
   bridge. This matches `/api/sessions`.
+- **Codex is never priced, and is in none of the figures above.** A ChatGPT plan is not
+  billed per token and the bridge has no price table for its models, so Codex sessions
+  are rolled up on their own under **`codex`**: the same `totals`, `allTime`, `daily`,
+  `projects`, `sessions` (top 50) and `models` shapes, over Codex sessions alone, sorted
+  by `tokens`. In every one of those `Totals`, `costUsd` is `0` and `unpricedTokens`
+  equals `tokens`. **Show the tokens and no money**: that `0` is "not priced", not free.
+  `codex` is `null` when no Codex session has used a token, and absent from an older
+  bridge, which counted none.
+- **Codex's tokens** come from the `token_usage_record` lines of its rollouts, which
+  Codex 0.172.0 writes; a rollout from an older Codex counts nothing. `input` is Codex's
+  `input_tokens` less the cached and cache-written ones, so `tokens` is Codex's input
+  plus output (reasoning included in output). A spawned agent's tokens are in the
+  session that spawned it.
 
 ### `GET /api/analytics/sessions/:id`
 
@@ -4124,10 +4177,14 @@ One session's all-time spend, for a conversation header. It re-reads that sessio
 transcripts before answering.
 
 ```
-{ basis: "api-equivalent", pricingAsOf: string, sessionId: string,
+{ basis: "api-equivalent" | "tokens", pricingAsOf: string, sessionId: string,
   totals: Totals, firstDay: "YYYY-MM-DD"|null, lastDay: "YYYY-MM-DD"|null,
   models: [ { model: string, ...Totals } ] }
 ```
+
+**`basis: "tokens"` is a Codex session**: `costUsd` is `0` everywhere because nothing
+was priced. Show the token count and no dollar figure. `pricingAsOf` is still sent and
+means nothing then. (An older bridge answered `404` for a Codex session.)
 
 Returns `404 {error}` for a session the index does not hold. A session created a moment
 ago (see `POST /api/sessions`) 404s here until its transcript appears.
@@ -4354,7 +4411,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, a worker's PR changing status in the bridge's PR cache, settings, the summary or a decision answered, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason, usageLimit}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError`. `usageLimit` as in `lastResult` (§*`runner-status`*) |
-| `session-spend` | `{sessionId, totals}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id`: that session's all-time API-equivalent spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
+| `session-spend` | `{sessionId, totals, basis}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id` and `basis` its `basis`, `"api-equivalent"` or `"tokens"` (a Codex session: show no dollar figure): that session's all-time spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued); and for a Codex session `codex-signed-out` (Codex has no account signed in — say to run `codex login` in a terminal; nothing was sent) and `no-codex` (the `codex` command was not found). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
@@ -6918,7 +6975,7 @@ mode but `ask` only reads.
 | `POST /api/sessions/:id/restart` | `{force?}` | `{ok, restarted, status}` — replace the live process with a fresh `--resume`; see below |
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear. Dropping one answers `{ok, removed, status}`, or `409` if the message has already been sent — including a `handed` one the running turn read first. Clearing answers `{ok, dropped[]}` with only what was actually dropped, so a handed message that lost that race stays out of the list |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
-| `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?, title?}` | `title` is a string to name the session or `null`/`""` to clear the name; it is trimmed, whitespace runs become one space, and it is cut to 200 characters. The name is the bridge's own and is never written to the transcript, so Claude Code's `/resume` does not see it. Answers `{ok, sessionId, pinned, archived, test, title, titleSource, runsStopped}` — **`title` is the name the session now shows**, not the flag: after a clear it is the transcript's or schedule's title again. The name is set when `titleSource` is `"user"` |
+| `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?, title?}` | `title` is a string to name the session or `null`/`""` to clear the name; it is trimmed, whitespace runs become one space, and it is cut to 200 characters. The name is the bridge's own and is never written to the transcript, so Claude Code's `/resume` does not see it. Answers `{ok, sessionId, pinned, archived, test, title, titleSource, runsStopped}` — `archived` is what the row now shows, which for a Codex thread archived by Codex can be `true` with no `archived` flag set (§*Codex archived threads*) — **`title` is the name the session now shows**, not the flag: after a clear it is the transcript's or schedule's title again. The name is set when `titleSource` is `"user"` |
 | `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |
 | `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?, via?, note?, ifOpen?}` | `status` of `started`, `completed`, `dismissed`, or absent to undo. `completed` keeps the earlier `startedId`/`via` when none is sent. `note` is a string capped at 500 characters. `ifOpen: true` turns the write into a claim: it gets `409 {error, status, startedId}` when a decision is already recorded |
 | `POST /api/suggestions/:sessionId/:toolUseId/start` | `{permissionMode?, cwd?, extra?, …}` | start a task as its own session and mark it started, in one call — see above |

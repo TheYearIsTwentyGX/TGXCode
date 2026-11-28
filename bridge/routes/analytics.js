@@ -34,7 +34,7 @@ async function handle(req, res, url, pathname, seg) {
         const data = rollup(spend.entries(index, { includeTest: cfg.IS_DEV }), { days });
         // Titles only for the rows that are sent: a summary is not free, and
         // the rollup sees every session on the machine.
-        for (const s of data.sessions) {
+        for (const s of [...data.sessions, ...(data.codex ? data.codex.sessions : [])]) {
             const sum = index.summary(s.sessionId);
             s.title = sum ? sum.title : null;
         }
@@ -49,7 +49,9 @@ async function handle(req, res, url, pathname, seg) {
         if (!index.get(id)) return send(res, 404, { error: 'no such session' });
         const out = await spend.refreshSession(index, id);
         if (!out) return send(res, 404, { error: 'no such session' });
-        return send(res, 200, { basis: BASIS, pricingAsOf: PRICING_AS_OF, ...out });
+        // `tokens` is a Codex session: counted, never priced.
+        const { priced, ...totals } = out;
+        return send(res, 200, { basis: priced ? BASIS : 'tokens', pricingAsOf: PRICING_AS_OF, ...totals });
     }
 
     return NEXT;

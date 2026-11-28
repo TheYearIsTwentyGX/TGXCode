@@ -36,6 +36,7 @@
 //   like the whole answer.
 
 import { html } from './vendor/preact.js';
+import { agentFrom } from './agent-name.js';
 import { get } from './api.js';
 import { state } from './state.js';
 import { dom } from './dom.js';
@@ -124,7 +125,8 @@ export async function jumpToHit(hit) {
     if (exact && exact.node && (!entry || exact.node !== entry.node)) revealNode(exact.node);
 }
 
-const KIND_LABEL = { user: 'You', assistant: 'Claude', tool: 'Tool' };
+// `assistant` is whoever the session's agent is, by the name the bridge gives it.
+const KIND_LABEL = { user: 'You', tool: 'Tool' };
 
 // A tool hit's text opens with the tool's raw name, which is what the index
 // holds. Friendlier here rather than in the index, which would mean rebuilding
@@ -141,7 +143,8 @@ function Hit({ session, hit }) {
     const open = () => openAtHit(session.sessionId, hit);
     return html`<button class="sx-hit" type="button" data-kind=${hit.kind} onClick=${open}
             title=${hit.turnNo > 0 ? `Turn ${hit.turnNo} of ${session.turns}` : 'Before the first turn'}>
-        <span class="sx-hit-kind">${KIND_LABEL[hit.kind] || hit.kind}</span>
+        <span class="sx-hit-kind">${hit.kind === 'assistant'
+            ? agentFrom(session.agent).name : KIND_LABEL[hit.kind] || hit.kind}</span>
         <span class="sx-hit-text"><${Segments} segments=${hit.segments} tool=${hit.kind === 'tool'} /></span>
         <span class="sx-hit-when">${hit.turnNo > 0 ? `turn ${hit.turnNo}` : ''}</span>
     </button>`;
@@ -182,7 +185,7 @@ export function renderSearch() {
         return;
     }
     if (!q.trim()) {
-        dom.sxSub.textContent = 'Everything you and Claude said, in every session.';
+        dom.sxSub.textContent = 'Everything said in every session, by you and your agents.';
         paint(dom.sxBody, note('Type a few words. Every word has to be in the same message; '
             + 'put a phrase in quotes to keep it whole.'));
         return;

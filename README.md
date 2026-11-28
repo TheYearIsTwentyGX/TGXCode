@@ -459,7 +459,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
 | `bridge/image-index.js` | Per-session index of every image in a conversation — yours and the tools', the session's and its subagents' — deduplicated by the sha256 of its bytes, read incrementally and cached, with where each one appeared; the Images pane is drawn from it |
 | `bridge/skill-runs.js` | Per-session index of every skill, slash command and subagent run — start, end, result text — that the Reviews pane is filtered from |
-| `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached |
+| `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached; Codex sessions in tokens only, from their rollouts, kept apart |
 | `bridge/pricing.js` | API list prices per model, and the cost of one message's usage |
 | `bridge/search-index.js` | Per-session full-text index of what you and Claude said (and, clipped, tool calls), built incrementally like the turn index and in the background a slice at a time; the query and its snippets |
 | `bridge/transcript.js` | What the bridge imports to read a transcript: re-exports the Claude reader and the modules below, and `readerFor(runtime)` picks a reader |

@@ -1,7 +1,7 @@
 'use strict';
 
 // An index over every transcript under ~/.claude/projects, and every Codex
-// rollout under $CODEX_HOME/sessions.
+// rollout under $CODEX_HOME/sessions and $CODEX_HOME/archived_sessions.
 //
 // There are ~700 files totalling a few hundred MB here, so a full rescan on
 // every request is not viable. Metadata is cached keyed by (path, size, mtime) and
@@ -16,12 +16,17 @@
 // the thread's name from `session_index.jsonl` when it has one. Its summary says
 // what it can do through `capabilities`, and for Codex today that is nothing that
 // starts a process: see bridge/runtimes/index.js.
+//
+// A thread Codex has archived is a session like any other whose summary says
+// `archived`, so it sits where an archived Claude session does. Restoring it here
+// does not move Codex's file; see `restored` in bridge/flags.js.
 
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const { PROJECTS_DIR, CACHE_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX } = require('./config');
+const { PROJECTS_DIR, CACHE_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX,
+    CODEX_ARCHIVED_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity, toolResultImage, placeOf } = require('./transcript');
 const codex = require('./runtimes/codex/transcript');
@@ -35,7 +40,7 @@ const { SearchIndex } = require('./search-index');
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 17;
+const CACHE_VERSION = 18;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -52,6 +57,22 @@ const PROBE_LIMIT_MS = 60_000;
 // How deep under the Codex sessions directory rollouts are looked for. Codex files
 // them as YYYY/MM/DD; one more level is slack for a layout change, not a promise.
 const CODEX_DEPTH = 4;
+
+/** Whether `dir` is Codex's archive, or inside it. */
+function inCodexArchive(dir) {
+    return !!CODEX_ARCHIVED_DIR
+        && (dir === CODEX_ARCHIVED_DIR || dir.startsWith(CODEX_ARCHIVED_DIR + path.sep));
+}
+
+/**
+ * Whether a session is shown as archived: filed here, or by `codex archive` and
+ * not since pinned or restored here.
+ */
+function isArchived(flags, meta, set) {
+    if (set.archived) return true;
+    if (!meta.threadArchived || set.pinned) return false;
+    return !(flags && flags.isRestored(meta.sessionId));
+}
 
 /** Whether a record is a Codex rollout's. */
 const isCodex = (rec) => !!rec && rec.meta && rec.meta.runtime === 'codex';
@@ -298,8 +319,16 @@ class SessionIndex extends EventEmitter {
                 // another file and can change while the rollout does not.
                 const name = this.codexNames.get(rec.meta.sessionId);
                 if (name) { rec.meta.title = name; rec.meta.titleSource = 'thread-name'; }
+                // Which of Codex's two directories it is in now, set on every
+                // pass: `codex archive` moves the file and rewrites nothing.
+                rec.meta.threadArchived = inCodexArchive(dir);
                 byFile.set(file, rec);
                 chosen.set(rec.meta.sessionId, conversationRecord(chosen.get(rec.meta.sessionId), rec));
+            }
+        }
+        if (this.flags) {
+            for (const [id, rec] of chosen) {
+                if (isCodex(rec) && !rec.meta.threadArchived) this.flags.clearRestored(id);
             }
         }
 
@@ -385,7 +414,7 @@ class SessionIndex extends EventEmitter {
     _watch() {
         this._watching = true;
         this._watchDir(PROJECTS_DIR);
-        // The Codex tree, every level of it: a new day's directory is created by
+        // The Codex trees, every level of them: a new day's directory is created by
         // the first rollout of that day, and its parent's watch is what notices.
         for (const dir of this._codexDirs()) this._watchDir(dir);
         try {
@@ -400,8 +429,8 @@ class SessionIndex extends EventEmitter {
     }
 
     /**
-     * Every directory under the Codex sessions directory, itself included, to
-     * CODEX_DEPTH. All of them rather than today's: a resumed thread appends to
+     * Every directory under the Codex sessions and archive directories,
+     * themselves included, to CODEX_DEPTH. All of them rather than today's: a resumed thread appends to
      * the rollout it was born in, which is filed under the day it began.
      */
     _codexDirs() {
@@ -415,6 +444,7 @@ class SessionIndex extends EventEmitter {
             for (const e of ents) if (e.isDirectory()) walk(path.join(dir, e.name), depth + 1);
         };
         walk(CODEX_SESSIONS_DIR, 0);
+        if (CODEX_ARCHIVED_DIR) walk(CODEX_ARCHIVED_DIR, 0);
         return out;
     }
 
@@ -595,7 +625,7 @@ class SessionIndex extends EventEmitter {
                     via: decision ? (decision.via || null) : null,
                     note: decision ? (decision.note || null) : null,
                     at: decision ? decision.at : 0,
-                    archived: flags.archived,
+                    archived: isArchived(this.flags, m, flags),
                     // Enough to say where a task came from without a second
                     // call. Not the whole summary: this list is read whole and
                     // the fields a board labels a row with are these.
@@ -654,7 +684,7 @@ class SessionIndex extends EventEmitter {
             capabilities: runtimes.capabilitiesOf(runtime),
             agent: runtimes.agentOf(runtime),
             pinned: flags.pinned,
-            archived: flags.archived,
+            archived: isArchived(this.flags, m, flags),
             test: flags.test,
             // `registry` is the live process's own label, for a session whose
             // transcript produced no title at all — scanMeta falls back to
@@ -826,6 +856,20 @@ class SessionIndex extends EventEmitter {
         const { entries } = parseLines(buf);
         const before = codex.inherited(entries, { locate: (t) => this._codexFile(t) });
         return codex.branchPoint([...before, ...entries], id);
+    }
+
+    /** Every thread spawned under a Codex session, at any depth: id -> `{file}`. */
+    _codexDescendants(sessionId) {
+        const out = new Map();
+        const parents = [sessionId];
+        for (let i = 0; i < parents.length; i++) {
+            for (const [id, a] of this.codexAgents) {
+                if (out.has(id) || a.meta.parentThreadId !== parents[i]) continue;
+                out.set(id, { file: a.file });
+                parents.push(id);
+            }
+        }
+        return out;
     }
 
     /** A Codex session's spawned agents, in `subagents()`'s shape. */
@@ -1025,6 +1069,12 @@ class SessionIndex extends EventEmitter {
     toolImage(sessionId, toolUseId, n = 0) {
         const rec = this.sessions.get(sessionId);
         if (!rec || !rec.file) return null;
+        // A rollout's tool images are found through the image index, which is
+        // what knows which call each one came out of.
+        if (isCodex(rec)) {
+            const idx = this._imageIdx(sessionId);
+            return idx ? this.imageIndex.toolBytes(idx, toolUseId, n) : null;
+        }
         const found = toolResultImage(rec.file, toolUseId, n);
         if (found) return found;
         for (const entry of readSubagentIndex(path.join(rec.dir, sessionId)).values()) {
@@ -1053,7 +1103,8 @@ class SessionIndex extends EventEmitter {
     _imageIdx(sessionId) {
         const rec = this.sessions.get(sessionId);
         if (!rec || !rec.file) return null;
-        const agents = readSubagentIndex(path.join(rec.dir, sessionId));
+        const agents = isCodex(rec) ? this._codexDescendants(sessionId)
+            : readSubagentIndex(path.join(rec.dir, sessionId));
         return this.imageIndex.update(sessionId, rec.file, agents);
     }
 

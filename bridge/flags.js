@@ -10,6 +10,11 @@
 // Archiving never deletes anything. An archived session keeps its transcript and
 // stays reachable; it just moves out of the way.
 //
+// `restored` is the answer for a session that is archived by somebody else: a
+// Codex thread filed with `codex archive` is shown as archived (SessionIndex),
+// and taking it out of the archive here must not move Codex's file. So the
+// restore is remembered instead, and forgotten once Codex itself un-archives it.
+//
 // `test` is the odd one out: not a decision about a conversation so much as a
 // label saying it was never meant to be read. An agent working on this codebase
 // starts sessions to see whether the UI does what it claims, and those used to
@@ -58,9 +63,10 @@ const REFRESH_MS = 1000;
 /** How long a newly flagged id is spared by prune — SessionIndex's PENDING_TTL_MS. */
 const FRESH_MS = 5 * 60_000;
 
-/** An empty state: the four kinds of flag and when each id last gained one. */
+/** An empty state: the kinds of flag and when each id last gained one. */
 function emptyState() {
-    return { pinned: new Set(), archived: new Set(), test: new Set(), titles: new Map(), added: new Map() };
+    return { pinned: new Set(), archived: new Set(), test: new Set(), restored: new Set(),
+        titles: new Map(), added: new Map() };
 }
 
 /** Parse the file's text into a state. Throws on bad JSON; null for a foreign version. */
@@ -75,6 +81,7 @@ function parseState(raw) {
     // empty, which is why it did not need a version bump — bumping
     // would have thrown away everybody's pins to gain nothing.
     st.test = new Set(Array.isArray(data.test) ? data.test : []);
+    st.restored = new Set(Array.isArray(data.restored) ? data.restored : []);
     // The same again for `titles`: an object of id → name.
     if (data.titles && typeof data.titles === 'object') {
         for (const [id, t] of Object.entries(data.titles)) {
@@ -103,7 +110,11 @@ function applyOp(st, op) {
             if (op.on) { st.pinned.add(id); st.archived.delete(id); } else st.pinned.delete(id);
             break;
         case 'archived':
-            if (op.on) { st.archived.add(id); st.pinned.delete(id); } else st.archived.delete(id);
+            if (op.on) { st.archived.add(id); st.pinned.delete(id); st.restored.delete(id); }
+            else { st.archived.delete(id); st.restored.add(id); }
+            break;
+        case 'unrestore':
+            st.restored.delete(id);
             break;
         case 'test':
             if (op.on) st.test.add(id); else st.test.delete(id);
@@ -115,7 +126,7 @@ function applyOp(st, op) {
             st.added.set(id, op.at);
             break;
         case 'forget':
-            for (const set of [st.pinned, st.archived, st.test, st.titles, st.added]) set.delete(id);
+            for (const set of [st.pinned, st.archived, st.test, st.restored, st.titles, st.added]) set.delete(id);
             break;
     }
 }
@@ -194,6 +205,7 @@ class Flags {
                 pinned: [...this.pinned],
                 archived: [...this.archived],
                 test: [...this.test],
+                ...(this.restored.size && { restored: [...this.restored] }),
                 titles: Object.fromEntries(this.titles),
                 added: Object.fromEntries(this.added),
             }, null, 2));
@@ -220,6 +232,19 @@ class Flags {
     isTest(sessionId) {
         this.refresh();
         return this.test.has(sessionId);
+    }
+
+    /** Was this session taken out of an archive somebody else put it in? See the header. */
+    isRestored(sessionId) {
+        this.refresh();
+        return this.restored.has(sessionId);
+    }
+
+    /** The other archive let go of it, so a later one there counts again. */
+    clearRestored(sessionId) {
+        if (!this.restored.has(sessionId)) return;
+        this._record({ kind: 'unrestore', id: sessionId });
+        this.save();
     }
 
     /**
@@ -265,7 +290,7 @@ class Flags {
         this.refresh();
         const cutoff = Date.now() - freshMs;
         const ids = new Set();
-        for (const set of [this.pinned, this.archived, this.test, this.titles, this.added]) {
+        for (const set of [this.pinned, this.archived, this.test, this.restored, this.titles, this.added]) {
             for (const id of set.keys()) if (!liveIds.has(id)) ids.add(id);
         }
         let changed = false;
