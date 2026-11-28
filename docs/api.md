@@ -972,8 +972,15 @@ own:
 | `request_user_input` — the blocking question | `{questions: [{id, header, question, options: [{label, description}], multiSelect: false}]}` — AskUserQuestion's shape | `{text, answers}` — `answers` keyed by question text exactly as `AskUserQuestion`'s is. Its answer is a separate line on disk, so it can arrive later as a `tool-result` patch |
 | `update_plan` — the checklist | `{explanation: string\|null, plan: [{step: string, status: "pending"\|"in_progress"\|"completed"}]}` — the whole list as of this call, as `TodoWrite`'s input is. Codex 0.172.0 writes it to disk only inside the code-mode script that called it; the bridge reads it out of that, and a call whose argument was not a literal is not drawn. `GET …/tasks` reads the same rows | `{text: ""}` |
 | `Agent` — a spawned agent (a `SubAgentActivity` item) | `{description: string, prompt: "", subagent_type: null, agentPath: string\|null, threadId: string\|null}` — `description` the task name Codex gave it (`heron_reply` for `/root/heron_reply`); the prompt is encrypted on disk, so it is always `""` | `{text: string}` — `""`, or `"Interrupted"`. **`status` is `"pending"` while the agent runs**, and its end arrives later as a `tool-result` patch on the same id. **`id` is the agent's thread id**, which is the `toolUseId` `GET …/subagent` takes. `tool.agent` is the subagent descriptor below |
-| `web_search`, `mcp_tool_call`, `dynamic_tool_call`, `view_image`, `image_generation`, `sleep`, `spawn_agent` | kind-specific objects of strings and numbers (`spawn_agent` is one of the agent tools — `wait`, `sendInput`, `closeAgent`… — named in `input.tool`) | `{text: string}` |
+| `mcp_tool_call` — a call to an MCP server's tool, ours included | **`{server: string\|null, tool: string\|null, arguments: object\|null}`** — **the server and tool are separate fields**, not Claude's `mcp__<server>__<tool>` name. `{server: "tgxcode", tool: "message_session"}` is the call a Claude session writes as `mcp__tgxcode__message_session`, with `arguments` as its `input`; draw and match it as that name (the desktop does) | `{text: string}` — the tool's text content, or its error |
+| `web_search`, `dynamic_tool_call`, `view_image`, `image_generation`, `sleep`, `spawn_agent` | kind-specific objects of strings and numbers (`spawn_agent` is one of the agent tools — `wait`, `sendInput`, `closeAgent`… — named in `input.tool`) | `{text: string}` |
 
+- **A Codex `suggest_session` call is a `suggestion` event, not a tool row** — the same
+  card, with the same fields, a Claude session's makes, and its task is on
+  `GET /api/suggestions` the same way. Its `id` is the Codex item id.
+- **A Codex session has the tgxcode MCP tools** (`suggest_session`, `message_session`,
+  `wake_me_up`, a worker's `report_to_orchestrator`, …), run without a card, exactly as a
+  Claude session's are.
 - **An unknown Codex item kind is a `tool` named after the kind** (camelCase, e.g.
   `"somethingNew"`), with the item's fields as `input` and `result: {text: ""}`. It is
   never dropped and never an error.
@@ -2838,6 +2845,7 @@ label.
 | **`model`** | **string or null.** `null` is `inherit` — the session picks for itself. Not `""` |
 | **`effort`** | **string or null** — `low`, `medium`, `high`, `xhigh` or `max`, what `claude --effort` takes. `null` is `inherit`: no flag, so Claude's own `effortLevel` decides. Stored as written; an unknown level is dropped to `null` when it is started, not when it is saved. Absent on a row written before the field existed, which reads as `null` |
 | `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
+| **`runtime`** | **string**, `"claude"` or `"codex"` — the CLI the draft starts on (§*`runtime` and `capabilities`*). Never null: a row written before the field existed reads `"claude"`. With `"codex"`, `model` and `effort` are Codex's (`GET /api/models?runtime=codex`). Absent from an older bridge, which saved every draft as Claude's whatever was picked |
 | `test` | boolean — the flag the started session will get, not a property of the draft |
 | `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves; every write bumps `updatedAt` |
 
@@ -3304,6 +3312,7 @@ right thing to show and edit; it is just not byte-for-byte what the session is s
 | **`model`** | **string or null.** `null` is `inherit`. Not `""` |
 | **`effort`** | **string or null** — `low`, `medium`, `high`, `xhigh` or `max`, what `claude --effort` takes. `null` is `inherit`: no flag, so Claude's own `effortLevel` decides. Stored as written; an unknown level is dropped to `null` when it is delivered, not when it is saved. Absent on a row written before the field existed, which reads as `null` |
 | `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
+| **`runtime`** | **string**, `"claude"` or `"codex"` — the CLI every run starts on. Never null; a row from before the field existed reads `"claude"`. A Codex run's verdict is read from its last `agentMessage`, as a Claude run's is from its last reply (see `lastOutcome`). Absent from an older bridge |
 | `test` | boolean — the flag the started session will get |
 | `cron` | string, **five space-separated fields in the bridge's local timezone**: minute hour day-of-month month day-of-week. `*`, `N`, `a-b`, `*/n` and comma lists. Day-of-week 0 and 7 are both Sunday. **No** names (`MON`), `@daily`, `L`, `#` or `?` — those are refused, not ignored. When day-of-month and day-of-week are both restricted, a day matching **either** fires, which is crontab(5)'s rule |
 | **`once`** | **boolean.** `true` is a one-time schedule: cron has no year field, so the expression names a date (`0 17 29 8 *`) and this is what stops it coming round again next August. **It switches itself off the moment its slot passes** — `enabled` goes `false` whether the run happened or was missed. Pressing `POST /:id/run` does *not* spend it, because Run now does not touch `lastSlotAt`. A `once` on a repeating expression is accepted and coherent: it runs at the next slot and then stops. With an `open-prs` gate a spent one-time keeps a `sweepUntil` in the future for as long as its batch is still draining, so **`enabled: false` and an open window is a real, transient state** and not a contradiction — the row is finishing the slot that disabled it |
@@ -4745,8 +4754,10 @@ Codex refusing the cut (a turn still in progress, an id it does not know) is a
 
 ### `POST /api/drafts`
 
-`{cwd, prompt, model?, effort?, permissionMode?, test?, title?}` → `{draft}`, the row as
-`GET /api/drafts` describes it.
+`{cwd, prompt, model?, effort?, permissionMode?, runtime?, test?, title?}` → `{draft}`, the
+row as `GET /api/drafts` describes it. `runtime` is `POST /api/sessions`'s: absent or
+`""` is `"claude"`, and one the bridge cannot start is `400 {error: "unknown runtime: …"}`
+at save time, for the reason below.
 
 **Validated exactly as `POST /api/sessions` is, at save time.** This is the part worth
 knowing: the directory must exist, be a directory, and be inside the allowed roots
@@ -4771,7 +4782,9 @@ mean "decide later", it means the draft is saved as `auto`.
 
 ### `PATCH /api/drafts/:id`
 
-Any subset of `{cwd, prompt, model, effort, permissionMode, test, title}` → `{draft}`.
+Any subset of `{cwd, prompt, model, effort, permissionMode, runtime, test, title}` →
+`{draft}`. **Send `runtime` to change it** — absence leaves it alone, so switching a Codex
+draft back to Claude means sending `"claude"`.
 
 **A genuine partial.** A field left out of the body is left alone; only what you send is
 written. So saving an edited message does not restate the model and the mode, and cannot
@@ -4817,6 +4830,11 @@ read off a file — and therefore everything documented there applies:
 - **The new id is not readable for about two seconds.** `GET /api/sessions/:id` will
   `404` while `claude` writes its first line. Subscribe and wait for the first `tail`, or
   retry the read for ~15s before believing it.
+
+**A Codex draft answers with the id Codex minted**, as `POST /api/sessions` does for
+`runtime: "codex"`: the call waits (up to 30 s) for Codex to name the thread, and a start
+that fails before then is `502 {error, kind, unsent}` with the draft still listed —
+`kind` `"codex-signed-out"` when Codex is not signed in.
 
 **The draft is deleted only after the process starts.** A failure leaves it exactly
 where it was, which is the whole reason this is one route and not the client doing
@@ -5131,9 +5149,17 @@ notice.
 
 ### `POST /api/schedules`
 
-`{cwd, prompt, cron | at, once?, gate?, title?, model?, effort?, permissionMode?, test?,
-enabled?, seed?, fromDraft?, from?}` → `{schedule}`, the row as `GET /api/schedules`
-returns it.
+`{cwd, prompt, cron | at, once?, gate?, title?, model?, effort?, permissionMode?, runtime?,
+test?, enabled?, seed?, fromDraft?, from?}` → `{schedule}`, the row as `GET /api/schedules`
+returns it. `runtime` is read as on `POST /api/drafts` (absent is `"claude"`, unknown is
+`400`); `PATCH` changes it only when sent.
+
+**A `runtime: "codex"` run** starts a Codex thread with the filled prompt. The session it
+records (`lastSessionId`, `sessionIds`) is the id Codex minted, and a start that fails
+before Codex names it (signed out, say) is recorded as a skip — `lastSkipReason:
+"error"`, `lastError` the reason — with the marker left where it was. Its `VERDICT:` line is read from the turn's last
+`agentMessage`. A Claude skill named at the head of the prompt (`/adversarial-reviewer …`)
+is plain text to Codex, so a Codex gate wants a prompt written out in full.
 
 **A run is named after its schedule** without a flag being set: a session a schedule
 started lists as `"<schedule title> - <M/D/YY>"` with `titleSource: "schedule"` (see
@@ -6584,6 +6610,13 @@ on inherit) and choose the prompt (to add context), the title and the worktree. 
 worker's `origin` then says where it came from, and so does its brief. A test task
 makes a test worker, as a test orchestrator does.
 
+**A task's `runtime` is the user's too.** A Codex draft (or the dialog with Codex picked)
+becomes a task with `runtime: "codex"` and starts a **Codex worker**; its model and effort
+are the task's or Codex's default, never a Claude model the orchestrator named or
+Settings fixes for workers. Its worker id — in `spawn`'s reply, `list_workers` and the
+inbox — is the one Codex minted. The orchestrator itself still runs on Claude:
+`POST /api/sessions` refuses `orchestrator: true` with `runtime: "codex"` (`400`).
+
 A task is never silently lost. An open one — `new`, or `read` but not started — is never
 trimmed from the inbox. Taking it back (below) makes it a draft again, and so does
 the orchestrator going away: `PUT …/orchestrator {enabled: false}` and deleting the
@@ -6600,7 +6633,7 @@ that fails after claiming it gives it back as `read`.
 #### `POST /api/sessions/:id/orchestrator/tasks`
 
 `{draftId?: string, fields?: {cwd, prompt, title?, model?, effort?, permissionMode?,
-test?, worktree?: {name: string, base?: string}}}` → `{ok: true, item, paused: boolean,
+runtime?, test?, worktree?: {name: string, base?: string}}}` → `{ok: true, item, paused: boolean,
 draftRemoved: boolean}`.
 
 - **`draftId` alone** uses the stored draft. **`fields` alone** is a create call from a

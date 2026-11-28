@@ -85,6 +85,9 @@ function clean(row) {
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
+        // Which CLI it starts on: `"claude"` or `"codex"`, never null. A row from
+        // before this field existed is a Claude draft, which is what it was.
+        runtime: row.runtime,
         test: row.test,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
@@ -96,6 +99,11 @@ function orNull(v) {
     if (typeof v !== 'string') return null;
     const s = v.trim();
     return s || null;
+}
+
+/** A stored runtime name, or Claude's for none. */
+function runtimeOf(v) {
+    return typeof v === 'string' && v.trim() ? v.trim() : 'claude';
 }
 
 /** Newest-updated first, which is the order a client draws them in. */
@@ -141,6 +149,9 @@ function read() {
                 // list of modes is ever renamed upstream.
                 permissionMode: typeof row.permissionMode === 'string'
                     ? row.permissionMode : 'auto',
+                // Not checked against the runtimes here, for the mode's reason:
+                // the start route asks `runtimes.known` before it spawns.
+                runtime: runtimeOf(row.runtime),
                 test: !!row.test,
                 createdAt: Number.isFinite(row.createdAt) ? row.createdAt : 0,
                 updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
@@ -267,7 +278,7 @@ class Drafts {
      * really been waiting. The id is only reused when nothing here holds it; a
      * clash gets a fresh one rather than overwriting whatever has it now.
      */
-    create({ cwd, prompt, title, model, effort, permissionMode, test } = {}, restore = null) {
+    create({ cwd, prompt, title, model, effort, permissionMode, runtime, test } = {}, restore = null) {
         if (this.rows.length >= MAX_DRAFTS) return null;
         const now = this._stamp();
         const oldId = restore && typeof restore.id === 'string' && restore.id
@@ -285,6 +296,7 @@ class Drafts {
             model: orNull(model),
             effort: orNull(effort),
             permissionMode: String(permissionMode || 'auto'),
+            runtime: runtimeOf(runtime),
             test: !!test,
             // The same stamp for both, so a draft nobody has edited reads as
             // untouched rather than as edited the instant it was made. A
@@ -318,6 +330,7 @@ class Drafts {
         if (fields.permissionMode !== undefined) {
             row.permissionMode = String(fields.permissionMode);
         }
+        if (fields.runtime !== undefined) row.runtime = runtimeOf(fields.runtime);
         if (fields.test !== undefined) row.test = !!fields.test;
 
         // `createdAt` is deliberately untouched: it is when you first wrote this

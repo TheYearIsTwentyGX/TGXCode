@@ -58,8 +58,24 @@ function orchestratorToolSummary(tool, i) {
     }
 }
 
+/**
+ * A Codex MCP call in Claude's shape: `{name: "mcp_tool_call", input: {server,
+ * tool, arguments}}` becomes `{name: "mcp__<server>__<tool>", input: arguments}`,
+ * so its row, its summary and the `__message_session` and orchestrator cases in
+ * toolSummary read a Codex session's calls to our tools exactly as a Claude
+ * one's. Anything else comes back as it was. bridge/mcp-calls.js is the bridge's
+ * half of the same reading.
+ */
+export function asMcpCall(ev) {
+    const i = ev && ev.name === 'mcp_tool_call' && ev.input;
+    if (!i || typeof i.server !== 'string' || typeof i.tool !== 'string' || !i.server || !i.tool) return ev;
+    const args = i.arguments && typeof i.arguments === 'object' && !Array.isArray(i.arguments) ? i.arguments : {};
+    return { ...ev, name: `mcp__${i.server}__${i.tool}`, input: args };
+}
+
 /** One-line summary of what a tool call is doing, shown on the collapsed row. */
 export function toolSummary(ev) {
+    ev = asMcpCall(ev);
     const i = ev.input || {};
 
     // Handing work to another session. Before the switch because the CLI prefixes
@@ -145,7 +161,7 @@ export function renderTool(ev) {
 
     const det = el('details', { class: 'tool', 'data-status': status },
         el('summary', {},
-            el('span', { class: 'tname', title: ev.name }, toolDisplayName(ev.name)),
+            el('span', { class: 'tname', title: ev.name }, toolDisplayName(asMcpCall(ev).name)),
             el('span', { class: 'targ' }, summary),
             el('span', { class: 'tmeta' },
                 [status === 'pending' ? 'running' : '', dur(ev.durationMs)]

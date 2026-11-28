@@ -33,6 +33,7 @@ const { createWorktree } = require('../worktree');
 const { cleanTitle } = require('../flags');
 const fileSearch = require('../file-search');
 const runtimes = require('../runtimes');
+const { MINT_WAIT_MS, mintedId } = require('../minted');
 
 // Handed over by server.js — see the note above ROUTES there.
 let CREATE_LIMIT = null;
@@ -184,7 +185,10 @@ async function handle(req, res, url, pathname, seg, who) {
         }
         // An orchestrator's role decides its argv before the process starts, keyed
         // by an id this route mints — and a Codex session's id is not known until
-        // Codex names it. So neither half of an orchestration runs on Codex yet.
+        // Codex names it, so an orchestrator does not run on Codex yet. A *worker*
+        // can: a Codex draft handed to an orchestrator is spawned on Codex, and
+        // bridge/orchestration.js re-keys the worker when Codex names it.
+        // docs/plans/23-codex.md, Phase 4, says what an orchestrator still needs.
         if (runtime !== runtimes.DEFAULT && body.orchestrator === true) {
             return send(res, 400, { error: `an orchestrator cannot run on ${runtime} yet` });
         }
@@ -413,35 +417,5 @@ async function handle(req, res, url, pathname, seg, who) {
     return NEXT;
 }
 
-
-// How long a create waits for a runtime to name the session it started. Codex
-// answers `thread/start` in tens of milliseconds once it is up; the time is in
-// spawning it and the handshake, a second or two, more on a cold machine.
-const MINT_WAIT_MS = 30_000;
-
-/**
- * The id a runtime minted for the session `r` was started for: `{id}`, or
- * `{error, kind, unsent}` when the start failed or took too long. A runner whose
- * id is not a placeholder (it already moved) answers at once.
- */
-function mintedId(r, ms) {
-    if (!r) return Promise.resolve({ error: 'the session did not start', kind: 'unknown' });
-    return new Promise((resolve) => {
-        const done = (v) => {
-            clearTimeout(timer);
-            r.off('minted', onMint);
-            r.off('failed', onFail);
-            resolve(v);
-        };
-        const onMint = ({ to }) => done({ id: to });
-        const onFail = (f) => done({ error: f.message || 'the session did not start', kind: f.kind, unsent: f.unsent });
-        const timer = setTimeout(() => done({
-            error: `${r.adapter.product} did not open the conversation within ${Math.round(ms / 1000)}s`,
-            kind: 'unknown',
-        }), ms);
-        r.on('minted', onMint);
-        r.on('failed', onFail);
-    });
-}
 
 module.exports = { init, handle };

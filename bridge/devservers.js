@@ -535,6 +535,14 @@ function cwdOf(pid) {
  * terminal pane, where the bridge's inherited CLAUDE_CODE_SESSION_ID (if the
  * bridge was itself started from a session) would name the wrong session.
  *
+ * A Codex session's commands carry both of Codex's: TGXCODE_SESSION_ID, which the
+ * bridge sets through `shell_environment_policy` when it resumes a thread, and
+ * CODEX_THREAD_ID, which Codex sets on every command itself — the only one a
+ * brand-new thread has, since its id is not known until Codex has minted it (see
+ * threadConfig in bridge/runtimes/codex/process.js). A thread id is a session id
+ * here, so CODEX_THREAD_ID ranks above CLAUDE_CODE_SESSION_ID for the pane's
+ * reason: a Codex command can inherit the latter from whatever started the bridge.
+ *
  * Reading another user's environ is EACCES, and a pid can be gone by the time
  * it is read. Both give null, and the caller falls back to the cwd.
  */
@@ -542,11 +550,13 @@ function sessionOf(pid) {
     let environ;
     try { environ = fs.readFileSync(`/proc/${pid}/environ`, 'utf8'); } catch { return null; }
     let claude = null;
+    let codex = null;
     for (const kv of environ.split('\0')) {
         if (kv.startsWith('TGXCODE_SESSION_ID=')) return kv.slice(19) || null;
+        if (kv.startsWith('CODEX_THREAD_ID=')) codex = kv.slice(16) || null;
         if (kv.startsWith('CLAUDE_CODE_SESSION_ID=')) claude = kv.slice(23) || null;
     }
-    return claude;
+    return codex || claude;
 }
 
 /**

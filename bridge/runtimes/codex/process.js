@@ -75,8 +75,11 @@
 //     (bridge/codex/skills.js) goes as `{type:"skill", name, path}` beside the
 //     text `$name args`, as Codex's own clients send one.
 //
-// Kept out of here, for the rest of Phase 4: the tgxcode MCP server in the thread
-// `config`.
+//   - **Our MCP server rides in the thread `config`**: bridge/mcp.js as
+//     `mcp_servers.tgxcode` on `thread/start`, `thread/resume` and `thread/fork`,
+//     with `default_tools_approval_mode = "approve"` standing in for Claude's
+//     `--allowedTools mcp__tgxcode__*` — the same tools, the same reason (see
+//     AGENT_TOOLS in bridge/runtimes/claude/process.js). See `threadConfig`.
 
 const path = require('path');
 
@@ -220,9 +223,86 @@ function codexEnv({ sudo: sudoAccess = null } = {}) {
     const env = { ...process.env };
     deleteBoth(env, 'PORT');
     delete env.TGXCODE_SESSION_ID;
+    // A bridge started from a Claude session's shell carries that session's id,
+    // and devservers.js would attribute this thread's servers to it. Codex sets
+    // CODEX_THREAD_ID on its commands itself.
+    delete env.CLAUDE_CODE_SESSION_ID;
     sudo.applyEnv(env, sudoAccess);
     env.TGXCODE_SECRETS_PORT = String(cfg.PORT);
     return env;
+}
+
+const MCP_JS = path.join(__dirname, '..', '..', 'mcp.js');
+const PREVIEW_MCP_JS = path.join(__dirname, '..', '..', 'preview-mcp.js');
+
+// What an MCP server is handed of our environment. Codex starts one with a short
+// list of its own (HOME, PATH and the like) rather than its own environment —
+// measured on 0.172.0: nothing of the bridge's reached the server — so a bridge
+// running with its own XDG_DATA_HOME, which is how every test bridge runs, would
+// otherwise have mcp.js read the everyday bridge's token and be refused. The
+// state and cache roots are all bridge/config.js derives a path from.
+const MCP_ENV_KEYS = ['XDG_DATA_HOME', 'XDG_CACHE_HOME'];
+
+/**
+ * The thread `config` overrides every `thread/start` and `thread/resume` carries:
+ * our MCP server, and the session's id in its shells' environment.
+ *
+ * **The MCP server.** bridge/mcp.js, as `mcp_servers.tgxcode`, with the port and
+ * role it is given under Claude, and `default_tools_approval_mode = "approve"` in
+ * place of `--allowedTools`: `approve` is the identity in Codex's `restrict_to`,
+ * the least restrictive of the four modes, and measured to run a tool unasked. The
+ * dotted key adds one server and leaves the user's own `mcp_servers` alone, as
+ * `--mcp-config` without `--strict-mcp-config` does.
+ *
+ * **Which session it is, though, is learned per call.** A new thread's id is
+ * Codex's to mint, and it is minted by the very `thread/start` that starts the
+ * server — so there is no id to put on its command line, and a thread with no
+ * rollout yet cannot be resumed to give it one ("no rollout found", measured).
+ * Codex puts the thread's id on every tool call instead (`_meta.threadId`), and
+ * `--session-from-call` tells mcp.js to take it from there. That is also right for
+ * a resumed thread, which still gets `--session` for the moment before its first
+ * call.
+ *
+ * **The shell environment.** `TGXCODE_SESSION_ID` through
+ * `shell_environment_policy.set`, so a dev server a Codex session starts is
+ * attributed to it (bridge/devservers.js). Only on a resume, because only then is
+ * the id ours to give (a fork's is Codex's, like a new thread's); a new thread's
+ * commands carry `CODEX_THREAD_ID`, which
+ * Codex sets itself (measured), and devservers.js reads that too.
+ */
+function threadConfig(o = {}) {
+    const env = {};
+    for (const k of MCP_ENV_KEYS) if (process.env[k]) env[k] = process.env[k];
+    const withEnv = Object.keys(env).length ? { env } : {};
+    // A fork is a new thread too: `sessionId` is the parent's, and the copy's id
+    // comes back from `thread/fork`, so it is learned from the call like a new one's.
+    const known = !o.isNew && !o.fork && o.sessionId ? o.sessionId : null;
+    const config = {
+        'mcp_servers.tgxcode': {
+            command: process.execPath,
+            args: [
+                MCP_JS, '--port', String(cfg.PORT),
+                ...(known ? ['--session', known] : []),
+                '--session-from-call',
+                ...(o.role ? ['--role', o.role] : []),
+                ...(o.preview ? ['--preview'] : []),
+            ],
+            default_tools_approval_mode: 'approve',
+            ...withEnv,
+        },
+    };
+    // The browser preview's server, on the same terms as for Claude: turning
+    // `preview.agentControl` on is the consent, so its tools run unasked.
+    if (o.preview) {
+        config['mcp_servers.preview'] = {
+            command: process.execPath,
+            args: [PREVIEW_MCP_JS, '--port', String(cfg.PORT)],
+            default_tools_approval_mode: 'approve',
+            ...withEnv,
+        };
+    }
+    if (known) config['shell_environment_policy.set.TGXCODE_SESSION_ID'] = known;
+    return config;
 }
 
 /**
@@ -362,7 +442,7 @@ class CodexAdapter {
             sandbox: s.sandbox,
             approvalsReviewer: s.reviewer,
             ...(this.systemPrompt && { developerInstructions: this.systemPrompt }),
-            config: { ...THREAD_CONFIG },
+            config: { ...THREAD_CONFIG, ...threadConfig(o) },
         };
         if (o.fork) {
             // A copy, or a copy cut before a turn. The new thread's id comes back
@@ -822,4 +902,5 @@ module.exports = {
     Adapter: CodexAdapter, CodexAdapter,
     MODES, POLICY, THREAD_CONFIG,
     decisionOf, unwrapCommand, describeItem, inputFor, questionsFrom, asyncQuestionsFrom, codexEnv, versionOf,
+    threadConfig,
 };

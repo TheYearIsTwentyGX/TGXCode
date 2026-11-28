@@ -415,7 +415,7 @@ function harness(name) {
     });
     assert.deepStrictEqual(t, {
         prompt: 'Fix the thing', cwd: '/w', title: null, model: 'haiku', effort: 'low',
-        permissionMode: 'plan', test: true, worktree: { name: 'wt', base: 'main' },
+        permissionMode: 'plan', runtime: 'claude', test: true, worktree: { name: 'wt', base: 'main' },
         origin: { from: 'draft', draftId: 'D1', draftCreatedAt: null, title: 'Fix' },
     }, 'only the known fields, cleaned');
     assert.strictEqual(cleanTask({ prompt: '', cwd: '/w' }), null, 'no prompt is no task');
@@ -431,7 +431,8 @@ function harness(name) {
         origin: { from: 'draft', draftId: 'D', title: 'Mine' } };
     const a = spawnOptsFromTask(task, {});
     assert.deepStrictEqual(a, { prompt: 'user words', title: 'Mine', cwd: '/w', model: 'haiku', effort: null,
-        permissionMode: 'plan', worktree: 'named', worktreeBase: 'dev', test: true, origin: task.origin });
+        permissionMode: 'plan', worktree: 'named', worktreeBase: 'dev', test: true, origin: task.origin,
+        runtime: 'claude' });
     const b = spawnOptsFromTask(task, { prompt: 'with context', title: 'Theirs', cwd: '/elsewhere',
         model: 'opus', effort: 'high', permissionMode: 'auto', worktree: false });
     assert.strictEqual(b.prompt, 'with context', 'the orchestrator may add context');

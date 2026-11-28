@@ -328,6 +328,9 @@ function cleanTask(t) {
         model: str(t.model, 100) || null,
         effort: str(t.effort, 40) || null,
         permissionMode: str(t.permissionMode, 40) || 'auto',
+        // The agent the user picked for it — a Codex draft handed over starts a
+        // Codex worker. Claude for a task filed before tasks carried one.
+        runtime: str(t.runtime, 40) || 'claude',
         test: !!t.test,
         worktree: wt,
         origin: cleanOrigin(t.origin),
@@ -362,6 +365,8 @@ function spawnOptsFromTask(task, opts = {}) {
         worktreeBase: !theirsTree && task.worktree ? task.worktree.base || null : null,
         test: !!task.test,
         origin: task.origin || null,
+        // The user's, like the model: an orchestrator is not asked which agent.
+        runtime: task.runtime || 'claude',
     };
 }
 
@@ -894,6 +899,25 @@ class Orchestrators {
         this.workerOf.set(row.id, orchId);
         this._touch(o);
         return row;
+    }
+
+    /**
+     * A worker's session was given its id by its runtime (Codex mints the thread
+     * id at `thread/start`; see bridge/minted.js), so the row filed under the
+     * placeholder it was spawned with moves to the real one. True when there was
+     * such a worker. Nothing else names it yet: a worker files nothing before its
+     * first turn, and its first turn waits for the id.
+     */
+    rekeyWorker(from, to) {
+        const orchId = this.workerOf.get(from);
+        const o = orchId && this.byId.get(orchId);
+        const w = o && o.workers.find(x => x.id === from);
+        if (!w || from === to) return false;
+        w.id = to;
+        this.workerOf.delete(from);
+        this.workerOf.set(to, orchId);
+        this._touch(o);
+        return true;
     }
 
     worker(orchId, workerId) {

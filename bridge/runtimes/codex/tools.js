@@ -8,6 +8,7 @@
 // (`exec_command`, `apply_patch`), so this table and that one move together.
 
 const { TOOL } = require('../../codex/items');
+const { toolDisplayName } = require('../../tool-name');
 
 /**
  * The tool rows the turn rail marks, and as what. A Codex plan turn ends in a
@@ -38,6 +39,10 @@ function describeTool(block) {
         case 'request_user_input': return 'Asking you a question';
         case TOOL.webSearch: return 'Searching the web';
         case TOOL.sleep: return 'Waiting';
+        // Named the way a Claude session's call to the same tool is:
+        // `Running TGXCode: Suggest Session`.
+        case TOOL.mcp: return input.server && input.tool
+            ? `Running ${toolDisplayName(`mcp__${input.server}__${input.tool}`)}` : 'Running an MCP tool';
         default: return `Running ${block.name}`;
     }
 }

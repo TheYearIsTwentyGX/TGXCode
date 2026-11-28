@@ -101,7 +101,14 @@ function flag(name) {
 }
 
 const PORT = Number(flag('port')) || 0;
-const SESSION_ID = flag('session') || null;
+let SESSION_ID = flag('session') || null;
+// Take this session's id from each call rather than trusting `--session` alone:
+// Codex names a new thread in the same `thread/start` that starts this server, so
+// there is no id to give it on the command line, and it sends the thread's id on
+// every call as `_meta.threadId` (measured on 0.172.0). Opt-in, so a Claude
+// session — whose `_meta` says nothing of the kind — behaves exactly as before.
+// See threadConfig in bridge/runtimes/codex/process.js.
+const SESSION_FROM_CALL = process.argv.includes('--session-from-call');
 // 'orchestrator', 'worker' or null — which extra tools to list. See
 // bridge/orchestrators.js. Fixed at spawn: the CLI reads the list once.
 const ROLE = flag('role') || null;
@@ -1913,6 +1920,10 @@ async function handle(msg) {
     if (method === 'tools/list') return reply(id, { tools: await toolsList() });
 
     if (method === 'tools/call') {
+        const meta = params && params._meta;
+        if (SESSION_FROM_CALL && meta && typeof meta.threadId === 'string' && meta.threadId) {
+            SESSION_ID = meta.threadId;
+        }
         const name = params && params.name;
         const args = (params && params.arguments) || {};
         if (name === 'tgxcode_guide') return callGuide(id, args);

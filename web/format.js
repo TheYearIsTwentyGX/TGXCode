@@ -123,3 +123,12 @@ export function clip(s, n) {
  * extra digits are noise on every chip and badge this section draws.
  */
 export const hhmm = (ts) => (ts ? hourMinute(new Date(ts)).join('') : '');
+
+/**
+ * `codex` → `Codex`: a draft's or schedule's `runtime` as its card's meta line
+ * says it. Only a stored row's name; a live session says `agent.name`.
+ */
+export function agentWord(runtime) {
+    const r = String(runtime || 'claude');
+    return r.charAt(0).toUpperCase() + r.slice(1);
+}
