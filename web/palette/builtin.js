@@ -16,10 +16,12 @@
 // an app.js binding at module top level, only when a function is called.
 
 import { state } from '../state.js';
-import { dom, toast } from '../dom.js';
-import { openPreviewPages, previewPane, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
+import { copyText, dom, toast } from '../dom.js';
+import { openPreviewPages, previewPane, resumeCommand, scrollToEnd, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
+import { jumpToTurn } from '../transcript/turn-rail.js';
+import { collapseAllTools } from '../transcript/tools.js';
 import { openComposerFind } from '../composer/find.js';
 import { SETTINGS } from '../settings/general.js';
 import { openSettingsAt } from '../settings/index.js';
@@ -27,6 +29,7 @@ import { clickCommand } from '../commands.js';
 import { openInDevBrowser } from '../channels.js';
 import { showPhoneInstalls } from '../phone-installs.js';
 import { registerAction, registerSource } from './registry.js';
+import { railAllShut, toggleAllGroups } from '../rail.js';
 
 const shown = (node) => !!node && !node.hidden && !node.disabled;
 // For the bar's pills, which can also be folded into the overflow menu; a pill
@@ -114,6 +117,39 @@ export function registerBuiltins() {
         when: () => !!state.current, run: () => startRename(state.current),
     });
     registerAction({
+        id: 'session.copyId', group: 'Actions', title: 'Copy session ID', keywords: 'uuid clipboard',
+        when: () => !!state.current, run: () => copyText(state.current.sessionId, 'Session ID'),
+    });
+    registerAction({
+        id: 'session.copyResume', group: 'Actions', title: 'Copy resume command',
+        keywords: 'terminal shell continue clipboard cli',
+        when: () => !!resumeCommand(state.current),
+        run: () => copyText(resumeCommand(state.current), 'Resume command'),
+    });
+    // Getting back to the end after scrolling up mid-turn was a long scroll, and
+    // the start of a long session needed the turn rail. Pinned again on the
+    // way down, so what streams in next follows you as it did.
+    registerAction({
+        id: 'conversation.latest', group: 'Actions', title: 'Jump to latest message',
+        keywords: 'bottom end newest scroll', when: () => !!state.current && !state.agent,
+        run: () => { state.pinned = true; scrollToEnd(false); },
+    });
+    registerAction({
+        id: 'conversation.first', group: 'Actions', title: 'Jump to first message',
+        keywords: 'top start oldest beginning scroll', when: () => !!state.current && !state.agent,
+        // Through the turn rail, which loads the earlier stretch it is in first.
+        run: () => (state.turns.length ? jumpToTurn(state.turns[0]) : (dom.scroll.scrollTop = 0)),
+    });
+    registerAction({
+        id: 'conversation.collapseTools', group: 'Actions', title: 'Collapse all tool calls',
+        keywords: 'fold close shut tools output', when: () => !!state.current,
+        run: () => {
+            const { tools, runs } = collapseAllTools();
+            toast(tools ? `Collapsed ${tools === 1 ? 'one tool call' : `${tools} tool calls`}.`
+                : runs ? 'Folded the open runs of tool calls.' : 'No tool calls are open.');
+        },
+    });
+    registerAction({
         id: 'find.open', group: 'Actions', title: 'Find in conversation', command: 'find.open',
         when: () => !!state.current, run: () => openFind(),
     });
@@ -155,6 +191,11 @@ export function registerBuiltins() {
         id: 'rail.hideDone', group: 'Actions', keywords: 'rail filter',
         title: () => (state.hideDone ? 'Show finished sessions' : 'Hide finished sessions'),
         when: () => onScreen(dom.hideDone), run: () => dom.hideDone.click(),
+    });
+    registerAction({
+        id: 'rail.collapseAll', group: 'Actions', keywords: 'rail fold groups projects expand',
+        title: () => (railAllShut() ? 'Expand all rail groups' : 'Collapse all rail groups'),
+        run: () => toggleAllGroups(),
     });
 
     // ── what the open session has ──

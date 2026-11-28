@@ -498,7 +498,7 @@ project filter on `GET /api/sessions?project=`.
 | `prs` | array of `{number, url, repo}`, empty if none |
 | `runtime` | string — the CLI that wrote this conversation: `"claude"`, or `"codex"` for a Codex thread. See §*`runtime` and `capabilities`* |
 | **`capabilities`** | **object** of booleans — what a client may offer on this session, **on every row whether or not a process is live**. Same object as on `GET /api/sessions/:id`. Absent from a bridge older than Codex sessions, where every flag is true |
-| `agent` | **object** `{name: string, product: string}` — what to call this session's agent (§*`runtime` and `capabilities`*). Absent from an older bridge, where it is `{name: "Claude", product: "Claude Code"}` |
+| `agent` | **object** `{name: string, product: string, resume: [string] \| null}` — what to call this session's agent, and the argv that reopens it in a terminal (§*`runtime` and `capabilities`*). Absent from an older bridge, where it is `{name: "Claude", product: "Claude Code", resume: ["claude", "--resume"]}` |
 | **`context`** | **object or absent** — `{usedTokens: number, windowTokens: number\|null}`, how full the model's context window was after the session's last request, read from its transcript. Present on Codex sessions that have run a turn; **absent for Claude**. See §*Context use* |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — six fields plus `runtime` and `capabilities`, see below |
@@ -822,15 +822,20 @@ written today, as long as the client reads the flags.
 - **A Codex session is otherwise an ordinary session**: send, queue, stop, pin,
   archive, rename (`flags`), the terminal pane, `range`, `since`, `changes` and the
   `turns[]` index all work.
-- **`agent`** — **object** `{name: string, product: string}`, beside `runtime` on
+- **`agent`** — **object** `{name: string, product: string, resume: [string] | null}`, beside `runtime` on
   `GET /api/sessions/:id`, on every session summary and on the full `runner-status`
   payload (**not** on the narrow `runner` of `GET /api/sessions` and
   `GET /api/dashboard` rows — read the row's own `agent` there). What to call the
   agent: `name` is who speaks (`"Claude"`, `"Codex"` — the transcript's reply
   heading, "waiting for Codex's next step"), `product` the program a version
   belongs to (`"Claude Code"`, `"Codex"`). Label with these rather than a table of
-  runtime names of your own. Absent from an older bridge: then it is Claude's,
-  `{name: "Claude", product: "Claude Code"}`.
+  runtime names of your own. `resume` is the argv that reopens the session in a
+  terminal **with the session id appended** — `["claude", "--resume"]`,
+  `["codex", "resume"]` — or `null` for a runtime with no such command; run it in
+  the session's `cwd`, because `claude --resume` finds a session through the
+  directory it is run in. Added after `name` and `product`: an `agent` object
+  without it means no resume command is known. Absent from an older bridge: then
+  it is Claude's, `{name: "Claude", product: "Claude Code", resume: ["claude", "--resume"]}`.
 - **Codex's version rides in `runner.claudeVersion`**, the field that has always
   meant "the version of the CLI running this process". `GET /api/claude-version`'s
   `staleSessions` counts Claude runners only, and `GET /api/codex-version`'s counts
@@ -2470,6 +2475,16 @@ reading a file and never written back. Modifiers are written in the order
 the composer — a `<textarea>` — has the focus, so binding a bare letter would
 make that letter untypeable with hand-editing the settings file as the only way
 back. `Shift+F3` is legal; `Shift+K` is not.
+
+**The catalogue grows; a client keys on `id` and never on position or count.**
+Four walks — `session.next` / `session.prev` (`Alt+Down` / `Alt+Up`, the next or
+previous row in the rail as drawn) and `turn.next` / `turn.prev`
+(`Alt+PageDown` / `Alt+PageUp`, the next or previous message you sent) — are the
+exception to "fires while the composer has the focus": the web UI ignores them
+while the focus is in an `<input>`, `<textarea>`, `<select>` or editable element,
+in the terminal, or on a widget that has already answered the key (a queued
+message moves itself with `Alt+Up`), because Alt and an arrow belong to the field
+there.
 
 The same catalogue is in a `tgx-keymap` `<meta>` tag on every page, percent-encoded
 like `tgx-prefs`, because the first key somebody presses can land before a fetch
@@ -4553,7 +4568,7 @@ down from:
 | `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
 | **`runtime`** | string — the CLI this session runs on: `"claude"` or `"codex"`. See §*`runtime` and `capabilities`* |
 | **`capabilities`** | **object** of booleans — `{fork, branchFromTurn, planMode, askUser, peers, tasks, scratchpad, slashCommands, steer, images, allowForSession, send, delete, updateCheck}`, all `true` for `"claude"`; a missing flag means true. Same object as on `GET /api/sessions/:id`; see §*`runtime` and `capabilities`* |
-| **`agent`** | **object** `{name: string, product: string}` — what to call this CLI (`"Codex"`/`"Codex"`, `"Claude"`/`"Claude Code"`); see §*`runtime` and `capabilities`* |
+| **`agent`** | **object** `{name: string, product: string, resume: [string] \| null}` — what to call this CLI (`"Codex"`/`"Codex"`, `"Claude"`/`"Claude Code"`) and the argv that resumes one of its sessions, id appended; see §*`runtime` and `capabilities`* |
 | `effort` | string or null — the `--effort` the process was started with, `null` for none. **Only here**: the transcript does not record it, so no session summary carries it, and a session with no process has nothing to report |
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |

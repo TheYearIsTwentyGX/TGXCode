@@ -126,9 +126,16 @@ const CODEX_CAPABILITIES = Object.freeze({
  * What a client calls each runtime, so no client keeps its own table of names:
  * `name` is who said something ("Claude", "Codex"), `product` the program a
  * version belongs to ("Claude Code", "Codex"). Sent as `agent` beside `runtime`.
+ *
+ * `resume` is the argv that reopens a session in a terminal, with the session's
+ * id appended — what Copy resume command puts on the clipboard. Both CLIs take
+ * the id as the argument after it (`claude --resume <id>`, `codex resume <id>`
+ * as of 0.172). null for a runtime with no such command.
  */
-const CLAUDE_AGENT = Object.freeze({ name: 'Claude', product: 'Claude Code' });
-const CODEX_AGENT = Object.freeze({ name: 'Codex', product: 'Codex' });
+const CLAUDE_AGENT = Object.freeze({ name: 'Claude', product: 'Claude Code',
+    resume: Object.freeze(['claude', '--resume']) });
+const CODEX_AGENT = Object.freeze({ name: 'Codex', product: 'Codex',
+    resume: Object.freeze(['codex', 'resume']) });
 
 const RUNTIMES = {
     claude: {
@@ -209,7 +216,7 @@ function capabilitiesOf(name) {
  */
 function agentOf(name) {
     const r = describe(name);
-    return r.agent || Object.freeze({ name: r.name, product: r.name });
+    return r.agent || Object.freeze({ name: r.name, product: r.name, resume: null });
 }
 
 /** The tool tables for a runtime name. */

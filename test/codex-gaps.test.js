@@ -117,7 +117,7 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
         const hit = said.sessions.find(s => s.sessionId === images.id);
         assert.ok(hit, 'what you typed is found');
         assert.strictEqual(hit.runtime, 'codex');
-        assert.deepStrictEqual({ ...hit.agent }, { name: 'Codex', product: 'Codex' });
+        assert.deepStrictEqual({ ...hit.agent }, { name: 'Codex', product: 'Codex', resume: ['codex', 'resume'] });
         // The turn is the turn rail's: same id, same offset.
         const mark = new TurnIndex(path.join(TMP, 'turns'))
             .update(images.id, images.file, { runtime: 'codex' }).marks.find(m => m.kind === 'turn');

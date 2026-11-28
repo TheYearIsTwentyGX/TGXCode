@@ -54,6 +54,7 @@ import {
 import { openSession } from './transcript/conversation.js';
 import { stalledBadge, StopButton } from './boards/parts.js';
 import { flipAll } from './motion.js';
+import { allShut } from './rail-nav.js';
 
 /**
  * Draw the rail into #rail. Called only by renderRail() in app.js, which paints
@@ -85,6 +86,29 @@ export function drawRail() {
     return finished;
 }
 
+// The cards the last render drew, top-level and nested, for Collapse/Expand
+// all. Each is `{ key, holdsOpen }`: `holdsOpen` is a card whose state lives in
+// `schedOpen` (default shut) rather than `collapsed` — see `isOpen`.
+let drawnCards = { top: [], nested: [] };
+
+const shutNow = (g) => (g.holdsOpen ? !state.schedOpen.has(g.key) : state.collapsed.has(g.key));
+
+/** Is every card of this kind on screen shut? False when there are none. */
+export function railAllShut(nested = false) {
+    return allShut(drawnCards[nested ? 'nested' : 'top'], shutNow);
+}
+
+/**
+ * Shut every card of this kind, or open them all when every one is shut
+ * already — the same toggle the rail head's button and an Alt+click on a
+ * heading both make.
+ */
+export function toggleAllGroups(nested = false) {
+    const open = railAllShut(nested);
+    for (const g of drawnCards[nested ? 'nested' : 'top']) toggleGroup(g.key, !open, g.holdsOpen);
+    renderRail();
+}
+
 // The session ids strip() drew, in the order it drew them, and the same for the
 // render before. See drawRail.
 const drawn = [];
@@ -95,6 +119,7 @@ let lastOrder = null;
 let dueBy = new Map();
 
 function railTree() {
+    drawnCards = { top: [], nested: [] };
     dueBy = new Map();
     for (const m of state.later) {
         if (m.state !== 'pending') continue;
@@ -341,6 +366,7 @@ function icon(name, size = 15) {
  */
 function groupCard(key, label, list, opts = {}) {
     const open = isOpen(key, shutByDefault(opts));
+    drawnCards[opts.nested ? 'nested' : 'top'].push({ key, holdsOpen: shutByDefault(opts) });
     const counted = opts.all || list;
     const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
     const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
@@ -376,7 +402,14 @@ function groupCard(key, label, list, opts = {}) {
                 aria-controls=${bodyId}
                 draggable=${drag ? 'true' : null}
                 title=${drag ? 'Drag to reorder projects' : null}
-                onClick=${() => { toggleGroup(key, open, shutByDefault(opts)); renderRail(); }}
+                onClick=${(e) => {
+                    // Alt+click: every card of this kind at once, the convention
+                    // file trees use for the same thing. A nested heading folds
+                    // the nested cards (Scheduled, Workers) and leaves the
+                    // projects alone, so it never shuts the card it sits in.
+                    if (e.altKey) return toggleAllGroups(!!opts.nested);
+                    toggleGroup(key, open, shutByDefault(opts)); renderRail();
+                }}
                 onDragStart=${drag ? (e) => onRailDragStart(e, opts.project.cwd) : null}
                 onDragEnd=${drag ? onRailDragEnd : null}>
                 ${drag ? html`<span class="group-grip">${icon('grip', 13)}</span>` : null}

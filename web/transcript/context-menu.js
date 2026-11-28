@@ -8,7 +8,7 @@
 // and throws in the temporal dead zone, and only loading the page shows it.
 
 import { post } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { copyText, dom, el, toast } from '../dom.js';
 import { state } from '../state.js';
 import { openAgent } from './subagents.js';
 import { jumpToTurn } from './turn-rail.js';
@@ -180,6 +180,12 @@ export function openFileMenu(ev, f, kind) {
     // start working, and greying it would imply there was.
     if (kind === 'edit' || t.toolId || t.agent) {
         items.push({ label: 'Jump To', onClick: () => jumpToFile(t) });
+    }
+    // The path as the drawer shows it, relative to the checkout, which is what
+    // goes into a message; and the whole one, for a terminal somewhere else.
+    items.push({ label: 'Copy path', onClick: () => copyText(t.path, 'Path') });
+    if (t.absPath && t.absPath !== t.path) {
+        items.push({ label: 'Copy full path', onClick: () => copyText(t.absPath, 'Full path') });
     }
 
     openContextMenu(ev, items);

@@ -26,7 +26,7 @@ import { get } from '../api.js';
 import { agentOf, can } from '../capabilities.js';
 import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
-import { dom, el, toast } from '../dom.js';
+import { copyText, dom, el, toast } from '../dom.js';
 import { ago, clip, clockOf, dateOf, dur, plural, shortModel } from '../format.js';
 import { toolDisplayName } from '../tool-name.js';
 import { PR_ICON } from '../icons.js';
@@ -451,6 +451,20 @@ function contextBit(s) {
         >${pct === null ? `${used} context` : `${pct}% context`}</span>`;
 }
 
+/**
+ * Props that make a header bit copy `text` on a click or Enter. A span with a
+ * role rather than a <button>, so it keeps the header's text styling; the
+ * cursor is the one thing that says it does something.
+ */
+function copyable(text, what, title) {
+    const go = () => copyText(text, what);
+    return {
+        title, role: 'button', tabindex: '0', style: { cursor: 'copy' },
+        onClick: go,
+        onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } },
+    };
+}
+
 export function renderHeader() {
     const s = state.current;
     dom.convTitle.textContent = s.title;
@@ -460,10 +474,15 @@ export function renderHeader() {
     const bits = [];
     const sep = (key, mark = '·') => html`<span key=${`${key}-sep`} class="sep">${mark}</span>`;
     bits.push(html`<span key="project">${s.projectName}</span>`);
-    if (s.worktree) {
-        bits.push(sep('branch', '/'), html`<span key="branch" class="branch">${s.worktree.name}</span>`);
-    } else if (s.gitBranch && s.gitBranch !== 'HEAD') {
-        bits.push(sep('branch', '/'), html`<span key="branch" class="branch">${s.gitBranch}</span>`);
+    // The worktree's name is what the rail calls it; the branch is what git
+    // does, and what a copy is wanted for — `worktree-<name>`, which the name
+    // alone does not spell.
+    const branch = s.worktree ? (s.worktree.branch || s.gitBranch || s.worktree.name)
+        : s.gitBranch && s.gitBranch !== 'HEAD' ? s.gitBranch : null;
+    if (branch) {
+        bits.push(sep('branch', '/'), html`<span key="branch" class="branch"
+            ...${copyable(branch, 'Branch name', `${branch} — click to copy`)}
+            >${s.worktree ? s.worktree.name : branch}</span>`);
     }
     if (s.model) bits.push(sep('model'), html`<span key="model">${shortModel(s.model)}</span>`);
     // Only when this session's process predates the installed binary, which is
@@ -508,7 +527,10 @@ export function renderHeader() {
             }));
         }
     }
-    bits.push(sep('cwd'), html`<span key="cwd" class="cwd" title=${s.cwd}>${clip(s.cwd, 42)}</span>`);
+    // Clipped to fit, so the whole path was only ever in a tooltip nobody could
+    // select. A click copies it.
+    bits.push(sep('cwd'), html`<span key="cwd" class="cwd"
+        ...${copyable(s.cwd, 'Path', `${s.cwd} — click to copy`)}>${clip(s.cwd, 42)}</span>`);
 
     render(bits, dom.convSub);
     renderHeaderReview(state.prStatus ? [...state.prStatus.values()] : [], s.cwd, renderHeader);

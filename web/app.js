@@ -17,7 +17,7 @@ import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { liveOverDock, liveOverFixed } from './live-over.js';
 import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
-import { drawRail } from './rail.js';
+import { drawRail, railAllShut, toggleAllGroups } from './rail.js';
 import { togglePalette, wirePalette } from './palette.js';
 import { registerBuiltins } from './palette/builtin.js';
 import { liveStrip, renderLive } from './boards/live.js';
@@ -49,8 +49,9 @@ export { paintDashBadge, renderLive };
 import { del, get, patch, post, put } from './api.js';
 import { PREFS_FALLBACK, BOOT_PREFS, BOOT_HOST, pairToken } from './boot.js';
 import { DEFAULT_PERM, state } from './state.js';
-import { can } from './capabilities.js';
-import { dom, closeModal, closeOnClickOutside, el, modalUp, openModal, toast } from './dom.js';
+import { agentOf, can } from './capabilities.js';
+import { dom, closeModal, closeOnClickOutside, copyText, el, modalUp, openModal, toast } from './dom.js';
+import { resumeLine } from './agent-name.js';
 import { ago, clip, dur, noteHome, setClock, shortPath } from './format.js';
 import { loadChannels, renderChannels } from './channels.js';
 import { PR_ICON, icon } from './icons.js';
@@ -121,8 +122,9 @@ import {
 import { toolSummary } from './transcript/tools.js';
 import { resetWindow } from './transcript/window.js';
 import {
-    flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
+    flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode, stepToTurn,
 } from './transcript/turn-rail.js';
+import { stepId } from './rail-nav.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import {
     onOrchestratorEvent, onOrchestratorPaint, paintOrchestrator, saveOwnModel, toggleOrchestrator,
@@ -510,6 +512,7 @@ export const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
  */
 export function renderRail() {
     paintHideDone(drawRail());
+    paintRailFold();
     // The ⋮ menu is fixed and lives outside the rail, so a card that moved leaves
     // it pointing at where the button used to be.
     syncProjMenu();
@@ -534,6 +537,13 @@ function paintHideDone(count) {
     dom.hideDone.title = state.query && state.hideDone
         ? 'Showing finished sessions too, while the filter box has something in it'
         : 'Hide sessions whose pull requests are all merged or closed';
+}
+
+/** Collapse all, or Expand all once every card on screen is shut. */
+function paintRailFold() {
+    const label = railAllShut() ? 'Expand all' : 'Collapse all';
+    dom.railFold.title = `${label} (Alt+click a heading does the same)`;
+    dom.railFold.setAttribute('aria-label', label);
 }
 
 // --- `custom` order: dragging project cards ------------------------------
@@ -2348,6 +2358,12 @@ export function showProjMenu(project, btn) {
     dom.projMenu.replaceChildren(
         el('div', { class: 'menu-note' }, clip(project.name, 30)),
         el('div', { class: 'sep' }),
+        // The card already knows where it is, so starting there skips the
+        // dialog's directory picker. A card with no directory has nowhere to
+        // start and nothing to copy.
+        row('New session here…', () => openNew({ cwd: project.cwd }), !project.cwd),
+        row('Copy path', () => copyText(project.cwd, 'Path'), !project.cwd),
+        el('div', { class: 'sep' }),
         row('Set project colour', () => openPcolor(project)),
         origin,
         publish,
@@ -2424,11 +2440,23 @@ export function showStripMenu(s, btn) {
         row('Rename', startRename),
         row(s.pinned ? 'Unpin' : 'Pin to the top', (x) => setFlags(x, { pinned: !x.pinned })),
         row(s.archived ? 'Restore from archive' : 'Archive', (x) => setFlags(x, { archived: !x.archived })),
+        el('div', { class: 'sep' }),
+        row('Copy session ID', (x) => copyText(x.sessionId, 'Session ID')),
+        ...(resumeCommand(s) ? [row('Copy resume command', (x) => copyText(resumeCommand(x), 'Resume command'))] : []),
         // Not on a session whose transcript is not ours to remove (`delete`).
         ...(can('delete', s) ? [el('div', { class: 'sep' }), row('Delete permanently', askDelete, 'danger')] : []),
     );
     placeProjMenu(btn);
     dom.projMenu.querySelector('.picker-row').focus();
+}
+
+/**
+ * The shell line that reopens `s` in a terminal, or null when its runtime has
+ * none. The command is the runtime's own, from the bridge's `agent.resume`, so
+ * nothing here knows which CLI is which.
+ */
+export function resumeCommand(s) {
+    return s ? resumeLine(agentOf(s).resume, s.sessionId, s.cwd) : null;
 }
 
 export function closeProjMenu() {
@@ -2673,6 +2701,7 @@ function closeSortMenu() {
     paintRailSort();
 }
 
+dom.railFold.addEventListener('click', () => toggleAllGroups());
 dom.railSort.addEventListener('click', (e) => {
     e.stopPropagation();
     if (state.sortMenu) closeSortMenu(); else openSortMenu();
@@ -4789,7 +4818,39 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'session.new') { e.preventDefault(); openNew(); }
+    // Alt and an arrow or Page key. Not from a text field, where Alt+arrows
+    // belong to the field (and to the palette's list); not from the shell; and
+    // not when a widget has already answered the key, as a queued message
+    // does with Alt+↑ to move itself.
+    if (WALKS[command]) {
+        if (inTerm || e.defaultPrevented || isTyping(e.target) || e.target.tagName === 'SELECT'
+            || e.target.isContentEditable) return;
+        e.preventDefault();
+        WALKS[command]();
+    }
 });
+
+const WALKS = {
+    'session.next': () => stepSession(1),
+    'session.prev': () => stepSession(-1),
+    'turn.next': () => state.current && !state.agent && stepToTurn(1),
+    'turn.prev': () => state.current && !state.agent && stepToTurn(-1),
+};
+
+/**
+ * Open the session above or below the one on screen, in the order the rail
+ * draws them — so a shut card, Hide finished and the filter are all respected,
+ * because a row that is not drawn is not there to land on.
+ */
+export function stepSession(step) {
+    const ids = [...dom.rail.querySelectorAll('.strip[data-id]')].map(n => n.dataset.id);
+    const id = stepId(ids, state.current && state.current.sessionId, step);
+    if (!id) return false;
+    openSession(id);
+    const row = dom.rail.querySelector(`.strip[data-id="${cssEscape(id)}"]`);
+    if (row) row.scrollIntoView({ block: 'nearest' });
+    return true;
+}
 
 // Copy buttons inside rendered markdown are delegated: the blocks are innerHTML.
 // Everywhere else, a copy button carries its own click — see copyButton.
