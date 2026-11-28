@@ -524,7 +524,20 @@ function parseFind(text) {
     return out;
 }
 
+/** Why a query cannot go to `skills find` as an argument, or null. */
+function queryProblem(q) {
+    if (!q) return 'type something to search for';
+    // skills@1.9.1 takes `--` but does not honour it (`find -- --help` prints
+    // the help), so an argument that starts with `-` can only be refused.
+    if (q.startsWith('-')) return 'a search cannot start with "-"';
+    if (q.length > 100 || /[\0\n\r]/.test(q)) return 'that is not a search';
+    return null;
+}
+
 function runFind(q) {
+    // Checked here as well as in search(), so nothing can reach the argv without it.
+    const bad = queryProblem(q);
+    if (bad) return Promise.reject(refuse('invalid', bad));
     const cwd = path.join(cfg.CACHE_DIR, 'skills-cli');
     fs.mkdirSync(cwd, { recursive: true });
     const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', CI: '1', npm_config_yes: 'true', npm_config_update_notifier: 'false' };
@@ -549,8 +562,8 @@ const searchInflight = new Map();
 
 async function search(q) {
     const query = String(q || '').trim();
-    if (!query) throw refuse('invalid', 'type something to search for');
-    if (query.length > 100 || query.startsWith('-') || /[\0\n\r]/.test(query)) throw refuse('invalid', 'that is not a search');
+    const bad = queryProblem(query);
+    if (bad) throw refuse('invalid', bad);
     const hit = searchCache.get(query);
     if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return hit.value;
     if (searchInflight.has(query)) return searchInflight.get(query);
@@ -567,6 +580,6 @@ async function search(q) {
 module.exports = {
     STAGE_TTL_MS, MAX_SKILL_BYTES, MAX_SKILL_FILES, SKILLS_CLI,
     parseSource, splitTail, slug, parseFind, manifestOf, digestOf, discover,
-    stage, install, discard, search, sweep, setFetcher, setFinder,
+    stage, install, discard, search, sweep, setFetcher, setFinder, queryProblem, runFind,
     _stages: stages,
 };

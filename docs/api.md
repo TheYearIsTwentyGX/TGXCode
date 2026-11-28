@@ -6221,8 +6221,10 @@ Nothing is deleted outright. Answers `200 {dir, trashed}`.
 #### `GET /api/skills/search?q=<text>`
 
 Runs `npx -y skills@1.9.1 find <q>` as a subprocess and parses what it prints. The
-version is pinned, so the parsed format is the one that runs. `q` is 1–100 characters
-and must not start with `-`. Answers are cached per query for 5 minutes. A first search
+version is pinned, so the parsed format is the one that runs. `q` is 1–100 characters,
+trimmed. One that starts with `-` is refused with `400 invalid`, because `skills@1.9.1`
+accepts `--` but does not honour it (`find -- --help` prints the help), so a dash
+cannot be passed safely. Answers are cached per query for 5 minutes. A first search
 can take tens of seconds, because `npx` may have to fetch the package.
 
 ```json

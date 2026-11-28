@@ -204,6 +204,10 @@ const HOME = os.homedir();
         headers: PHONE, body: { source: 'anthropics/skills' },
     })).status, 403);
     check('searching for skills', (await call('GET', '/api/skills/search?q=pdf', { headers: PHONE })).status, 403);
+    // A local search that looks like an option never reaches `npx skills find`:
+    // skills@1.9.1 accepts `--` but does not honour it, so the dash is refused.
+    check('a search starting with "-" is a 400, not an npx flag',
+        (await call('GET', `/api/skills/search?q=${encodeURIComponent('--help')}`, { headers: LOCAL })).status, 400);
     check('writing a skill file', (await call('PUT', '/api/skills/file', {
         headers: PHONE, body: { dir: '/x', text: '', stamp: null },
     })).status, 403);

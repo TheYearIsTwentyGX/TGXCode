@@ -210,6 +210,14 @@ imp.setFetcher({
         assert.strictEqual(asked, 1);
         assert.strictEqual(r1.results[0].source, 'anthropics/skills');
         await rejectsCode(imp.search('-rf'), 'invalid', 'leading dash');
+        await rejectsCode(imp.search('--help'), 'invalid', 'an option');
+        await rejectsCode(imp.search('  -y pdf'), 'invalid', 'a dash after leading spaces');
+        await rejectsCode(imp.search('-- pdf'), 'invalid', 'an end-of-options marker');
+        assert.strictEqual(asked, 1, 'a refused query never reaches the finder');
+        // And the subprocess itself refuses before spawning anything, so the
+        // guard does not depend on every caller going through search().
+        await rejectsCode(imp.runFind('--help'), 'invalid', 'runFind refuses a dash itself');
+        assert.strictEqual(imp.queryProblem('pdf-tools'), null, 'a dash inside a query is fine');
         await rejectsCode(imp.search(''), 'invalid', 'empty');
         ok('search caches per query and refuses an option-shaped query');
 
