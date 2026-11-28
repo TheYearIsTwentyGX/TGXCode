@@ -89,6 +89,8 @@ native control). Set it per surface where a native control needs it, as
 | `--syn-*` | Syntax roles: comment, punct, string, regex, number, keyword, builtin, fn, type, var, flag, add, del. `.tok-*` in `tools.css` maps the highlighter's token names onto these. |
 | `--diff-{add,del}-{bg,fg,hl,edge}`, `--diff-change-bg` | Diff lines, shared by `tools.css` and the diff2html overrides in `viewers.css`. |
 | `--focus-colour` | The focus ring. |
+| `--scrim-image` | The image preview's near-black backdrop. |
+| `--scrim-danger` | The red wash behind the Skills full-screen risk confirm. |
 
 **Project colour** is not a token. It is `--proj-accent`, set inline by script,
 and every rule that uses it hangs off `[data-tinted]` (see `colours.css`). Mix it
@@ -127,6 +129,10 @@ with `color-mix(in srgb, var(--proj-accent) N%, var(--s2))`, never against
   comes from size, colour and weight together. Do not add 700.
 - In a `font` shorthand: `font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);`.
 - Use `font-variant-numeric: tabular-nums` on anything that counts or ticks.
+- **`--text-4` is for what you glance at:** times, separators, counts,
+  placeholders. It is about 3.5:1 on `--s1` and `--s2`, under AA for reading.
+  A sentence (a note under a field, an empty state, an explanation) is
+  `--text-3`. Added by the UI audit.
 
 **How the half-pixel sizes were mapped** (wave 1, by role, not rounded one way):
 
@@ -174,6 +180,16 @@ agree. Glyph sizes may stay literal.
   whose container lifts on `:focus-within` (composer, search, live-card reply)
   draws no ring of its own; that rule is in `base.css`. **Never `outline: none`
   without a replacement on the same rule.**
+- **Controls** (added by the UI audit) — `--ctl-sm` 28 (a control in a row or
+  card), `--ctl` 34 (the bar, a panel head), `--ctl-lg` 40 (a dialog's footer
+  button). `--disabled-opacity` 0.45 for anything that cannot be used now. **A
+  control at rest is one surface step above what it sits on:** a select on a
+  `--s2` dialog is `--s3`, hover `--s4`.
+- **Field focus is `--ring-inset`, never a border-colour swap.** A 1px border
+  turning blue is a weaker signal than the 2px ring every other field shows.
+- **Pulse** — one `@keyframes pulse` in `base.css`, fading to `--pulse-dim`
+  (default 0.4) and back, run at `var(--dur-loop)`. Use it for a skeleton or a
+  waiting dot rather than writing another.
 - **Press** — compact buttons (`.btn`, `.btn-send`, `.bar-btn`, `.icon-btn`,
   `.mini`, `.perm-btn`, `.tb-btn`, `.lbtn`, `.seg-btn`, `.more-btn`,
   `.dash-btn`, `.quota-pill`, `.db-status`) get `scale: 0.97` on `:active`, from

@@ -55,7 +55,7 @@
 }
 .orch-paused button:hover { background: var(--yellow-cont-strong); }
 
-.orch-empty { color: var(--text-4); }
+.orch-empty { color: var(--text-3); }
 
 /* The plain conversation's strip: how the workers stand, and the way back. */
 .orch-strip {
@@ -167,9 +167,10 @@
    app's controls are tonal everywhere else. */
 .orch-settings input[type="number"],
 .orch-settings select {
-    padding: var(--sp-1) var(--sp-3);
+    height: var(--ctl-sm);
+    padding: 0 var(--sp-4);
     border: 0;
-    border-radius: var(--r-xs);
+    border-radius: var(--pill);
     background: var(--s3);
     color: var(--text);
     font: inherit;
@@ -205,7 +206,7 @@
 .orch-move-form input {
     flex: 1;
     min-width: 0;
-    height: 28px;
+    height: var(--ctl-sm);
     padding: 0 var(--sp-4);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-sm);
@@ -213,7 +214,7 @@
     color: var(--text);
     font: 400 var(--fs-md)/var(--lh-none) var(--mono);
 }
-.orch-move-form input:focus { outline: none; border-color: var(--blue); }
+.orch-move-form input:focus { outline: none; box-shadow: var(--ring-inset); }
 .orch-move button:focus-visible { outline: none; box-shadow: var(--ring-inset); }
 
 .orch-worker-line {
@@ -402,7 +403,7 @@
 }
 .op-h span { color: var(--text-4); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
 .op-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-width: 0; }
-.op-empty { color: var(--text-4); font-size: var(--fs-md); }
+.op-empty { color: var(--text-3); font-size: var(--fs-md); }
 .op-quiet { color: var(--text-4); }
 .op-text-btn { color: var(--blue); }
 

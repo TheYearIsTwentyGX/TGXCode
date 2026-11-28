@@ -285,7 +285,7 @@
     font: 400 var(--fs-md)/var(--lh-prose) var(--sans);
     resize: vertical;
 }
-.perm-fb:focus { outline: none; border-color: var(--blue); }
+.perm-fb:focus { outline: none; box-shadow: var(--ring-inset); }
 .perm-fb::placeholder { color: var(--text-4); }
 
 /* ── the question dock ───────────────────────────────────────────────── */
@@ -474,7 +474,7 @@
     color: var(--text);
     font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
 }
-.perm-other:focus { outline: none; border-color: var(--blue); }
+.perm-other:focus { outline: none; box-shadow: var(--ring-inset); }
 .perm-other::placeholder { color: var(--text-4); }
 
 /* Questions as they read back in the transcript, once the card is long gone. */
@@ -638,7 +638,7 @@
 .qrev-none {
     margin-top: var(--sp-4);
     font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
-    color: var(--text-4);
+    color: var(--text-3);
     font-style: italic;
 }
 
@@ -678,7 +678,7 @@
     color: var(--text);
     font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
-.sudo-pw:focus { outline: none; border-color: var(--blue); }
+.sudo-pw:focus { outline: none; box-shadow: var(--ring-inset); }
 
 /* What happened to a card that is gone. The transcript carries the real
    record; this is only so the card does not vanish without a word. */

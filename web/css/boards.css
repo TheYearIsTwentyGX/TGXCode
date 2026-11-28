@@ -175,7 +175,7 @@
 .tb-empty {
     margin: var(--sp-3) var(--sp-4);
     font-size: var(--fs-md);
-    color: var(--text-4);
+    color: var(--text-3);
 }
 
 /* A heading inside a column, for the projects the Suggested tasks came from. */
@@ -529,7 +529,7 @@
     gap: var(--sp-5);
 }
 .dr-note p { margin: 0; max-width: 520px; font-size: var(--fs-base); line-height: var(--lh-prose); color: var(--text-2); }
-.dr-note p.dim { font-size: var(--fs-md); color: var(--text-4); }
+.dr-note p.dim { font-size: var(--fs-md); color: var(--text-3); }
 
 /* ── the schedule builder ────────────────────────────────────────────────
    The trigger picker in the new-session dialog, in schedule mode. Six rows, one

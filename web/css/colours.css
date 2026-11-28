@@ -53,15 +53,14 @@
     align-items: center;
     gap: var(--sp-3);
     min-width: 0;
-    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    /* Sentence case: it names one project, it does not head a list. */
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
 }
 .new-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Nothing picked is a state worth reading, not an empty space: the dialog no
    longer chooses a directory for you, so this line is where you find that out. */
-.new-project.none { color: var(--text-4); font-style: italic; text-transform: none; }
+.new-project.none { color: var(--text-3); font-style: italic; }
 #new-scrim[data-tinted] .new-project { color: color-mix(in srgb, var(--proj-accent) 62%, var(--text)); }
 
 /* The backdrop takes a wash of it, so the screen says which project before a

@@ -4,27 +4,27 @@
    without an edit. */
 
 .modal.wt { width: min(760px, 100%); }
-.modal.wt .modal-body { padding-bottom: 8px; }
+.modal.wt .modal-body { padding-bottom: var(--sp-4); }
 
-.wt-list { display: flex; flex-direction: column; gap: 6px; transition: opacity var(--t-fast) var(--ease); }
+.wt-list { display: flex; flex-direction: column; gap: var(--sp-3); transition: opacity var(--t-fast) var(--ease); }
 .wt-list.loading { opacity: 0.6; }
 
 .wt-summary {
     display: flex;
-    gap: 6px;
+    gap: var(--sp-3);
     align-items: baseline;
-    padding: 0 2px 6px;
-    font: 400 12.5px/1.4 var(--sans);
+    padding: 0 var(--sp-1) var(--sp-3);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
 }
 .wt-summary .sep { color: var(--text-4); }
 
 .wt-note {
-    padding: 8px 12px;
+    padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r-sm);
     background: var(--s3);
-    font: 400 12.5px/1.45 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-2);
 }
 .wt-note.warn { color: var(--yellow); }
@@ -32,43 +32,44 @@
 .wt-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 12px;
+    gap: var(--sp-6);
+    padding: var(--sp-5) var(--sp-6);
     border-radius: var(--r);
     background: var(--s3);
     border: 1px solid transparent;
 }
 .wt-row.safe { border-color: var(--outline-soft); }
-.wt-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.wt-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; min-width: 0; }
+.wt-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.wt-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-3) var(--sp-4); min-width: 0; }
 
 .wt-name {
-    font: 500 13.5px/1.3 var(--sans);
+    font: 500 var(--fs-base)/var(--lh-tight) var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .wt-branch {
-    font: 400 12px/1.3 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-tight) var(--mono);
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.wt-small { font: 400 11.5px/1.3 var(--sans); color: var(--text-3); }
-.wt-why { font: 400 11.5px/1.4 var(--sans); color: var(--text-3); }
+.wt-small { font: 400 var(--fs-sm)/var(--lh-tight) var(--sans); color: var(--text-3); }
+.wt-why { font: 400 var(--fs-sm)/var(--lh-snug) var(--sans); color: var(--text-3); }
 
 .wt-chip {
     display: inline-flex;
     flex: none;
     width: auto;
     align-items: center;
-    padding: 1px 8px;
+    /* 1px, not a step: the chip keeps the 18px of the line it sits on. */
+    padding: 1px var(--sp-4);
     border-radius: var(--pill);
     background: var(--s4);
     border: 0;
-    font: 500 11px/1.6 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-prose) var(--sans);
     color: var(--text-2);
     text-decoration: none;
     white-space: nowrap;
@@ -83,18 +84,18 @@ button.wt-chip { cursor: pointer; }
 
 .wt-remove { flex: none; }
 
-.wt-confirm-lead { margin: 4px 0 10px; font: 500 15px/1.4 var(--sans); color: var(--text); }
+.wt-confirm-lead { margin: var(--sp-2) 0 var(--sp-5); font: 500 var(--fs-lg)/var(--lh-snug) var(--sans); color: var(--text); }
 .wt-confirm-list {
-    margin: 0 0 12px;
+    margin: 0 0 var(--sp-6);
     padding: 0;
     list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--sp-2);
     max-height: 50vh;
     overflow-y: auto;
 }
-.wt-confirm-list li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.wt-confirm-list li { display: flex; gap: var(--sp-4); align-items: baseline; min-width: 0; }
 
 /* On the work-in-flight board, beside a project's counts. */
 .dproj-wt {

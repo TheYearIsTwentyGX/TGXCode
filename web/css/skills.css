@@ -24,7 +24,7 @@
     font: 400 var(--fs-md) var(--sans);
     min-width: 0;
 }
-.skp-input:focus { outline: 0; border-color: var(--blue); }
+.skp-input:focus { outline: 0; box-shadow: var(--ring-inset); }
 .skp-filter .skp-input { width: 220px; }
 .skp-mono, .skp-input.skp-mono { font-family: var(--mono); font-size: var(--fs-sm); }
 
@@ -44,7 +44,7 @@
     max-height: calc(100vh - 220px);
     overflow-y: auto;
 }
-.skp-rail-empty { padding: var(--sp-4); color: var(--text-4); font-size: var(--fs-sm); }
+.skp-rail-empty { padding: var(--sp-4); color: var(--text-3); font-size: var(--fs-md); }
 .skp-rail-lede {
     margin: var(--sp-6) 0 var(--sp-2) var(--sp-4);
     font: 400 var(--fs-2xs) var(--sans);
@@ -290,7 +290,7 @@
     inset: 0;
     z-index: var(--z-over);
     overflow-y: auto;
-    background: color-mix(in oklab, var(--red-cont) 70%, var(--bg));
+    background: var(--scrim-danger);
     -webkit-app-region: no-drag;
 }
 .skp-risk-inner {

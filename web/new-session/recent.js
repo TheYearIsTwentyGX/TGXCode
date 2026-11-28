@@ -43,7 +43,7 @@ export function showNewMenu(on, { focusFirst = false } = {}) {
  */
 async function fillNewMenu({ focusFirst = false } = {}) {
     const seq = ++newMenuSeq;
-    dom.newMenu.replaceChildren(el('div', { class: 'menu-note' }, 'Loading…'));
+    dom.newMenu.replaceChildren(el('div', { class: 'menu-note' }, 'Reading…'));
 
     let projects;
     try {

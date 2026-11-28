@@ -212,7 +212,7 @@ export function loadOptional(then) {
             optional.search = m;
             registerSource('search', ({ q }) => (q ? [{
                 id: 'search.transcripts', group: 'Search', always: true,
-                title: `Search transcripts for '${q}'`, command: 'search.open',
+                title: `Search transcripts for “${q}”`, command: 'search.open',
                 run: () => m.openSearch(q),
             }] : []));
         }),
