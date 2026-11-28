@@ -6142,12 +6142,13 @@ Errors carry `{error, code}`:
 | Status | `code` | |
 |---|---|---|
 | 400 | `invalid` | a malformed field: bad name, bad path, missing `stamp`, unknown runtime or scope, nothing ticked |
+| 400 | `unconfirmed` | an install that includes a red skill without `confirmedRisk: true`. The body also carries `skills: [{folder, score, level}]` |
 | 403 | `read-only` | a write to a `plugin`, `synced` or `system` skill. `error` says why |
 | 403 | `symlink` | the skill, or a path inside it, is or goes through a symlink |
 | 404 | `not-found` | not a skill this bridge manages, a file that is not there, or a staging that expired |
-| 409 | `conflict` | a stale `stamp` (the body carries `current`, below), or an install whose staged files no longer match `digest` |
+| 409 | `conflict` | a stale `stamp` (the body carries `current`, below), or an install or staged-file read whose bytes no longer match the manifest |
 | 409 | `exists` | creating, copying or installing over a skill that is already there |
-| 413 | `too-large` | a file over `maxBytes`, or a fetched `SKILL.md` over 256KB |
+| 413 | `too-large` | a file over `maxBytes`, a fetched `SKILL.md` over 256KB, or a staging past the runaway-clone ceiling (below) |
 | 502 | `fetch` | git or https could not fetch the source, or `npx skills find` failed |
 | 503 | `unavailable` | `npx` is not on the bridge's `PATH` |
 
@@ -6294,9 +6295,24 @@ A repository is fetched with `git clone --depth 1`, with git hooks off, the `fil
 Nothing fetched is run. `skill` is optional: it marks the matching skill with
 `match: true`, and does not filter.
 
-Caps: 5MB and 500 files per skill, and 200MB for the whole checkout. A skill over a cap,
-or containing a symlink, is still listed, with `problem` set, and cannot be installed.
-A staging expires 30 minutes after it was made.
+**Size and file count are not refused.** Every file is walked and counted, so `files` and
+`bytes` are true totals, and they feed the skill's `safety` score instead. (Until November 2026,
+5MB or 500 files per skill set `problem` and blocked the install; a
+checkout over 200MB was refused.) What remains is one ceiling against a runaway clone:
+
+- more than **20,000 files or 500MB** in the checkout (`.git` aside), or in one skill,
+  refuses the whole staging with `413 too-large`;
+- a clone whose directory passes **1GB on disk** while it runs, pack included, is killed
+  and refused the same way.
+
+A skill containing a symlink, a device or a path nested past 16 levels is still listed,
+with `problem` set, and cannot be installed. A staging expires 30 minutes after it was made.
+
+**The answer stays small.** File text is sent inline only for files up to 64KB, and only
+until 512KB of text across the whole staging: every `SKILL.md` first, then scripts and
+executables, then the rest in path order. Any other text file up to 256KB has
+`viewable: true` and is read with `GET /api/skills/import/:id/file`. For taste-skill
+(1,631 files, 35MB) the answer is about 850KB.
 
 ```json
 {
@@ -6305,10 +6321,21 @@ A staging expires 30 minutes after it was made.
   "digest": "9298…",
   "skills": [{
     "folder": "pdf", "path": "skills/pdf", "name": "pdf", "description": "…",
-    "installAs": "pdf", "hooks": false, "allowedTools": null, "bytes": 68603, "match": true,
+    "installAs": "pdf", "hooks": false, "allowedTools": "Bash", "bytes": 68603, "match": true,
     "files": [{ "path": "scripts/fill.py", "bytes": 2011, "sha256": "ab…", "executable": true,
-                "binary": false, "script": true, "text": "…" }],
-    "warnings": [{ "kind": "executable", "text": "3 executable files" }]
+                "binary": false, "script": true, "viewable": true, "text": "…" }],
+    "warnings": [{ "kind": "executable", "text": "3 executable files" }],
+    "safety": {
+      "score": 33, "level": "yellow", "requiresConfirm": false,
+      "factors": [
+        { "factor": "hooks", "label": "Hooks", "value": 0, "contribution": 0, "note": "none declared" },
+        { "factor": "allowed-tools", "label": "Pre-approved tools", "value": "Bash", "contribution": 20,
+          "note": "without asking: any shell command" },
+        { "factor": "scripts", "label": "Scripts", "value": 3, "contribution": 8, "note": "3 files a model could run" }
+      ],
+      "hooks": [],
+      "hooksText": null
+    }
   }]
 }
 ```
@@ -6324,14 +6351,47 @@ A staging expires 30 minutes after it was made.
 | `skills[].installAs` | string | the directory it would be written as: `folder` when that is a valid skill name, else a slug of its `name` |
 | `skills[].match` | `true`, when present | the one `skill` named |
 | `skills[].problem` | string, when present | why it cannot be installed |
-| `skills[].files` | array of `{path, bytes, sha256, executable, binary, script?, text?}` | every file. `text` is present for non-binary files up to 64KB. `script` marks a shell, Python, JS, … extension |
-| `skills[].warnings` | array of `{kind, text}` | `kind` is `executable`, `scripts`, `binary`, `hooks` or `allowed-tools` |
+| `skills[].bytes` | number | every byte of the skill, uncapped |
+| `skills[].files` | array of `{path, bytes, sha256, executable, binary, script?, viewable?, text?}` | every file, uncapped. `script` marks a shell, Python, JS, … extension. `viewable: true` marks a non-binary file up to 256KB, whose text the file route serves. `text` is present only for the files sent inline (above), so its absence does not mean the file is unreadable |
+| `skills[].warnings` | array of `{kind, text}` | `kind` is `executable`, `scripts`, `binary`, `hooks`, `allowed-tools` or `remote-exec`. A one-line summary each. `safety` is the fuller account |
+| `skills[].safety` | object, below | the skill's risk score and what it is made of |
+| `skills[].safety.score` | number, 0–100 | the sum of `factors[].contribution`, clamped to 100 |
+| `skills[].safety.level` | `"green"`, `"yellow"` or `"red"` | green below 25, yellow 25–59, red from 60 |
+| `skills[].safety.requiresConfirm` | boolean | `true` exactly when `level` is `red`. Installing it needs `confirmedRisk: true` |
+| `skills[].safety.factors` | array of `{factor, label, value, contribution, note}` | always all nine, in this order: `hooks`, `allowed-tools`, `remote-exec`, `scripts`, `executables`, `binaries`, `unreadable`, `files`, `bytes`. `value` is a number, except for `allowed-tools`, where it is the frontmatter string (`""` when absent). `contribution` is a whole number of points, `0` for a factor that adds nothing. `label` and `note` are display sentences |
+| `skills[].safety.hooks` | array of `{event, matcher, type, command, timeout}` | each hook the `SKILL.md` frontmatter declares. `event` (`"Stop"`, `"PreToolUse"`, …), `matcher`, `type` and `command` are strings or `null`; `timeout` is a number of seconds or `null`. A `hooks:` block the bridge cannot read is still one entry, with `event: null` and the raw value in `command` |
+| `skills[].safety.hooksText` | string or null | the frontmatter's `hooks:` block as written, up to 8KB, for showing next to an entry it could not read |
+
+The weights, in `bridge/skill-safety.js`'s header: the first hook is 60 points (+5 per
+further hook, cap 70), so **any declared hook makes a skill red**. `allowed-tools` is up to
+25 (unrestricted `Bash` 20, a scoped `Bash(…)` 6, a file-writing tool 4, a web tool 3, an
+MCP tool 2). A text file that pipes `curl`/`wget` into a shell is 30 (+10 each, cap 40).
+Scripts are up to 20, executables 10, binaries 10, text files over 256KB 10, and the file
+count and size 15 each, growing logarithmically from 50 files and 1MB. Size alone
+therefore stops at yellow (30). A client should show `level` and the rows rather than
+recomputing anything: the weights can change without a contract revision, the fields
+cannot.
+
+#### `GET /api/skills/import/:id/file?skill=<folder>&path=<rel>`
+
+One staged file's text, for a file the stage answer did not carry inline. `skill` is a
+`folder` and `path` a `files[].path` from that answer. Only a path the manifest lists can
+be named, so nothing outside the staging is reachable. The bytes must still hash to the
+manifest's `sha256`, or it is `409 conflict`.
+
+```json
+{ "skill": "taste-skill", "path": "scripts/gate.mjs", "bytes": 68221, "sha256": "f5b9…",
+  "binary": false, "executable": false, "text": "#!/usr/bin/env node\n…", "truncated": false }
+```
+
+`text` is `null` for a binary file, and for one over 256KB, which also has `truncated: true`.
 
 #### `POST /api/skills/import/install`
 
 ```json
 { "id": "Xk2…", "digest": "9298…", "skills": ["pdf"],
-  "target": { "runtime": "codex", "scope": "user" }, "project": "", "overwrite": false }
+  "target": { "runtime": "codex", "scope": "user" }, "project": "", "overwrite": false,
+  "confirmedRisk": false }
 ```
 
 Writes the ticked skills into an editable root. **First the bridge hashes the staged
@@ -6339,7 +6399,18 @@ files again and refuses with `409 conflict` unless they are exactly the manifest
 `digest` describes.** So what lands is byte-for-byte what the client showed.
 `skills` holds `folder` values. An existing skill of the same `installAs` is refused
 (`409 exists`) unless `overwrite: true`, in which case the old one goes to the trash
-first. Modes are kept. On success the staging is deleted. Answers
+first. Modes are kept.
+
+**`confirmedRisk` must be exactly `true` when any ticked skill has
+`safety.requiresConfirm`.** Otherwise the answer is `400 {code: "unconfirmed", skills:
+[{folder, score, level}]}` and nothing is written, not even the green skills ticked beside
+it. The staging is kept, so the client can show its warning and send the same request with
+`confirmedRisk: true`. `1`, `"yes"` and other truthy values do not count. The desktop sends it
+only from the full-screen warning a red skill opens on Install; a client that cannot show
+the hook commands and the reasons should not send it. For a skill that is not red, the
+field is ignored.
+
+On success the staging is deleted. Answers
 `200 {installed: [{name, dir, trashed?}], root: {runtime, scope, dir, label}}`.
 
 #### `DELETE /api/skills/import/:id`

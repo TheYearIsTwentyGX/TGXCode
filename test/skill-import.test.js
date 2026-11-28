@@ -177,15 +177,125 @@ imp.setFetcher({
         ok('a staging expires after 30 minutes and its directory goes with it');
     }
 
-    // ── caps ───────────────────────────────────────────────────────────
+    // ── size is weighed, not refused ───────────────────────────────────
     {
+        // Past the old 5MB/500-file refusal on both counts.
         put('skills/big/SKILL.md', '---\nname: big\n---\n');
-        put('skills/big/blob.txt', 'x'.repeat(imp.MAX_SKILL_BYTES + 1));
+        put('skills/big/blob.txt', 'x'.repeat(6 * 1024 * 1024));
+        for (let n = 0; n < 600; n++) put(`skills/big/assets/icon-${String(n).padStart(3, '0')}.svg`, `<svg>${n}</svg>\n`);
         const s = await imp.stage({ source: 'acme/skills' });
         const big = s.skills.find(x => x.folder === 'big');
-        assert.ok(big.problem && /larger/.test(big.problem));
+        assert.ok(!big.problem, `no problem: ${big.problem}`);
+        assert.strictEqual(big.files.length, 602, 'every file is counted, not the first 500');
+        assert.ok(big.bytes > 6 * 1024 * 1024, 'the true size, not where a cap stopped');
+        const blob = big.files.find(f => f.path === 'blob.txt');
+        assert.ok(blob.text === undefined && blob.viewable === undefined, 'a 6MB text file is neither inline nor viewable');
+        assert.strictEqual(big.safety.factors.find(f => f.factor === 'unreadable').value, 1);
+        assert.strictEqual(big.safety.level, 'yellow', `600 files and 6MB alone are yellow, not red: ${big.safety.score}`);
+        ok('a skill past 500 files and 5MB is installable, with its true totals');
+
+        // The answer stays small: text inline only within the budget, SKILL.md first.
+        const json = JSON.stringify(s);
+        const inline = s.skills.flatMap(k => k.files).filter(f => f.text != null).reduce((a, f) => a + f.bytes, 0);
+        assert.ok(inline <= imp.INLINE_BUDGET, `inline text ${inline}`);
+        assert.ok(json.length < 2 * 1024 * 1024, `the stage answer is ${json.length} bytes`);
+        for (const k of s.skills) {
+            const md = k.files.find(f => f.path === 'SKILL.md');
+            if (md) assert.ok(md.text != null, `${k.folder}'s SKILL.md is inline`);
+        }
+        ok('the stage answer carries at most 512KB of text, every SKILL.md first');
+
+        // A file not sent inline is read on demand, checked against its hash.
+        const icon = big.files.find(f => f.path === 'assets/icon-000.svg');
+        const got = imp.stageFile({ id: s.id, skill: 'big', file: icon.path });
+        assert.strictEqual(got.text, '<svg>0</svg>\n');
+        assert.strictEqual(got.sha256, icon.sha256);
+        const tooBig = imp.stageFile({ id: s.id, skill: 'big', file: 'blob.txt' });
+        assert.ok(tooBig.text === null && tooBig.truncated === true);
+        assert.throws(() => imp.stageFile({ id: s.id, skill: 'big', file: '../pdf/SKILL.md' }), (e) => e.code === 'not-found');
+        assert.throws(() => imp.stageFile({ id: s.id, skill: 'nope', file: 'SKILL.md' }), (e) => e.code === 'not-found');
+        const abs = path.join(imp._stages.get(s.id).skills.find(x => x.folder === 'big').abs, 'assets', 'icon-000.svg');
+        fs.writeFileSync(abs, '<svg onload="x"/>');
+        assert.throws(() => imp.stageFile({ id: s.id, skill: 'big', file: icon.path }), (e) => e.code === 'conflict');
+        ok('a staged file is read on demand only by its manifest path, and only while it still hashes the same');
         imp.discard(s.id);
-        ok('a skill over 5MB is listed with a problem');
+
+        // The runaway-clone ceiling, lowered so the test does not need 20,000 files.
+        imp.setLimits({ stageFiles: 100 });
+        await rejectsCode(imp.stage({ source: 'acme/skills' }), 'too-large', 'past the file ceiling');
+        imp.setLimits({ stageBytes: 1024 * 1024 });
+        await rejectsCode(imp.stage({ source: 'acme/skills' }), 'too-large', 'past the byte ceiling');
+        imp.setLimits();
+        assert.ok(!fs.readdirSync(path.join(cfg.CACHE_DIR, 'skill-imports')).some(d => !imp._stages.has(d)),
+            'a refused staging leaves no directory behind');
+        assert.ok(imp.diskBytes(repo, Infinity) > 6 * 1024 * 1024);
+        assert.ok(imp.diskBytes(repo, 10) > 10 && imp.diskBytes(repo, 10) < 6 * 1024 * 1024, 'the clone watchdog stops counting once past its cap');
+        ok('staging gives up past the file or byte ceiling, and cleans up');
+        fs.rmSync(path.join(repo, 'skills', 'big'), { recursive: true, force: true });
+    }
+
+    // ── the red gate ───────────────────────────────────────────────────
+    {
+        put('skills/hooked/SKILL.md', [
+            '---', 'name: hooked', 'description: has a Stop hook', 'hooks:', '  Stop:', '    - hooks:',
+            '        - type: command', "          command: 'node scripts/gate.mjs --hook claude'", '          timeout: 600', '---', 'Body.', '',
+        ].join('\n'));
+        put('skills/hooked/scripts/gate.mjs', 'process.exit(0)\n');
+        const s = await imp.stage({ source: 'acme/skills' });
+        const hooked = s.skills.find(x => x.folder === 'hooked');
+        assert.strictEqual(hooked.safety.level, 'red');
+        assert.strictEqual(hooked.safety.requiresConfirm, true);
+        assert.deepStrictEqual(hooked.safety.hooks, [{ event: 'Stop', matcher: null, type: 'command', command: 'node scripts/gate.mjs --hook claude', timeout: 600 }]);
+        assert.ok(/^hooks:\n {2}Stop:/.test(hooked.safety.hooksText));
+        assert.ok(hooked.warnings.some(w => w.kind === 'hooks' && /Stop/.test(w.text)));
+        const pdf = s.skills.find(x => x.folder === 'pdf');
+        assert.strictEqual(pdf.safety.requiresConfirm, false);
+        ok('a skill declaring a hook is red, with the event and the exact command');
+
+        const target = { runtime: 'claude', scope: 'user' };
+        const dest = path.join(home, '.claude', 'skills', 'hooked');
+        let err;
+        try { imp.install({ id: s.id, digest: s.digest, skills: ['hooked'], target }); } catch (e) { err = e; }
+        assert.ok(err && err.code === 'unconfirmed', err && err.message);
+        assert.deepStrictEqual(err.detail.skills.map(x => [x.folder, x.level]), [['hooked', 'red']]);
+        assert.throws(() => imp.install({ id: s.id, digest: s.digest, skills: ['pdf', 'hooked'], target, confirmedRisk: 'yes' }), (e) => e.code === 'unconfirmed');
+        assert.ok(!fs.existsSync(dest), 'nothing written by a refused install');
+        assert.ok(!fs.existsSync(path.join(home, '.claude', 'skills', 'pdf')), 'not even the green skill beside it');
+        assert.ok(imp._stages.has(s.id), 'the staging survives, so the client can confirm and retry');
+        const done = imp.install({ id: s.id, digest: s.digest, skills: ['hooked'], target, confirmedRisk: true });
+        assert.strictEqual(done.installed[0].dir, dest);
+        assert.ok(fs.existsSync(path.join(dest, 'scripts', 'gate.mjs')));
+        ok('installing a red skill is refused without confirmedRisk: true, and goes through with it');
+        fs.rmSync(path.join(repo, 'skills', 'hooked'), { recursive: true, force: true });
+    }
+
+    // ── the route ──────────────────────────────────────────────────────
+    {
+        const { Readable } = require('stream');
+        const routes = require('../bridge/routes/skills.js');
+        assert.strictEqual(routes.statusOf('unconfirmed'), 400);
+        put('skills/hooked/SKILL.md', '---\nname: hooked\nhooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - type: command\n          command: ./check.sh\n---\n');
+        const s = await imp.stage({ source: 'acme/skills' });
+        const call = (method, pathname, body) => new Promise((resolve) => {
+            const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
+            req.method = method;
+            const res = { writeHead(status) { this.status = status; }, end(buf) { resolve({ status: this.status, body: JSON.parse(buf) }); } };
+            routes.handle(req, res, new URL(`http://x${pathname}`), pathname.split('?')[0]);
+        });
+        const body = { id: s.id, digest: s.digest, skills: ['hooked'], target: { runtime: 'codex', scope: 'user' } };
+        const r1 = await call('POST', '/api/skills/import/install', body);
+        assert.strictEqual(r1.status, 400);
+        assert.strictEqual(r1.body.code, 'unconfirmed');
+        assert.strictEqual(r1.body.skills[0].folder, 'hooked');
+        const r2 = await call('POST', '/api/skills/import/install', { ...body, confirmedRisk: 1 });
+        assert.strictEqual(r2.status, 400, 'a truthy confirmedRisk is not true');
+        const f = await call('GET', `/api/skills/import/${s.id}/file?skill=hooked&path=SKILL.md`);
+        assert.strictEqual(f.status, 200);
+        assert.ok(/PreToolUse/.test(f.body.text));
+        const r3 = await call('POST', '/api/skills/import/install', { ...body, confirmedRisk: true });
+        assert.strictEqual(r3.status, 200, JSON.stringify(r3.body));
+        ok('the route answers 400 unconfirmed without confirmedRisk: true, serves a staged file, and installs with it');
+        fs.rmSync(path.join(repo, 'skills', 'hooked'), { recursive: true, force: true });
     }
 
     // ── search ─────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ function init() { /* no dependencies */ }
 /** A refusal's code as an HTTP status. */
 function statusOf(code) {
     switch (code) {
-        case 'invalid': return 400;
+        case 'invalid': case 'unconfirmed': return 400;
         case 'read-only': case 'symlink': return 403;
         case 'not-found': return 404;
         case 'conflict': case 'exists': return 409;
@@ -86,7 +86,13 @@ async function handle(req, res, url, pathname) {
             return send(res, 200, imports.install({
                 id: b.id, digest: b.digest, skills: b.skills, target: b.target || {}, project: b.project,
                 overwrite: b.overwrite === true,
+                // Exactly `true`: a red skill's warning is agreed to, not implied by a truthy field.
+                confirmedRisk: b.confirmedRisk === true,
             }));
+        }
+        const f = /^\/api\/skills\/import\/([A-Za-z0-9_-]+)\/file$/.exec(pathname);
+        if (f && req.method === 'GET') {
+            return send(res, 200, imports.stageFile({ id: f[1], skill: q('skill'), file: q('path') }));
         }
         const m = /^\/api\/skills\/import\/([A-Za-z0-9_-]+)$/.exec(pathname);
         if (m && req.method === 'DELETE') {

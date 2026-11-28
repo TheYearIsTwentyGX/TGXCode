@@ -193,3 +193,131 @@
     .skp-split, .skp-files { grid-template-columns: minmax(0, 1fr); }
     .skp-rail { position: static; max-height: 240px; }
 }
+
+/* ── safety ───────────────────────────────────────────────────────────────
+ * The bridge's score (bridge/skill-safety.js) on a green→yellow→red bar.
+ * Every colour is a theme token or a color-mix of two: web/skills/import.js
+ * sets `--c` per row from --green, --yellow and --red. The bar's stops sit
+ * where the levels change (25 and 60), so the marker's colour and the level
+ * beside it agree. */
+
+.skp-safety {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5);
+    background: var(--s2);
+    border-radius: var(--r-sm);
+    border-left: 3px solid var(--green);
+}
+.skp-safety.yellow { border-left-color: var(--yellow); }
+.skp-safety.red { border-left-color: var(--red); }
+.skp-safety-head { display: flex; align-items: baseline; gap: var(--sp-4); }
+.skp-safety-h { font: 500 var(--fs-sm) var(--sans); color: var(--text); }
+.skp-safety-level { margin-left: auto; font: 500 var(--fs-xs) var(--sans); white-space: nowrap; }
+
+.skp-meter { position: relative; height: 18px; margin: 0 6px; }
+.skp-meter-bar {
+    position: absolute;
+    left: -6px; right: -6px; top: 6px;
+    height: 6px;
+    border-radius: var(--pill);
+    background: linear-gradient(90deg,
+        var(--green) 0%,
+        color-mix(in oklab, var(--yellow) 60%, var(--green)) 25%,
+        var(--yellow) 42%,
+        color-mix(in oklab, var(--red) 55%, var(--yellow)) 60%,
+        var(--red) 85%);
+}
+.skp-meter-tick { position: absolute; top: 3px; width: 1px; height: 12px; background: var(--s2); opacity: 0.9; }
+.skp-meter-mark {
+    position: absolute;
+    top: 1px;
+    width: 16px; height: 16px;
+    margin-left: -8px;
+    border-radius: 50%;
+    background: var(--c);
+    box-shadow: 0 0 0 3px var(--s2), 0 0 0 4px var(--text-3);
+}
+
+.skp-factors { display: flex; flex-direction: column; gap: 1px; }
+.skp-factor {
+    display: grid;
+    grid-template-columns: 10px 150px minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: var(--sp-4);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-sm);
+    background: color-mix(in oklab, var(--c) 9%, transparent);
+    font-size: var(--fs-xs);
+}
+.skp-factor-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); align-self: center; }
+.skp-factor-label { color: var(--text); }
+.skp-factor-note { color: var(--text-2); overflow-wrap: anywhere; }
+.skp-factor-pts { color: var(--c); font: 500 var(--fs-xs) var(--mono); }
+.skp-factors-quiet { font-size: var(--fs-2xs); color: var(--text-4); }
+
+.skp-hook {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    padding: var(--sp-4);
+    border-radius: var(--r-sm);
+    background: var(--red-cont);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c) 45%, transparent);
+}
+.skp-hook-head { display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; }
+.skp-hook-head .skp-factor-pts { margin-left: auto; }
+.skp-hook-h { font: 500 var(--fs-sm) var(--sans); color: var(--red-soft); }
+.skp-hook-why { font-size: var(--fs-xs); color: var(--text-2); }
+.skp-hook-one { display: flex; flex-direction: column; gap: var(--sp-2); }
+.skp-hook-meta { display: flex; gap: var(--sp-5); flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-2); }
+.skp-hook-meta code, .skp-risk code { font: 400 var(--fs-xs) var(--mono); color: var(--text); }
+.skp-pre.skp-hook-cmd { margin: 0; max-height: 200px; background: var(--bg); color: var(--text); }
+
+/* Files grouped by top-level folder. */
+.skp-fg-row { display: flex; align-items: baseline; gap: var(--sp-3); width: 100%; padding: var(--sp-2) var(--sp-4); border-radius: var(--r-sm); text-align: left; color: var(--text-2); }
+.skp-fg-row:hover { background: var(--s4); }
+.skp-fg-row.on { color: var(--text); }
+.skp-fg-caret { flex: none; width: 12px; color: var(--text-4); font-size: var(--fs-2xs); }
+.skp-fg-body { padding-left: var(--sp-7); }
+.skp-file-more.skp-link { text-align: left; }
+
+/* The full-screen warning before a red install. Over everything, the bar
+   included, and not dismissed by a click outside it: there is no outside. */
+.skp-risk {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-over);
+    overflow-y: auto;
+    background: color-mix(in oklab, var(--red-cont) 70%, var(--bg));
+    -webkit-app-region: no-drag;
+}
+.skp-risk-inner {
+    width: min(860px, 100%);
+    margin: 0 auto;
+    padding: var(--sp-10) var(--sp-9);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-6);
+}
+.skp-risk-badge {
+    align-self: flex-start;
+    padding: 0 var(--sp-5);
+    border-radius: var(--pill);
+    background: var(--red);
+    color: var(--on-red);
+    font: 600 var(--fs-xs)/24px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.skp-risk-h { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
+.skp-risk-lede { margin: 0; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-2); }
+.skp-risk-skill { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-6); background: var(--s2); border-radius: var(--r); }
+.skp-risk-skill-head { display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; }
+.skp-risk-skill-head .skp-safety-level { margin-left: auto; }
+.skp-risk-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--text-2); }
+.skp-risk-list strong { color: var(--text); font-weight: 500; }
+.skp-risk-hook { display: flex; flex-direction: column; gap: var(--sp-3); padding-bottom: var(--sp-3); }
+.skp-risk-hook .skp-hook-cmd { max-height: 320px; }
+.skp-risk-acts { display: flex; justify-content: flex-end; gap: var(--sp-4); flex-wrap: wrap; padding-top: var(--sp-4); }
