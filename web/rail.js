@@ -404,8 +404,10 @@ function groupCard(key, label, list, opts = {}) {
                 title=${drag ? 'Drag to reorder projects' : null}
                 onClick=${(e) => {
                     // Alt+click: every card of this kind at once, the convention
-                    // file trees use for the same thing.
-                    if (e.altKey && !opts.nested) return toggleAllGroups(false);
+                    // file trees use for the same thing. A nested heading folds
+                    // the nested cards (Scheduled, Workers) and leaves the
+                    // projects alone, so it never shuts the card it sits in.
+                    if (e.altKey) return toggleAllGroups(!!opts.nested);
                     toggleGroup(key, open, shutByDefault(opts)); renderRail();
                 }}
                 onDragStart=${drag ? (e) => onRailDragStart(e, opts.project.cwd) : null}
