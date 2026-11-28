@@ -25,6 +25,7 @@ const { PROJECTS_DIR, CACHE_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX } = req
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity, toolResultImage, placeOf } = require('./transcript');
 const codex = require('./runtimes/codex/transcript');
+const codexItems = require('./codex/items');
 const runtimes = require('./runtimes');
 const { TurnIndex } = require('./turn-index');
 const { SkillRunIndex } = require('./skill-runs');
@@ -34,7 +35,7 @@ const { SearchIndex } = require('./search-index');
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 16;
+const CACHE_VERSION = 17;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -170,6 +171,13 @@ class SessionIndex extends EventEmitter {
         this.pending = new Map();
         /** Codex thread names. See CodexNames. */
         this.codexNames = new CodexNames(CODEX_SESSION_INDEX);
+        /**
+         * Codex threads that are a spawned agent of another (`parent_thread_id`),
+         * by their own id. Not sessions: they are read as the parent's subagents,
+         * the way Claude's `subagents/` files are, and never listed.
+         * @type {Map<string, {file, dir, size, mtimeMs, meta}>}
+         */
+        this.codexAgents = new Map();
         /** One watcher per watched directory, keyed by path. See _watchDir(). */
         this.watchers = new Map();
         this._watching = false;
@@ -259,6 +267,7 @@ class SessionIndex extends EventEmitter {
         // `.zst` can both exist for a moment while Codex compresses one, and
         // conversationRecord picks between those the same way.
         const named = this.codexNames.refresh();
+        const agents = new Map();
         for (const dir of codexDirs) {
             if (this._watching) this._watchDir(dir);
             let files;
@@ -277,6 +286,12 @@ class SessionIndex extends EventEmitter {
                     rec = { file, dir, size: st.size, mtimeMs: st.mtimeMs, meta };
                     parsed++;
                     if (parsed % 25 === 0) await new Promise(r => setImmediate(r));
+                }
+                // A spawned agent's thread belongs to the one that spawned it.
+                if (rec.meta.parentThreadId) {
+                    byFile.set(file, rec);
+                    agents.set(rec.meta.sessionId, conversationRecord(agents.get(rec.meta.sessionId), rec));
+                    continue;
                 }
                 // The thread's name, laid over the prompt-derived title. Done on
                 // every pass rather than in scanMeta, because the name lives in
@@ -334,6 +349,7 @@ class SessionIndex extends EventEmitter {
 
         this.sessions = chosen;
         this.byFile = byFile;
+        this.codexAgents = agents;
         // Don't accumulate pins and archives for transcripts that are long gone —
         // but knownIds(), not the index alone, or a session created a moment ago
         // loses its flags before it has written anything. See note().
@@ -775,7 +791,7 @@ class SessionIndex extends EventEmitter {
         const { entries, consumed } = parseLines(buf.subarray(from, Math.max(from, end)));
         const before = from === 0
             ? codex.inherited(entries, { locate: (id) => this._codexFile(id) }) : [];
-        const { events } = codex.buildEvents([...before, ...entries]);
+        const { events } = codex.buildEvents([...before, ...entries], this._codexCtx());
         return { summary: this._summary(rec), events, offset: from + consumed };
     }
 
@@ -783,6 +799,76 @@ class SessionIndex extends EventEmitter {
     _codexFile(threadId) {
         const rec = this.sessions.get(threadId);
         return isCodex(rec) ? rec.file : null;
+    }
+
+    /** What the Codex reader is told about spawned agents: which have a rollout. */
+    _codexCtx() {
+        return {
+            hasAgent: (id) => this.codexAgents.has(id),
+            agentNickname: (id) => {
+                const a = this.codexAgents.get(id);
+                return (a && a.meta.agentNickname) || null;
+            },
+        };
+    }
+
+    /**
+     * Where a branch from your message `id` cuts a Codex session — `{parent,
+     * last}` or null — read over the whole history, a fork's inherited part
+     * included. The Claude reader's `branchPoint` takes a file; a Codex fork's
+     * history is in more than one.
+     */
+    codexBranchPoint(sessionId, id) {
+        const rec = this.sessions.get(sessionId);
+        if (!isCodex(rec)) return null;
+        const buf = codex.readFile(rec.file);
+        if (!buf) return null;
+        const { entries } = parseLines(buf);
+        const before = codex.inherited(entries, { locate: (t) => this._codexFile(t) });
+        return codex.branchPoint([...before, ...entries], id);
+    }
+
+    /** A Codex session's spawned agents, in `subagents()`'s shape. */
+    _codexSubagents(sessionId) {
+        const now = Date.now();
+        const out = [];
+        for (const a of this.codexAgents.values()) {
+            if (a.meta.parentThreadId !== sessionId) continue;
+            out.push({
+                toolUseId: a.meta.sessionId,
+                agentId: a.meta.sessionId,
+                agentType: a.meta.agentNickname || null,
+                description: codexItems.taskNameOf(a.meta.agentPath),
+                spawnDepth: codexItems.depthOf(a.meta.agentPath),
+                bytes: a.size,
+                mtimeMs: a.mtimeMs,
+                updatedAt: a.mtimeMs ? new Date(a.mtimeMs).toISOString() : null,
+                warm: a.mtimeMs > 0 && (now - a.mtimeMs) < ACTIVE_WINDOW_MS,
+                activity: null,
+                activityTs: null,
+            });
+        }
+        out.sort((x, y) => x.mtimeMs - y.mtimeMs);
+        return out;
+    }
+
+    /**
+     * One spawned agent's transcript, addressed by its thread id (the `id` of its
+     * `Agent` row), from `offset` on — subagent()'s contract. From 0 it is the
+     * agent's own lines only: its rollout opens with a copy of the parent's
+     * history, which the parent's view already shows.
+     */
+    _codexSubagent(sessionId, threadId, offset) {
+        const a = this.codexAgents.get(String(threadId || '').toLowerCase());
+        if (!a || a.meta.parentThreadId !== sessionId) return null;
+        const info = this._codexSubagents(sessionId).find(x => x.toolUseId === a.meta.sessionId) || {};
+        const buf = codex.readFile(a.file);
+        if (!buf) return { ...info, events: [], offset: 0, reset: false };
+        if (buf.length < offset) return { ...info, events: [], offset: 0, reset: true };
+        const { entries, consumed } = parseLines(buf.subarray(offset));
+        const mine = offset === 0 ? codex.ownLines(entries) : entries;
+        const { events } = codex.buildEvents(mine, this._codexCtx());
+        return { ...info, events, offset: offset + consumed, reset: false };
     }
 
     /**
@@ -845,7 +931,7 @@ class SessionIndex extends EventEmitter {
             if (buf.length < offset) return { reset: true, offset: 0, events: [] };
             if (buf.length === offset) return { reset: false, offset, events: [] };
             const { entries, consumed } = parseLines(buf.subarray(offset));
-            const { events } = codex.buildEvents(entries);
+            const { events } = codex.buildEvents(entries, this._codexCtx());
             return { reset: false, offset: offset + consumed, events };
         }
 
@@ -884,6 +970,7 @@ class SessionIndex extends EventEmitter {
     subagents(sessionId) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
+        if (isCodex(rec)) return this._codexSubagents(sessionId);
         const idx = readSubagentIndex(path.join(rec.dir, sessionId));
         const now = Date.now();
         const out = [];
@@ -913,6 +1000,7 @@ class SessionIndex extends EventEmitter {
     subagent(sessionId, toolUseId, offset = 0) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
+        if (isCodex(rec)) return this._codexSubagent(sessionId, toolUseId, offset);
         const sessionDir = path.join(rec.dir, sessionId);
         const idx = readSubagentIndex(sessionDir);
         const entry = idx.get(toolUseId);

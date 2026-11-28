@@ -702,7 +702,7 @@ export const newC = makeComposer({
     // `@` menu rather than dropping the one you are in — there is not one yet.
     ctx: () => {
         const cwd = dom.newCwd.value.trim();
-        return cwd ? { cwd, sessionId: null } : null;
+        return cwd ? { cwd, sessionId: null, runtime: newDialogRuntime() } : null;
     },
     notReady: 'Pick a working directory first.',
     homeEnd: false,

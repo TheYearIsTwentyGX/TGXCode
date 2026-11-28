@@ -48,7 +48,22 @@ const TOOL = Object.freeze({
     imageGeneration: 'image_generation',
     sleep: 'sleep',
     agent: 'spawn_agent',
+    // A spawned agent, as Claude's subagent row is named: the web's subagent
+    // chips, its pane and `GET …/subagent` all key on `Agent`.
+    subagent: 'Agent',
 });
+
+/** `/root/heron_reply` → `heron_reply`: the task name Codex gave a spawned agent. */
+function taskNameOf(agentPath) {
+    const parts = String(agentPath || '').split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : null;
+}
+
+/** How deep a spawned agent is: `/root/a` is 1, `/root/a/b` is 2. */
+function depthOf(agentPath) {
+    const n = String(agentPath || '').split('/').filter(Boolean).length - 1;
+    return n > 0 ? n : 1;
+}
 
 // ---------------------------------------------------------------------------
 // The disk form, translated to the wire form
@@ -162,6 +177,11 @@ function fromRollout(item) {
  */
 function statusOf(item) {
     const s = item.status;
+    // A spawned agent's item is a moment in its life, not a call with a status:
+    // the agent is running until an item says it stopped.
+    if (item.type === 'subAgentActivity') {
+        return item.kind === 'interrupted' ? 'error' : item.kind === 'completed' ? 'ok' : 'pending';
+    }
     if (s === 'inProgress' || s === 'pending') return 'pending';
     if (s === 'failed' || s === 'declined' || s === 'interrupted' || s === 'error') return 'error';
     if (item.exitCode != null && item.exitCode !== 0) return 'error';
@@ -324,6 +344,19 @@ const KINDS = {
         input: (i) => ({ tool: i.tool || null, prompt: i.prompt || '', model: i.model || null }),
         result: (i) => (i.status === 'inProgress' ? null : { text: '' }),
     },
+    // A spawned agent's life, one item per moment: `started` when it is spawned,
+    // then `interacted`, `interrupted` or `completed`. On 0.172.0 this, not a
+    // `collabAgentToolCall` `spawnAgent`, is what a spawn writes. The reader draws
+    // `started` as the subagent's row and the rest as its result; see
+    // bridge/runtimes/codex/transcript.js. Its prompt is encrypted on disk, so the
+    // row is named for the task.
+    subAgentActivity: {
+        tool: () => TOOL.subagent,
+        input: (i) => ({ description: taskNameOf(i.agentPath) || 'Subagent', prompt: '',
+            subagent_type: null, agentPath: i.agentPath || null, threadId: i.agentThreadId || null }),
+        result: (i) => (i.kind === 'started' || i.kind === 'interacted' ? null
+            : { text: i.kind === 'interrupted' ? 'Interrupted' : '' }),
+    },
 };
 
 /** Text out of an MCP result or a dynamic tool's content items. */
@@ -372,4 +405,5 @@ function contextOf(used, window) {
 module.exports = {
     contextOf,
     TOOL, KINDS, fromRollout, toolEvent, roleOf, statusOf, scriptOf, countDiff, textOf, camel,
+    taskNameOf, depthOf,
 };

@@ -74,6 +74,22 @@ function learnAccount(result) {
 
 // ---- a recording session ------------------------------------------------------
 
+/** The rollout of thread `id` under `<home>/sessions`, newest days first, or null. */
+function findRollout(home, id) {
+    const walk = (dir, depth) => {
+        let names;
+        try { names = fs.readdirSync(dir).sort().reverse(); } catch { return null; }
+        for (const n of names) {
+            const full = path.join(dir, n);
+            if (depth === 0) { if (n.includes(id) && n.endsWith('.jsonl')) return full; continue; }
+            const hit = walk(full, depth - 1);
+            if (hit) return hit;
+        }
+        return null;
+    };
+    return walk(path.join(home, 'sessions'), 3);
+}
+
 class Recording {
     constructor(name, { home }) {
         this.name = name;
@@ -83,8 +99,9 @@ class Recording {
         this.cwd = fs.mkdtempSync(path.join('/tmp', `codex-fixture-${name}-`));
         const env = { ...process.env };
         if (home) env.CODEX_HOME = home;
+        this.codexHome = home || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
         try {
-            const codexHome = home || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+            const codexHome = this.codexHome;
             addSecret(fs.readFileSync(path.join(codexHome, 'installation_id'), 'utf8').trim(),
                 'installation-00000000');
         } catch { /* none yet */ }
@@ -115,6 +132,19 @@ class Recording {
         this.lines.push({ dir, t: Date.now() - this.t0, msg });
         if (msg.result && msg.result.thread && msg.result.thread.id) {
             this.threads.set(msg.result.thread.id, msg.result.thread.path || null);
+        }
+        // A subagent's thread is never a reply to us: it is announced.
+        const announced = msg.method === 'thread/started' && msg.params && msg.params.thread;
+        if (announced && announced.id && !this.threads.has(announced.id)) {
+            this.threads.set(announced.id, announced.path || null);
+        }
+        // Nor is it always announced: on 0.172.0 a spawned agent's thread is only
+        // named by the parent's `subAgentActivity` item, and its path is found on
+        // disk at the end.
+        const item = msg.params && msg.params.item;
+        if (item && item.type === 'subAgentActivity' && item.agentThreadId
+            && !this.threads.has(item.agentThreadId)) {
+            this.threads.set(item.agentThreadId, null);
         }
     }
 
@@ -169,7 +199,8 @@ class Recording {
         fs.writeFileSync(out, this.lines.map(l => scrub(JSON.stringify(l))).join('\n') + '\n');
         console.error(`wrote ${path.relative(process.cwd(), out)} (${this.lines.length} messages)`);
         let n = 0;
-        for (const [id, file] of this.threads) {
+        for (const [id, known] of this.threads) {
+            const file = known || findRollout(this.codexHome, id);
             if (!file || !fs.existsSync(file)) {
                 console.error(`  thread ${id}: no rollout on disk${file ? '' : ' (no path)'}`);
                 continue;
@@ -356,6 +387,72 @@ const SCENARIOS = {
         await r.turn(t.id, 'Before doing anything else, use your request_user_input tool (the '
             + 'blocking one) to ask me which colour I prefer, offering red and blue. '
             + 'Then reply with just the colour I chose.');
+    },
+
+    /**
+     * Branching from a turn: three turns, then a fork through the second
+     * (`lastTurnId`, inclusive) and a fork before it (`beforeTurnId`, which drops
+     * it), with a turn on each so each child's rollout has lines of its own.
+     */
+    async branch(r) {
+        await r.init();
+        await r.account();
+        const t = await r.startThread();
+        const turns = [];
+        for (const w of ['heron', 'otter', 'lynx']) {
+            const done = await r.turn(t.id, `Remember the word "${w}". Reply with just: ok`);
+            turns.push(done.turn.id);
+        }
+        const through = await r.rpc.request('thread/fork',
+            { threadId: t.id, excludeTurns: true, lastTurnId: turns[1] });
+        await r.turn(through.thread.id, 'List every word I asked you to remember, comma-separated. Nothing else.');
+        const before = await r.rpc.request('thread/fork',
+            { threadId: t.id, excludeTurns: true, beforeTurnId: turns[1] });
+        await r.turn(before.thread.id, 'List every word I asked you to remember, comma-separated. Nothing else.');
+    },
+
+    /** The checklist: `update_plan`, opt-in on 0.172.0, turned on in the thread config. */
+    async 'plan-update'(r) {
+        await r.init();
+        await r.account();
+        const t = await r.startThread({ config: { 'tools.update_plan.enabled': true } });
+        await r.turn(t.id, 'Use your update_plan tool to keep a three-step checklist while you '
+            + 'work: (1) think of a colour, (2) think of an animal, (3) reply. Mark each step '
+            + 'in progress and then completed as you go, calling update_plan after every change. '
+            + 'Do not run any commands. Finally reply with just the colour and the animal.');
+    },
+
+    /** A skill from `skills/list`, sent as a `{type:"skill"}` input beside the text. */
+    async skill(r) {
+        await r.init();
+        await r.account();
+        const dir = path.join(r.cwd, '.agents', 'skills', 'say-heron');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: say-heron\ndescription: '
+            + 'Replies with the word heron and nothing else.\n---\n\nWhen this skill is used, '
+            + 'reply with exactly the word heron. Run no commands.\n');
+        const list = await r.rpc.request('skills/list', { cwds: [r.cwd] });
+        const entry = (list.data || []).find(d => d.cwd === r.cwd) || (list.data || [])[0];
+        const skill = entry.skills.find(s => s.name === 'say-heron');
+        const t = await r.startThread();
+        await r.turn(t.id, '$say-heron', {});
+        // And once with an argument after the name, as a palette sends it.
+        const done = r.waitFor('turn/completed', (p) => p.threadId === t.id);
+        await r.rpc.request('turn/start', { threadId: t.id, input: [
+            { type: 'skill', name: skill.name, path: skill.path },
+            { type: 'text', text: '$say-heron then add the word twice' },
+        ] });
+        await done;
+    },
+
+    /** A subagent: `spawn_agent`, a child thread with a `parentThreadId`, and its activity. */
+    async subagent(r) {
+        await r.init();
+        await r.account();
+        const t = await r.startThread();
+        await r.turn(t.id, 'Spawn exactly one subagent and give it this task: reply with just the '
+            + 'word heron. Wait for it to finish, then tell me what it replied, in one word. '
+            + 'Run no commands yourself.');
     },
 
     async plan(r) {

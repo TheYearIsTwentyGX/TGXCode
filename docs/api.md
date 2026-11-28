@@ -766,9 +766,10 @@ written today, as long as the client reads the flags.
 | `delete` | `DELETE /api/sessions/:id`. False for a runtime whose transcripts are another program's store (a Codex rollout has projections in Codex's own databases) |
 
 - **Every flag is `true` for `"claude"`**, `send`, `delete` and `updateCheck` included. For
-  **`"codex"`**: `planMode`, `askUser`, `steer`, `images` and `send` are `true`;
-  `fork`, `branchFromTurn`, `tasks` and `slashCommands` are `false` until a later
-  phase; `peers` and `scratchpad` are `false` because Codex has no equivalent;
+  **`"codex"`**: `fork`, `branchFromTurn`, `planMode`, `askUser`, `tasks`,
+  `slashCommands`, `steer`, `images` and `send` are `true` (`fork`, `branchFromTurn`,
+  `tasks` and `slashCommands` since Phase 4 of the Codex work; before it they were
+  `false`); `peers` and `scratchpad` are `false` because Codex has no equivalent;
   `allowForSession` is `false` because a Codex tool ask carries its own `decisions`
   (§`POST /api/sessions/:id/permission`) and a card draws those instead of the
   generic "allow always"; and `delete` is `false` because a rollout is Codex's store,
@@ -790,9 +791,10 @@ written today, as long as the client reads the flags.
   it by `runtime`.
 - **A write a session cannot take is refused `409`** with
   `{error: string, capability: string, runtime: string}` — `capability` the flag that
-  is false (`"send"` or `"delete"`), `error` a sentence fit to show. Refused this way:
-  `POST …/send`, `…/later`, `…/wake`, `…/handoff` and `…/attachments` (`send`), and
-  `DELETE /api/sessions/:id` (`delete`). The checks that come first on those routes
+  is false (`"send"`, `"fork"`, `"branchFromTurn"` or `"delete"`), `error` a sentence
+  fit to show. Refused this way: `POST …/send`, `…/later`, `…/wake`, `…/handoff` and
+  `…/attachments` (`send`); `POST …/send` with `fork: true` (`fork`) or a `fromUuid`
+  (`branchFromTurn`); and `DELETE /api/sessions/:id` (`delete`). The checks that come first on those routes
   still come first — a refused mode is `403` and an unknown id `404` before this. The
   routes that need a live process (`stop`, `restart`, `permission`, `queue`) answer
   as they do for any session with none.
@@ -968,24 +970,39 @@ own:
 | `apply_patch` — a patch to one or more files | **`{changes: [{path, kind, movePath, diff}]}`** — one entry per file: `path` absolute, `kind` `"add"`, `"delete"` or `"update"`, `movePath` a string or null (a rename's new path), **`diff` a unified diff string** (`@@` hunks, `+`/`-`/space lines). Not `result.patch`: there is no structured patch on a Codex row, and one call can touch several files | `{text: string}` — what the tool printed; `"Declined"` for a declined patch |
 | `plan` — a plan turn's plan | `{plan: string}` markdown | `{text: ""}`. **Nothing was approved**: a Codex plan turn ends with the plan and asks nothing, so a review of it should say "proposed", not "approved" |
 | `request_user_input` — the blocking question | `{questions: [{id, header, question, options: [{label, description}], multiSelect: false}]}` — AskUserQuestion's shape | `{text, answers}` — `answers` keyed by question text exactly as `AskUserQuestion`'s is. Its answer is a separate line on disk, so it can arrive later as a `tool-result` patch |
-| `update_plan` — the checklist | `{explanation: string\|null, plan: [{step: string, status: "pending"\|"in_progress"\|"completed"}]}` | `{text: ""}` |
-| `web_search`, `mcp_tool_call`, `dynamic_tool_call`, `view_image`, `image_generation`, `sleep`, `spawn_agent` | kind-specific objects of strings and numbers | `{text: string}` |
+| `update_plan` — the checklist | `{explanation: string\|null, plan: [{step: string, status: "pending"\|"in_progress"\|"completed"}]}` — the whole list as of this call, as `TodoWrite`'s input is. Codex 0.172.0 writes it to disk only inside the code-mode script that called it; the bridge reads it out of that, and a call whose argument was not a literal is not drawn. `GET …/tasks` reads the same rows | `{text: ""}` |
+| `Agent` — a spawned agent (a `SubAgentActivity` item) | `{description: string, prompt: "", subagent_type: null, agentPath: string\|null, threadId: string\|null}` — `description` the task name Codex gave it (`heron_reply` for `/root/heron_reply`); the prompt is encrypted on disk, so it is always `""` | `{text: string}` — `""`, or `"Interrupted"`. **`status` is `"pending"` while the agent runs**, and its end arrives later as a `tool-result` patch on the same id. **`id` is the agent's thread id**, which is the `toolUseId` `GET …/subagent` takes. `tool.agent` is the subagent descriptor below |
+| `web_search`, `mcp_tool_call`, `dynamic_tool_call`, `view_image`, `image_generation`, `sleep`, `spawn_agent` | kind-specific objects of strings and numbers (`spawn_agent` is one of the agent tools — `wait`, `sendInput`, `closeAgent`… — named in `input.tool`) | `{text: string}` |
 
 - **An unknown Codex item kind is a `tool` named after the kind** (camelCase, e.g.
   `"somethingNew"`), with the item's fields as `input` and `result: {text: ""}`. It is
   never dropped and never an error.
-- **Every Codex tool row arrives finished.** Codex writes an item to disk when it
-  completes, so a `tool` on a Codex session is `"ok"` or `"error"` when it first
-  appears, and the only `tool-result` patch is a `request_user_input` answer. There is
-  no running state to draw from the file.
+- **Every Codex tool row arrives finished, but two.** Codex writes an item to disk when
+  it completes, so a `tool` on a Codex session is `"ok"` or `"error"` when it first
+  appears. The exceptions are a `request_user_input` answer and an `Agent` row's end,
+  which are `tool-result` patches. There is no other running state to draw from the file.
 - `tool.durationMs` and `tool.resultTs` are set from Codex's own start and end times.
-  `tool.agent` is null and `tool.persistedPath` absent.
+  `tool.persistedPath` is absent. **`tool.agent` is null except on an `Agent` row**,
+  where it is `{agentId, agentType, description, model, isAsync: false, durationMs,
+  tokens: null, toolUses: null, spawnDepth}` plus `hasTranscript: true` when the agent's
+  own rollout is on disk: `agentId` the thread id, `agentType` Codex's nickname for it
+  (`"Anscombe"`) or null, `description` the task name. The agent's own thread is not a
+  session — it is never listed and `GET /api/sessions/:id` 404s on it — and is read
+  through the parent: `GET …/subagents` lists it with `toolUseId` the thread id, and
+  `GET …/subagent?toolUseId=<thread id>` (and `agent` on `POST /api/subscribe`) reads its
+  own lines, without the copy of the parent's history its rollout opens with.
 - **An interrupted turn is a `system` event**, `subtype: "interrupted"`,
   `isError: false`, `text: "Interrupted."` — Codex records a stop as a line of its own,
   and it can land just before the row of the command it killed.
-- `user` events have `origin: "human"`, `command: null`, `files: []` and
-  `parent: null` (a Codex turn cannot be branched from: `branchFromTurn` is false). The
-  harness's own messages — Codex's instructions and its `<environment_context>` — are
+- `user` events have `origin: "human"` and `files: []`. **`id` is a uuid** (Codex's
+  message id without its `msg_` prefix), which is what `fromUuid` takes. **`parent` is
+  the id of the Codex turn the message is in**, not a chain entry, and `null` on the
+  conversation's first input — so, as for Claude, `parent: null` means "nothing before
+  it to keep". A message folded into a running turn has that turn's id, so a branch from
+  it drops the whole turn. **`command` is `{name, args}` for a skill**: a message that
+  ran one (`$name args`, or a skill input from the palette) has `text: ""` and the
+  skill's name, without the `$`, in `command.name` — draw it as you draw a Claude slash
+  command; otherwise `command` is null. The harness's own messages — Codex's instructions and its `<environment_context>` — are
   not events, as Claude's `<system-reminder>` is not. A question the model asked
   without waiting for the answer is an `assistant` event.
 - **A forked thread opens with its parent's history.** Codex writes only the child's
@@ -1495,7 +1512,10 @@ One item:
 `directory` list (from `~/.claude/tasks/<session-id>/`, written by the
 `TaskCreate`/`TaskUpdate` tools) has ids, descriptions and dependencies. A `todo`
 list (reconstructed from the newest `TodoWrite` call in the transcript) has none
-of those three. A client that draws a description affordance on a `todo` list is
+of those three. **A Codex session's list is always `source: "todo"`**: it is the newest
+`update_plan` call in the rollout's tail, each step as an item with `subject` and
+`activeForm` both the step's text, and its statuses (`inProgress` on Codex's wire) in
+the same closed three. The task boards' `tasks` count reads the same list. A client that draws a description affordance on a `todo` list is
 drawing something that can never be filled.
 
 **`id` is null for `source: "todo"`, and that is not an omission.** TodoWrite is
@@ -3776,6 +3796,22 @@ have no file.
 `exact: false`) or `none`. An unknown directory is `commands: []` and 200, never
 a 404: the caller pressed a key, and an empty list is a real answer.
 
+**A Codex session's palette is its skills.** For a session whose `runtime` is
+`"codex"`, or with `runtime=codex` beside `cwd` (a dialog about to start one), the
+answer comes from Codex's own `skills/list` for that directory — the repo's
+(`.agents/skills`, `.codex/skills`), the user's, the admin's and Codex's `system`
+skills, disabled ones left out — as `{cwd, at, exact, source: "codex", commands:
+[{name, description?, scope?}], error?}`. `scope` is `"repo"`, `"user"`, `"system"` or
+`"admin"`; there is no `argumentHint`. The bridge asks a short-lived `codex app-server`
+and keeps the answer 30 seconds, so the first `/` in a directory can take a second or
+two. If Codex could not be asked, `exact` is `false`, `error` says why, and `commands`
+is the last list it gave (or `[]`) — still a 200. **Send a chosen skill as text,
+`/name args`, exactly as a Claude command**: the bridge turns it into Codex's skill
+input (`{type: "skill"}` beside the text `$name args`), and it reads back as a `user`
+event with `command {name, args}`. Cache a Codex directory's list apart from the
+Claude list for the same directory: they are different lists. The `slash-commands`
+event is not sent for Codex lists.
+
 ### `GET /api/file-search?session=<id>&q=<text>` · `GET /api/file-search?cwd=<path>&q=<text>`
 
 Files and directories under a working directory that match what was typed after
@@ -4338,7 +4374,7 @@ down from:
 | **`secretAsk`** | **object or null** — a secret the agent asked for with `request_secret`, same shape as `secret-ask` (§*Secrets*). Separate from `pendingPermission` and `sudoAsk` |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
-| `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
+| `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). On a Codex session every spawned agent counts while it runs, including one its turn is waiting on, and `agent-done` (`status` `"completed"` or `"interrupted"`, `toolUseId` the agent's thread id) says when it stopped. `0` whenever there is no process. Carried over when a bridge adopts a process |
 | **`pendingSettings`** | **object or null** — `{model, effort}` (each a string or null), a model/effort change the bridge is holding until `background` reaches zero, because applying it restarts the process and would stop that work. When it is applied, a status with the new `model`/`effort` follows |
 | `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
 | **`context`** | **object or null** — `{usedTokens: number, windowTokens: number\|null}`, the context window as the live process last reported it (Codex's `thread/tokenUsage/updated`, after each model request). Always null for Claude, and null with no process. Not on the narrow `runner` of list rows. See §*Context use* |
@@ -4687,6 +4723,25 @@ applied only to what the copy loads (`claude --resume … --fork-session
   `fromUuid` instead.
 - Success is the ordinary fork: `session-forked {from, to}` follows, and `to` is the
   copy. A copy of a session labelled `test` is labelled `test` as well.
+
+**On a Codex session** (`runtime: "codex"`) both work the same from the client's side —
+the same fields, the same `400`s and `409`s, and `session-forked {from, to}` with the
+copy's id once Codex has named it. The bridge sends `thread/fork {excludeTurns: true}`
+to Codex in place of resuming the thread, and for a `fromUuid` adds `beforeTurnId`: the
+**Codex turn the message is in** (its `parent`), so the copy keeps every turn before
+that one. Two differences follow from that:
+
+- **A message folded into a running turn** (one sent while the turn was working) shares
+  that turn, so branching from it drops the whole turn, including the message the turn
+  began with.
+- **The copy's history is the parent's file.** A Codex fork records its history as a
+  pointer into the parent's rollout rather than a copy of it, so a copy whose parent
+  has since been deleted opens with only its own turns.
+
+Codex refusing the cut (a turn still in progress, an id it does not know) is a
+`send-failed` with `kind: "branch-refused"`, as above. A session whose `fork` or
+`branchFromTurn` capability is false is refused `409 {error, capability: "fork" |
+"branchFromTurn", runtime}` before any of this.
 
 ### `POST /api/drafts`
 

@@ -88,9 +88,11 @@ const CLAUDE_CAPABILITIES = Object.freeze({
 
 /**
  * Codex, driven (docs/plans/23-codex.md, Phase 3): sent to, steered, stopped,
- * with its approvals, questions, plans and images. Everything still false is
- * Phase 4's (fork, branch, the checklist, the slash palette) or has no Codex
- * equivalent (peers, the scratchpad).
+ * with its approvals, questions, plans and images; and since Phase 4 forked
+ * (`thread/fork`), branched from a turn (`beforeTurnId`), with a checklist
+ * (`update_plan`, read as a flat TodoWrite list) and a slash palette of its
+ * skills (`skills/list`). What is still false has no Codex equivalent (peers,
+ * the scratchpad) or is said below.
  *
  * `allowForSession` is false because a Codex ask carries its own `decisions`,
  * and a card draws those instead of the generic "Allow always" button. `delete`
@@ -99,14 +101,17 @@ const CLAUDE_CAPABILITIES = Object.freeze({
  * pointing at nothing. A Codex thread is deleted through Codex.
  */
 const CODEX_CAPABILITIES = Object.freeze({
-    fork: false,
-    branchFromTurn: false,
+    fork: true,
+    // Threads with paginated history, which is every thread from 0.160.1 on.
+    branchFromTurn: true,
     planMode: true,
     askUser: true,
     peers: false,
-    tasks: false,
+    // A flat list: `update_plan` has no ids and no dependencies.
+    tasks: true,
     scratchpad: false,
-    slashCommands: false,
+    // Skills only. Codex removed custom prompts in March 2026.
+    slashCommands: true,
     steer: true,
     images: true,
     allowForSession: false,

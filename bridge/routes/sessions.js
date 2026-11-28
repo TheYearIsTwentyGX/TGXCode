@@ -344,11 +344,16 @@ async function handle(req, res, url, pathname, seg, who) {
     if (pathname === '/api/slash-commands' && req.method === 'GET') {
         const session = url.searchParams.get('session');
         let cwd;
+        // Which CLI's commands: a session's own runtime, or `runtime` beside a
+        // `cwd` for a dialog that has not started one. Codex's palette is its
+        // skills, asked of Codex (bridge/codex/skills.js).
+        let runtime = url.searchParams.get('runtime') || null;
 
         if (session) {
             const summary = index.summary(session);
             if (!summary) return send(res, 404, { error: 'session not found' });
             cwd = sessionCwd(summary);
+            runtime = summary.runtime || null;
         } else {
             cwd = cfg.expandHome(url.searchParams.get('cwd') || '');
             if (!cwd) return send(res, 400, { error: 'session or cwd is required' });
@@ -366,6 +371,7 @@ async function handle(req, res, url, pathname, seg, who) {
         // Never a 404 for "nothing recorded yet": an empty list is a real answer,
         // and it lets the menu say so quietly instead of raising an error at
         // somebody who only pressed a key.
+        if (runtime === 'codex') return send(res, 200, await require('../codex/skills').list(cwd));
         return send(res, 200, slashCommands.for(cwd));
     }
 

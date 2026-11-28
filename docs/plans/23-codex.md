@@ -11,8 +11,10 @@
 > schema in `docs/codex-schema/0.172.0/`, the recordings in
 > `test/fixtures/codex/`, the runtime seam in `bridge/runtimes/`, Codex sessions
 > are listed and read through `bridge/runtimes/codex/transcript.js`, and they are
-> started and driven through `bridge/runtimes/codex/process.js`. Phase 4 onwards
-> is not built.
+> started and driven through `bridge/runtimes/codex/process.js`. Phase 4's
+> conversation features (fork, branch, checklist, subagents, the skill palette) and
+> its quota and version are built; see under Phase 4. The rest of Phase 4 onwards
+> is not.
 
 ## Why
 
@@ -260,7 +262,7 @@ behaviour change in disguise.
   | MCP tool call, web search | `tool` |
   | `compacted` | `compact` |
   | `turn_aborted` | interrupted marker |
-  | `event_msg` `plan_update` | checklist (see Phase 4) |
+  | `event_msg` `plan_update` | checklist (see Phase 4: 0.172.0 no longer writes it) |
 
 - `web/transcript/tools.js` learns to render a command row and a patch row.
 - `changes.js` takes line counts from patch diffs instead of `structuredPatch`.
@@ -457,6 +459,37 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
   `TGXCODE_SESSION_ID` through `shell_environment_policy.set` in the thread
   `config`. Today we *strip* that variable for Claude, so the reader has to
   accept it only for Codex sessions.
+
+**As built — fork, branch, checklist, subagents, skills.** Measured on 0.172.0
+and recorded as `branch`, `plan-update`, `skill` and `subagent` in
+`test/fixtures/codex/`; `test/codex-features.test.js` pins each. Where the list
+above was wrong:
+
+- **There is no `plan_update` line any more.** Code mode puts `update_plan` inside
+  an `exec` script, so the rollout's only record of the checklist is JavaScript
+  (`await tools.update_plan({plan:[…]})`), and `turn/plan/updated` exists only on
+  the wire. `bridge/codex/plan.js` reads literals, and names bound to literals
+  earlier in the script — a live turn bound six lists to `const`s and passed each by
+  name. Anything else is skipped. The wire's copy drives the activity line ("Think of
+  an animal (2 of 3)").
+- **A spawned agent shares its parent's app-server.** Its `turn/started` and
+  `turn/completed` arrive on the parent's connection under the child's `threadId`,
+  and before this an agent's `turn/completed` ended the parent's turn. The adapter
+  now reads a thread named by a `subAgentActivity` as a child: background work
+  (`task`, `agent-done`), never a turn. On 0.172.0 a spawn writes a
+  `SubAgentActivity` item, not a `collabAgentToolCall` `spawnAgent`; its prompt is
+  encrypted, so the row is named for its task.
+- **A child's rollout copies its parent's history inline**, unlike a fork's
+  (`subagent_history_start_ordinal` says where its own lines start), and carries
+  `parent_thread_id`. The index files it under the parent as a subagent and never
+  lists it.
+- **Branching needs no context to key.** A person's message is keyed by its own
+  `msg_<uuid>` (prefix dropped) and carries its turn id as `parent`;
+  `user_input_order` 0 marks the conversation's first input, counted across a fork's
+  inherited history. The branch is `thread/fork {beforeTurnId: parent}`.
+- **`$name` at the start of a message runs a skill even without a skill input**, and
+  Codex injects a `<skill>` harness message after it. A palette sends both the input
+  and the `$name args` text; the reader reads either as `command {name, args}`.
 
 ### Phase 5 — Config surfaces
 

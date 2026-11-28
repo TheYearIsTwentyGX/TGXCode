@@ -34,6 +34,13 @@ frames nothing itself; client.js serves an app-server outside any conversation
                `account/rateLimits/updated` from live conversations over them.
   version.js   `codex --version` against npm's @openai/codex and against the
                tested range above (GET /api/codex-version).
+  plan.js      `update_plan` as TodoWrite's list. 0.172.0 writes the checklist
+               to disk only inside the code-mode `exec` script that called it, so
+               this reads JavaScript literals (and names bound to them earlier in
+               the script); `turn/plan/updated` is the wire's copy. Phase 4.
+  skills.js    `skills/list {cwds}` for the slash palette, cached per directory,
+               and `lookup` for the adapter, which sends a chosen skill as a
+               `{type:"skill"}` input. Phase 4.
   items.js     The v2 ThreadItem kinds as the bridge's `tool` events, in one
                table. `fromRollout` turns the rollout's form of an item
                (`item_completed`: PascalCase type, snake_case fields, a
