@@ -93,6 +93,7 @@ const { KNOWN_NOTIFICATIONS, OPT_OUT } = require('../../codex/protocol');
 // same name, so a card, a row and the activity line agree on what a call is.
 const { TOOL, KINDS, toolEvent, scriptOf, contextOf, taskNameOf } = require('../../codex/items');
 const codexSkills = require('../../codex/skills');
+const hookLog = require('../../codex/hook-log');
 const { describeTool } = require('./tools');
 
 let bridgeVersion = '0.0.0';
@@ -689,6 +690,14 @@ class CodexAdapter {
                 const u = p.tokenUsage || {};
                 const context = contextOf(u.last && u.last.totalTokens, u.modelContextWindow);
                 return context ? [{ type: 'context', context }] : [];
+            }
+
+            // Codex writes nothing about a hook to the rollout, so one that went
+            // wrong is handed to the bridge to keep (bridge/codex/hook-log.js).
+            case 'hook/completed': {
+                const run = p.run || {};
+                return hookLog.worthNoting(run)
+                    ? [{ type: 'hook-run', run, turnId: p.turnId || null }] : [];
             }
 
             case 'account/rateLimits/updated':

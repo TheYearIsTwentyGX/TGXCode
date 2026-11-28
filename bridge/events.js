@@ -355,6 +355,18 @@ function pushTasks(client, sessionId, sub) {
 }
 
 /**
+ * Rows that are not in the session's file, to everybody following it, in the
+ * `tail` shape they already read. The offset is each follower's own, unmoved:
+ * nothing was read. Used for Codex hook failures (bridge/codex/hook-log.js).
+ */
+function pushTail(sessionId, rows) {
+    for (const client of clients.values()) {
+        const sub = client.subs.get(sessionId);
+        if (sub) sseSend(client, 'tail', { sessionId, events: rows, offset: sub.offset });
+    }
+}
+
+/**
  * Follow a transcript for one client. Content always comes from the file, never
  * from the runner's stream, so a session running in the user's terminal streams
  * into the UI exactly like one this app started.
@@ -444,6 +456,7 @@ function startAgentWatch(clientId, sessionId, toolUseId, fromOffset) {
 module.exports = {
     init,
     clients,
+    pushTail,
     sseSend, broadcast, streamBytes,
     dropClient, stopWatch,
     syncBoard, buildBoard, tickBoard, sendBoardNow,

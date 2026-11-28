@@ -13,9 +13,10 @@
 > are listed and read through `bridge/runtimes/codex/transcript.js`, and they are
 > started and driven through `bridge/runtimes/codex/process.js`. Phase 4's
 > conversation features (fork, branch, checklist, subagents, the skill palette) and
-> its quota and version are built; see under Phase 4. Search, spend, images and
-> archived threads read Codex too; see *Reading beside the transcript* under
-> Phase 4. The rest of Phase 4 onwards is not.
+> its quota and version are built, as are the MCP server, dev-server attribution,
+> drafts, schedules and workers. Search, spend, images and archived threads read Codex
+> too; see *Reading beside the transcript* under Phase 4, and the rest of Phase 4 for
+> what is left of it. Phase 5's config surfaces are built; see under Phase 5.
 
 ## Why
 
@@ -605,6 +606,32 @@ recorded for it. Measured on 0.172.0:
   the terminal pane, `codex login` (`codex login --device-auth` where no browser
   opens). Driving
   `account/login/start` from the UI is possible but is not parity work.
+
+**As built** (Phase 5's settings, memory and hooks; sign-in shipped with Phase 4's
+quota). Measured on 0.172.0 with a scratch `CODEX_HOME`:
+
+- **Only the user's `config.toml` can be written.** `config/value/write` refuses any
+  other file ("Only writes to the user config are allowed"), so a project's
+  `.codex/config.toml` is read and reported, never edited. A write keeps comments and
+  layout, and `value: null` removes the key. A bad value is refused with
+  `config_write_error_code: configValidationError`, **but any name under `[features]`
+  is accepted**, which is why `bridge/codex-schema.js` is a closed set, unlike
+  `claude-schema.js`.
+- **`approval_policy` and `sandbox_mode` do not govern TGXCode's sessions**, which send
+  their own on every turn (D5). The tab says so rather than leaving them out: they are
+  what a terminal `codex` gets.
+- **`hooks/list` is rich enough for a page**: command, matcher, source, file, and
+  `trustStatus`. A new or changed hook is `untrusted` and does not run. The page is
+  read-only and offers no trusting: that is `/hooks` in Codex.
+- **A hook run is not in the rollout.** Only the context a hook added is. So
+  "`hook/completed` failures replace `stop_hook_summary`" could not be done from the
+  file as D2 wants: the failures heard live are kept by the bridge
+  (`bridge/codex/hook-log.js`, `STATE_DIR/codex-hooks/<threadId>.jsonl`), placed by
+  rollout byte offset, and merged into reads. A thread nothing was listening to has
+  none. This is the one place a Codex transcript row does not come from Codex's file.
+- **`AGENTS.override.md`** beside an `AGENTS.md` is read instead of it; the editor says
+  so and does not edit the override.
+- Not done: editing hooks, per-profile config, and project `config.toml` editing.
 
 ## Parity at a glance
 

@@ -250,3 +250,19 @@
     .hkp-split { grid-template-columns: minmax(0, 1fr); }
     .hkp-rail { position: static; max-height: 220px; }
 }
+
+/* ── Whose hooks ─────────────────────────────────────────────────────────── */
+/* The Claude Code | Codex tabs, and Codex's read-only list (web/hooks/codex.js). */
+.hkp-sides .hkp-agents { margin: 0 0 var(--sp-5); }
+.hkp-cx { max-width: 860px; padding-top: var(--sp-5); }
+.hkp-cx-event { margin-top: var(--sp-8); }
+.hkp-cx-hook {
+    margin-top: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm, 4px);
+}
+.hkp-cx-hook.is-off .hkp-fm-yaml { color: var(--text-4); }
+.hkp-cx-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4); }
+.hkp-cx-match { font-size: var(--fs-sm); color: var(--text-4); }
+.hkp-cx-hook .hkp-fm-yaml { margin: var(--sp-3) 0; }

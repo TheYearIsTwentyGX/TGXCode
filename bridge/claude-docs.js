@@ -1,7 +1,13 @@
 'use strict';
 
-// Claude Code's memory files — `CLAUDE.md` at the user level and at the root of
-// a workspace, read and written whole.
+// The agents' memory files — Claude Code's `CLAUDE.md` and Codex's `AGENTS.md`,
+// each at the user level and at the root of a workspace, read and written whole.
+//
+// Which files there are is a list (`FILES`), and an instance serves the ones it
+// was built with: the server hands it all of them. A row says its `kind`, and a
+// write names one. Codex adds a wrinkle Claude has not: an `AGENTS.override.md`
+// beside an `AGENTS.md` is read in its place, so a row says when one is there
+// (`overriddenBy`) rather than let an edit to a file nothing reads look live.
 //
 // A module of its own rather than a mode of bridge/claude-config.js, and the
 // three differences are the whole reason:
@@ -45,8 +51,21 @@ const fs = require('fs');
 const cfg = require('./config');
 const { writeAtomic, writable, escapes, refuse, stampOf, stampNow } = require('./jsonfile');
 
-/** The two scopes, in the order Claude Code reads them. */
+/** The two scopes, in the order they are read. */
 const SCOPES = ['user', 'project'];
+
+/** Each memory file: where the user's copy lives, and its name in a workspace. */
+const FILES = {
+    'claude-md': {
+        name: cfg.CLAUDE_MEMORY_FILE,
+        user: () => ({ file: cfg.USER_CLAUDE_MEMORY, within: cfg.USER_CLAUDE_DIR }),
+    },
+    'agents-md': {
+        name: cfg.CODEX_MEMORY_FILE,
+        override: cfg.CODEX_MEMORY_OVERRIDE,
+        user: () => ({ file: path.join(cfg.CODEX_HOME, cfg.CODEX_MEMORY_FILE), within: cfg.CODEX_HOME }),
+    },
+};
 
 // One cap, used by both the read and the write.
 //
@@ -63,7 +82,7 @@ const MAX_DOC_BYTES = 256 * 1024;
 const NUL = String.fromCharCode(0);
 
 /**
- * The one file a scope means, and the directory it has to stay inside.
+ * The one file a kind and scope mean, and the directory it has to stay inside.
  *
  * `within` is not `path.dirname(file)`: for the project scope the file sits at
  * the root of the workspace, so the workspace is what containment is checked
@@ -74,17 +93,17 @@ const NUL = String.fromCharCode(0);
  *   directory and has none, when the directory is not one this bridge will
  *   read, or when the scope is not one of ours.
  */
-function specFor(scope, dir) {
-    if (scope === 'user') {
-        return { file: cfg.USER_CLAUDE_MEMORY, within: cfg.USER_CLAUDE_DIR };
-    }
+function specFor(scope, dir, kind = 'claude-md') {
+    const known = Object.prototype.hasOwnProperty.call(FILES, kind) ? FILES[kind] : null;
+    if (!known) return null;
+    if (scope === 'user') return known.user();
     if (scope !== 'project') return null;
     if (!dir || !cfg.withinRoots(dir)) return null;
     // The workspace itself, never its main checkout. Claude Code reads the
     // CLAUDE.md of the directory it runs in, so a worktree's own file is the
     // one in force — the same rule /api/claude-config states for `.claude`.
     const workspace = path.resolve(cfg.expandHome(dir));
-    return { file: path.join(workspace, cfg.CLAUDE_MEMORY_FILE), within: workspace };
+    return { file: path.join(workspace, known.name), within: workspace };
 }
 
 /**
@@ -113,10 +132,25 @@ function readText(file) {
     catch { return { ...base, text: null, truncated: true }; }
 }
 
-/** Claude Code's memory files, for one workspace. */
+/** The override that is read instead of `file`, when there is one. */
+function overrideOf(kind, file) {
+    const name = FILES[kind].override;
+    if (!name) return null;
+    const other = path.join(path.dirname(file), name);
+    // Codex skips an empty one, so an empty one overrides nothing.
+    try { return fs.statSync(other).isFile() && fs.statSync(other).size ? other : null; }
+    catch { return null; }
+}
+
+/** The memory files, for one workspace. */
 class ClaudeDocs {
+    /** @param {{kinds?: string[]}} [o]  which of FILES to serve */
+    constructor({ kinds = ['claude-md'] } = {}) {
+        this.kinds = kinds.filter(k => FILES[k]);
+    }
+
     /**
-     * Both scopes, user first.
+     * Every file this serves, both scopes of each, user first.
      *
      * The project row is **absent** rather than present-and-empty when there is
      * no workspace to resolve it against, or when the one given is outside the
@@ -127,15 +161,16 @@ class ClaudeDocs {
      */
     read(dir) {
         const docs = [];
-        for (const scope of SCOPES) {
-            const spec = specFor(scope, dir);
+        for (const kind of this.kinds) for (const scope of SCOPES) {
+            const spec = specFor(scope, dir, kind);
             if (!spec) continue;
             const got = readText(spec.file);
             const symlink = escapes(spec.file, spec.within);
             docs.push({
-                id: `claude-md:${scope}`,
-                kind: 'claude-md',
+                id: `${kind}:${scope}`,
+                kind,
                 scope,
+                overriddenBy: overrideOf(kind, spec.file),
                 file: spec.file,
                 exists: got.exists,
                 // A symlink is refused rather than followed, so a page that drew
@@ -161,8 +196,8 @@ class ClaudeDocs {
      * that quietly changed the whitespace of a file it was asked to save would
      * be corrupting a diff nobody asked for.
      */
-    save({ scope, dir, stamp, text }) {
-        const spec = this._writeTarget(scope, dir);
+    save({ kind = 'claude-md', scope, dir, stamp, text }) {
+        const spec = this._writeTarget(scope, dir, kind);
         if (typeof text !== 'string') throw refuse('body', 'text is not a string');
         // A NUL byte means somebody sent something that is not text — most
         // likely a file picked by mistake. Refused rather than written, because
@@ -186,7 +221,10 @@ class ClaudeDocs {
     }
 
     /** The scope checks a write shares, and the file it settles on. */
-    _writeTarget(scope, dir) {
+    _writeTarget(scope, dir, kind) {
+        if (!this.kinds.includes(kind)) {
+            throw refuse('kind', `${JSON.stringify(kind)} is not a memory file`);
+        }
         if (!SCOPES.includes(scope)) {
             throw refuse('scope', `${JSON.stringify(scope)} is not a memory scope`);
         }
@@ -194,7 +232,7 @@ class ClaudeDocs {
         if (scope !== 'user' && !cfg.withinRoots(dir)) {
             throw refuse('dir', `${dir} is not a directory this bridge will read`);
         }
-        const spec = specFor(scope, dir);
+        const spec = specFor(scope, dir, kind);
         if (!spec) throw refuse('scope', `no memory file for scope ${JSON.stringify(scope)}`);
         if (escapes(spec.file, spec.within)) {
             throw refuse('readonly', `${spec.file} is a symlink — refusing to write through it`);
@@ -244,4 +282,4 @@ class ClaudeDocs {
     }
 }
 
-module.exports = { ClaudeDocs, SCOPES, MAX_DOC_BYTES, specFor, readText };
+module.exports = { ClaudeDocs, FILES, SCOPES, MAX_DOC_BYTES, specFor, readText };

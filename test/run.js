@@ -45,7 +45,8 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'preview-open.test.js', 'preview-mcp.test.js', 'preview-pages.test.js', 'sudo.test.js',
     'update-feed.test.js', 'updater.test.js', 'shell-build.test.js',
     'secrets.test.js', 'file-search.test.js', 'mention-parse.test.js', 'screenshots.test.js',
-    'runtimes.test.js', 'runtime-contract.test.js', 'codex-runner.test.js', 'codex-host.test.js', 'codex-mcp.test.js', 'codex-schedules.test.js', 'agent-name.test.js'];
+    'runtimes.test.js', 'runtime-contract.test.js', 'codex-runner.test.js', 'codex-host.test.js', 'codex-mcp.test.js',
+    'codex-schedules.test.js', 'agent-name.test.js', 'codex-config.test.js', 'codex-hooks.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js',
     'file-search-route.test.js'];
 

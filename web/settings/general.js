@@ -38,6 +38,7 @@ import {
 } from './index.js';
 import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderClaudeDocs } from './memory.js';
+import { codexInstalled, renderCodexConfig } from './codex-config.js';
 import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
 import { secretsCard } from './secrets.js';
@@ -99,6 +100,7 @@ export const SETTINGS_CATEGORIES = [
     { key: 'input', title: 'Input' },
     { key: 'browsers', title: 'Browsers' },
     { key: 'claude', title: 'Claude Code' },
+    { key: 'codex', title: 'Codex' },
     { key: 'projects', title: 'Projects' },
     { key: 'connect', title: 'Connections' },
 ];
@@ -569,6 +571,13 @@ export const SETTINGS = [
     {
         title: 'Agent brief', section: 'brief', category: 'claude', tocTitle: 'Agent brief',
         card: () => briefCard(),
+    },
+    // Codex's own settings, only where there is a Codex. Drawn from what the
+    // bridge reads back through Codex; see web/settings/codex-config.js.
+    {
+        title: 'Codex', section: 'codex', category: 'codex', tocTitle: 'Settings',
+        when: () => codexInstalled(),
+        card: () => renderCodexConfig(),
     },
     {
         title: 'Projects', section: 'projects', category: 'projects', node: 'setGProjects',
