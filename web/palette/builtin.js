@@ -58,6 +58,7 @@ export function registerBuiltins() {
         ['view.settings', 'Settings', 'preferences options'],
         ['view.analytics', 'Analytics', 'cost tokens spend usage'],
         ['view.hooks', 'Hooks', 'claude code hook pretooluse posttooluse sessionstart script recipe'],
+        ['view.skills', 'Skills', 'skill claude codex import install npx skills.sh SKILL.md'],
     ];
     for (const [command, title, keywords] of views) {
         registerAction({ id: command, group: 'Views', title, keywords, command, run: () => showView(command) });

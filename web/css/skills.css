@@ -1,0 +1,195 @@
+/* web/css/skills.css
+ *
+ * The Skills page (web/skills/page.js) and its import view (web/skills/import.js).
+ * The panel itself is `.dash`, like Hooks; this is `skp-`. It borrows the
+ * Settings controls (`cmd-*`, `settings-*`) and Hooks' rail look.
+ */
+
+.skp-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--sp-6);
+    flex-wrap: wrap;
+    padding-bottom: var(--sp-6);
+    border-bottom: 1px solid var(--outline);
+}
+.skp-project select { max-width: 340px; }
+
+.skp-input {
+    background: var(--s3);
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: var(--sp-3) var(--sp-5);
+    font: 400 var(--fs-md) var(--sans);
+    min-width: 0;
+}
+.skp-input:focus { outline: 0; border-color: var(--blue); }
+.skp-filter .skp-input { width: 220px; }
+.skp-mono, .skp-input.skp-mono { font-family: var(--mono); font-size: var(--fs-sm); }
+
+.skp-split {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: var(--sp-8);
+    padding-top: var(--sp-6);
+    align-items: start;
+}
+.skp-rail {
+    position: sticky;
+    top: var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    max-height: calc(100vh - 220px);
+    overflow-y: auto;
+}
+.skp-rail-empty { padding: var(--sp-4); color: var(--text-4); font-size: var(--fs-sm); }
+.skp-rail-lede {
+    margin: var(--sp-6) 0 var(--sp-2) var(--sp-4);
+    font: 400 var(--fs-2xs) var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+.skp-group:first-child .skp-rail-lede { margin-top: 0; }
+.skp-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    width: 100%;
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--r-sm);
+    color: var(--text-2);
+    font: 400 var(--fs-sm) var(--mono);
+    text-align: left;
+}
+.skp-row:hover { background: var(--s3); color: var(--text); }
+.skp-row.on { background: var(--blue-cont); color: var(--text); }
+.skp-row.ro { color: var(--text-3); }
+.skp-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skp-row-tag { flex: none; font: 400 var(--fs-2xs) var(--sans); color: var(--text-4); max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.skp-row-lock { flex: none; opacity: 0.55; }
+
+.skp-main { min-width: 0; }
+.skp-detail, .skp-import { display: flex; flex-direction: column; gap: var(--sp-5); }
+.skp-head { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.skp-h { margin: 0; font: 400 var(--fs-xl)/var(--lh-tight) var(--sans); color: var(--text); }
+.skp-desc { margin: 0; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-2); }
+.skp-chip {
+    padding: 0 var(--sp-4);
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-3);
+    font: 500 var(--fs-2xs)/20px var(--sans);
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.skp-chip.warn { background: var(--yellow-cont); color: var(--yellow); }
+.skp-path {
+    align-self: flex-start;
+    color: var(--text-4);
+    font: 400 var(--fs-xs) var(--mono);
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+.skp-path:hover { color: var(--text-2); }
+.skp-ro p { margin: 0 0 var(--sp-4); }
+.skp-ro-acts { display: flex; gap: var(--sp-4); flex-wrap: wrap; }
+
+.skp-files {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: var(--sp-6);
+    align-items: start;
+}
+.skp-files-list { display: flex; flex-direction: column; gap: 1px; max-height: 60vh; overflow-y: auto; }
+.skp-file, .skp-pf-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-3);
+    width: 100%;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-sm);
+    text-align: left;
+    color: var(--text-2);
+}
+.skp-file:hover, .skp-pf-row:hover { background: var(--s3); }
+.skp-file.on, .skp-pf-row.on { background: var(--blue-cont); color: var(--text); }
+.skp-file:disabled { opacity: 0.5; cursor: default; }
+.skp-file-name { flex: 1; min-width: 0; font: 400 var(--fs-xs) var(--mono); overflow-wrap: anywhere; }
+.skp-file-meta { flex: none; font-size: var(--fs-2xs); color: var(--text-4); }
+.skp-file-more { padding: var(--sp-2) var(--sp-4); color: var(--text-4); font-size: var(--fs-xs); }
+
+.skp-editor { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
+.skp-text {
+    width: 100%;
+    min-height: 420px;
+    resize: vertical;
+    overflow: auto;
+    white-space: pre;
+    tab-size: 4;
+}
+.skp-text[readonly] { color: var(--text-2); }
+.skp-save, .skp-danger { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.skp-danger { padding-top: var(--sp-5); border-top: 1px solid var(--outline); }
+.skp-conflict p { margin: 0 0 var(--sp-3); }
+.skp-pre {
+    margin: var(--sp-3) 0 0;
+    padding: var(--sp-4) var(--sp-5);
+    max-height: 420px;
+    overflow: auto;
+    background: var(--s2);
+    border-radius: var(--r-sm);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.skp-create .cmd-field { display: flex; flex-direction: column; gap: var(--sp-2); }
+.skp-create .skp-input { max-width: 480px; }
+.skp-targets { display: flex; flex-direction: column; gap: var(--sp-2); }
+.skp-target { display: flex; align-items: center; gap: var(--sp-4); font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; }
+.skp-target input:disabled + span { color: var(--text-4); }
+
+/* ── import ───────────────────────────────────────────────────────────── */
+
+.skp-step { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-6) var(--sp-7); background: var(--s2); border-radius: var(--r); }
+.skp-step-h { margin: 0; font: 500 var(--fs-md) var(--sans); color: var(--text); }
+.skp-step-h code { font: 400 var(--fs-sm) var(--mono); color: var(--text-3); }
+.skp-row-form { display: flex; gap: var(--sp-4); }
+.skp-row-form .skp-input { flex: 1; }
+
+.skp-results { display: flex; flex-direction: column; gap: 1px; max-height: 360px; overflow-y: auto; }
+.skp-result { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-sm); }
+.skp-result:hover { background: var(--s3); }
+.skp-result-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; }
+.skp-result-name { color: var(--text); font-size: var(--fs-md); }
+.skp-result-src { color: var(--text-3); }
+.skp-result-n { color: var(--text-4); font-size: var(--fs-xs); }
+.skp-result-acts { flex: none; display: flex; align-items: center; gap: var(--sp-5); }
+.skp-link { color: var(--blue); font-size: var(--fs-sm); text-decoration: none; }
+.skp-link:hover { text-decoration: underline; }
+
+.skp-cards { display: flex; flex-direction: column; gap: var(--sp-4); }
+.skp-card { padding: var(--sp-5) var(--sp-6); background: var(--s3); border-radius: var(--r-sm); display: flex; flex-direction: column; gap: var(--sp-3); }
+.skp-card.match { box-shadow: inset 0 0 0 1px var(--blue); }
+.skp-card.bad { opacity: 0.8; }
+.skp-card-head { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; cursor: pointer; }
+.skp-card-name { color: var(--text); font-size: var(--fs-md); }
+.skp-card-path { color: var(--text-4); }
+.skp-card-desc { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--text-2); }
+.skp-warns { display: flex; gap: var(--sp-3); flex-wrap: wrap; }
+.skp-card-files > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-3); }
+.skp-pf-body { padding: 0 var(--sp-4) var(--sp-4); }
+.skp-overwrite { margin-top: var(--sp-2); }
+.skp-will { display: flex; flex-direction: column; gap: var(--sp-2); }
+.skp-will code { font: 400 var(--fs-xs) var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+    .skp-split, .skp-files { grid-template-columns: minmax(0, 1fr); }
+    .skp-rail { position: static; max-height: 240px; }
+}

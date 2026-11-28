@@ -196,6 +196,21 @@ const HOME = os.homedir();
         (await call('GET', '/api/claude-docs', { headers: PHONE })).status, 403);
     check('as is anything under that prefix too',
         (await call('GET', '/api/claude-docs/anything', { headers: PHONE })).status, 403);
+    // Skills: every route, both methods. A write puts instructions where a model
+    // reads them, an import fetches a stranger's repository onto this machine,
+    // and the list names every path a skill lives at.
+    check('listing skills', (await call('GET', '/api/skills', { headers: PHONE })).status, 403);
+    check('staging a skill import', (await call('POST', '/api/skills/import/stage', {
+        headers: PHONE, body: { source: 'anthropics/skills' },
+    })).status, 403);
+    check('searching for skills', (await call('GET', '/api/skills/search?q=pdf', { headers: PHONE })).status, 403);
+    // A local search that looks like an option never reaches `npx skills find`:
+    // skills@1.9.1 accepts `--` but does not honour it, so the dash is refused.
+    check('a search starting with "-" is a 400, not an npx flag',
+        (await call('GET', `/api/skills/search?q=${encodeURIComponent('--help')}`, { headers: LOCAL })).status, 400);
+    check('writing a skill file', (await call('PUT', '/api/skills/file', {
+        headers: PHONE, body: { dir: '/x', text: '', stamp: null },
+    })).status, 403);
     // Filing an APK for the phone names a path on this machine and makes it
     // downloadable from anywhere the token reaches, so a phone may not file one —
     // nor cancel one. What the phone needs stays open: the list, the download, the

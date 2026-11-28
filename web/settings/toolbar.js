@@ -48,6 +48,8 @@ const TOOLBAR = [
     // board you watch, and the bar is already full. `start` is where a layout
     // that has never mentioned it puts it — see toolbarLayout().
     { id: 'hooks', node: 'btnHooks', name: 'Hooks', icon: true, start: 'more' },
+    // Beside Hooks, for Hooks' reason: files you visit to configure.
+    { id: 'skills', node: 'btnSkills', name: 'Skills', icon: true, start: 'more' },
     // Icon-only until somebody says otherwise, which is how it has always been
     // drawn: the one view that is not about work earns a place and not a word.
     { id: 'settings', node: 'btnSettings', name: 'Settings', icon: true, label: false,

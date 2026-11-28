@@ -289,6 +289,7 @@ so does `POST /api/sessions/:id/restart`, for any session);
 **every method of `/api/claude-config` and anything under it, the GET included** — which covers the Hooks page's `/api/claude-config/hook-script` and `/api/claude-config/hook-sources`;
 **every method of `/api/claude-docs` likewise**;
 **every method of `/api/codex-config` and `/api/codex-config/hooks`** likewise;
+**every method of `/api/skills` and anything under it** (see §*Skills*);
 `POST /api/sessions/:id/attachments/open`;
 `POST /api/phone-installs` and `POST /api/phone-installs/:id/cancel` (the list, the
 APK download, the status report and `…/retry` stay open — the phone is who they are
@@ -6079,6 +6080,249 @@ a NUL is undefined, so it is refused rather than written.
 `409` is neither the caller's mistake nor a file it may not write, which is why
 it is not folded into `400` or `403`: the request was well formed and would have
 been accepted a moment earlier.
+
+### Skills — `/api/skills`
+
+**Local callers only, every method and every route under the prefix, the GETs included.**
+A write puts instructions where a model reads them. An import fetches a stranger's
+repository onto this machine. Even the list names every path a skill lives at. A remote
+caller gets `403` (see *Local vs remote*). The Skills page is the client;
+`bridge/skills.js` and `bridge/skill-import.js` are the implementation, and
+`docs/plans/24-skills.md` is the design note.
+
+The routes cover both runtimes. A skill is a directory with a `SKILL.md` in it, and
+these are the roots, read from disk:
+
+| `runtime` | `scope` | directory | editable |
+|---|---|---|---|
+| `claude` | `user` | `~/.claude/skills` | yes |
+| `claude` | `synced` | `~/.claude/skills/synced/<bucket>` | no — claude.ai's next sync replaces it |
+| `claude` | `project` | `<project>/.claude/skills` | yes |
+| `claude` | `plugin` | `<installPath>/skills` of each installed plugin | no — the plugin's next update replaces it |
+| `codex` | `user` | `$CODEX_HOME/skills` (default `~/.codex/skills`) | yes |
+| `codex` | `system` | `$CODEX_HOME/skills/.system` | no — Codex's next release replaces it |
+| `codex` | `project` | `<project>/.agents/skills` and `<project>/.codex/skills` | yes |
+
+`project` scope rows appear only when `project` names a directory inside
+`TGXCODE_ROOTS`. Anywhere else, the project scope is left out without an error.
+
+**A skill is addressed by `dir`, the absolute directory the list gave you.** The bridge
+recomputes the roots on every request. It accepts `dir` only when the parent is one of
+the roots, and refuses a symlinked skill directory. A request that names a project-scope
+skill must send the same `project` it was listed with.
+
+Errors carry `{error, code}`:
+
+| Status | `code` | |
+|---|---|---|
+| 400 | `invalid` | a malformed field: bad name, bad path, missing `stamp`, unknown runtime or scope, nothing ticked |
+| 403 | `read-only` | a write to a `plugin`, `synced` or `system` skill. `error` says why |
+| 403 | `symlink` | the skill, or a path inside it, is or goes through a symlink |
+| 404 | `not-found` | not a skill this bridge manages, a file that is not there, or a staging that expired |
+| 409 | `conflict` | a stale `stamp` (the body carries `current`, below), or an install whose staged files no longer match `digest` |
+| 409 | `exists` | creating, copying or installing over a skill that is already there |
+| 413 | `too-large` | a file over `maxBytes`, or a fetched `SKILL.md` over 256KB |
+| 502 | `fetch` | git or https could not fetch the source, or `npx skills find` failed |
+| 503 | `unavailable` | `npx` is not on the bridge's `PATH` |
+
+#### `GET /api/skills?project=<path>`
+
+```json
+{
+  "project": "/home/me/proj" ,
+  "roots": [{ "runtime": "claude", "scope": "user", "dir": "/home/me/.claude/skills",
+              "editable": true, "label": "~/.claude/skills", "exists": true }],
+  "skills": [{
+    "id": "/home/me/.claude/skills/deploy", "dir": "/home/me/.claude/skills/deploy",
+    "runtime": "claude", "scope": "user", "root": "/home/me/.claude/skills", "rootLabel": "~/.claude/skills",
+    "name": "deploy", "folder": "deploy", "description": "Ship it", "hooks": false, "allowedTools": null,
+    "editable": true,
+    "files": [{ "path": "SKILL.md", "bytes": 412 }, { "path": "scripts/go.sh", "bytes": 80, "executable": true }]
+  }],
+  "maxBytes": 262144
+}
+```
+
+| field | type | |
+|---|---|---|
+| `project` | string or null | the project resolved, or `null` if none or outside the roots |
+| `roots` | array of `{runtime, scope, dir, editable, label, exists, reason?, plugin?}` | every root, whether or not it exists |
+| `skills[].id`, `.dir` | string | the same absolute directory, which is how every other route names this skill |
+| `skills[].name` | string | frontmatter `name`, else the folder name |
+| `skills[].folder` | string | the directory's own name |
+| `skills[].description` | string or null | frontmatter `description`, folded to one string |
+| `skills[].hooks` | boolean | the frontmatter has a `hooks:` key |
+| `skills[].allowedTools` | string or null | frontmatter `allowed-tools`, as written |
+| `skills[].editable` | boolean | `false` for `plugin`, `synced` and `system` |
+| `skills[].reason` | string, read-only rows only | why it is read-only, as a sentence |
+| `skills[].plugin` | string, plugin rows only | the plugin's name |
+| `skills[].files` | array of `{path, bytes, executable?, symlink?}` | relative paths with `/` separators, at most 200. A symlink is listed with `bytes: 0` and never followed |
+| `skills[].filesTruncated` | `true`, when present | the 200-file cap was hit |
+
+Frontmatter is scanned for top-level keys, not parsed as YAML.
+
+#### `GET /api/skills/file?dir=<dir>&file=<rel>&project=<path>`
+
+Reads one file of a skill. `file` defaults to `SKILL.md`. It must be relative, with no
+`..`, `.`, backslash or empty segment.
+
+| field | type | |
+|---|---|---|
+| `dir`, `file`, `path` | string | the skill, the relative path, and the absolute path |
+| `text` | string or null | `null` when `binary` or `truncated` |
+| `stamp` | string | the precondition a `PUT` sends back |
+| `size` | number | bytes |
+| `binary` | boolean | a NUL in the first 8KB |
+| `truncated` | boolean | larger than `maxBytes`. No text at all, so a Save cannot cut the file short |
+| `editable` | boolean | the skill's root is editable |
+| `maxBytes` | number | 262144 (256KB), the cap for both read and write |
+
+#### `PUT /api/skills/file`
+
+```json
+{ "dir": "/home/me/.claude/skills/deploy", "file": "SKILL.md", "project": "",
+  "text": "---\nname: deploy\n---\n…", "stamp": "1795…:412" }
+```
+
+Replaces one text file of an editable skill, or creates it. The write goes through a
+temp file and a rename, and the file's mode is kept. **`stamp` is required.** `null`
+means "create it, and refuse if it is already there". A stamp that no longer matches
+gets `409 {code: "conflict", current}`, where `current` is this route's `GET` shape for
+the file as it is now, or `null` if it was deleted. Answers `200` with the `GET` shape,
+read again after the write.
+
+#### `POST /api/skills`
+
+```json
+{ "runtime": "codex", "scope": "user", "project": "", "name": "my-skill", "description": "What it does" }
+```
+
+Creates `<root>/<name>/SKILL.md` from a template with that `name` and `description`.
+`scope` is `user` or `project`. A Codex project skill goes to `<project>/.agents/skills`.
+`name` must match `^[a-z0-9][a-z0-9-]{0,63}$`. Answers `201 {skill}`, with `skill` shaped
+like a row of the list.
+
+#### `POST /api/skills/copy`
+
+```json
+{ "dir": "/home/me/.claude/plugins/…/skills/pdf", "project": "",
+  "target": { "runtime": "claude", "scope": "user", "name": "pdf" } }
+```
+
+Copies any skill, typically a read-only one, into an editable root. `target.name`
+defaults to the folder name. A skill containing a symlink is refused (`403 symlink`).
+Answers `201 {skill}`.
+
+#### `DELETE /api/skills?dir=<dir>&project=<path>`
+
+Moves an editable skill to `$XDG_CACHE_HOME/tgxcode/skills-trash/<timestamp>-<name>`.
+Nothing is deleted outright. Answers `200 {dir, trashed}`.
+
+#### `GET /api/skills/search?q=<text>`
+
+Runs `npx -y skills@1.9.1 find <q>` as a subprocess and parses what it prints. The
+version is pinned, so the parsed format is the one that runs. `q` is 1–100 characters,
+trimmed. One that starts with `-` is refused with `400 invalid`, because `skills@1.9.1`
+accepts `--` but does not honour it (`find -- --help` prints the help), so a dash
+cannot be passed safely. Answers are cached per query for 5 minutes. A first search
+can take tens of seconds, because `npx` may have to fetch the package.
+
+```json
+{ "q": "pdf", "via": "npx skills@1.9.1 find", "at": 1795885601335,
+  "results": [{ "source": "anthropics/skills", "skill": "pdf", "installs": "239.6K",
+                "url": "https://skills.sh/anthropics/skills/pdf",
+                "repoUrl": "https://github.com/anthropics/skills" }] }
+```
+
+| field | type | |
+|---|---|---|
+| `results[].source` | string | `owner/repo` on GitHub |
+| `results[].skill` | string | the skill's name, as `skills find` prints it. It may contain spaces |
+| `results[].installs` | string or null | as printed, e.g. `"239.6K"` |
+| `results[].url` | string or null | the skills.sh page. `null` unless it is an `https://skills.sh/` URL |
+| `results[].repoUrl` | string | `https://github.com/<source>` |
+
+**Nothing here installs.** To install a result, stage
+`{source: "<source>", skill: "<skill>"}`.
+
+#### `POST /api/skills/import/stage`
+
+```json
+{ "source": "anthropics/skills", "skill": "pdf" }
+```
+
+Fetches a source into a staging directory under the bridge's cache and describes every
+skill in it. **Nothing is written to any skills directory.** `source` is one of:
+
+- `owner/repo`
+- `owner/repo@skill`
+- `owner/repo/sub/path`
+- `https://github.com/owner/repo[/tree/<ref>[/<path>]]`. The ref is split from the path
+  against the remote's branches and tags, and the longest match wins.
+- `https://skills.sh/owner/repo/skill`
+- an https or ssh git URL on another host
+- an https URL ending in `SKILL.md`, including a GitHub `blob` URL, which is fetched raw
+
+A repository is fetched with `git clone --depth 1`, with git hooks off, the `file` and
+`ext` transports off, no submodules and no LFS. A `SKILL.md` URL is one https GET.
+Nothing fetched is run. `skill` is optional: it marks the matching skill with
+`match: true`, and does not filter.
+
+Caps: 5MB and 500 files per skill, and 200MB for the whole checkout. A skill over a cap,
+or containing a symlink, is still listed, with `problem` set, and cannot be installed.
+A staging expires 30 minutes after it was made.
+
+```json
+{
+  "id": "Xk2…", "source": "anthropics/skills", "fullName": "anthropics/skills",
+  "ref": null, "sub": null, "skill": "pdf", "expiresAt": 1795887401335,
+  "digest": "9298…",
+  "skills": [{
+    "folder": "pdf", "path": "skills/pdf", "name": "pdf", "description": "…",
+    "installAs": "pdf", "hooks": false, "allowedTools": null, "bytes": 68603, "match": true,
+    "files": [{ "path": "scripts/fill.py", "bytes": 2011, "sha256": "ab…", "executable": true,
+                "binary": false, "script": true, "text": "…" }],
+    "warnings": [{ "kind": "executable", "text": "3 executable files" }]
+  }]
+}
+```
+
+| field | type | |
+|---|---|---|
+| `id` | string | names this staging to `install` and `DELETE` |
+| `digest` | string | sha256 over every installable skill's `[folder, [[path, sha256, executable]…]]`. `install` must send it back |
+| `expiresAt` | number | ms epoch |
+| `fullName`, `ref`, `sub` | string or null | what was cloned, at which ref, narrowed to which path. Absent for a `SKILL.md` URL |
+| `skills[].folder` | string | the skill's directory name in the source, and the key `install` takes |
+| `skills[].path` | string | relative to the fetched root (or `sub`) |
+| `skills[].installAs` | string | the directory it would be written as: `folder` when that is a valid skill name, else a slug of its `name` |
+| `skills[].match` | `true`, when present | the one `skill` named |
+| `skills[].problem` | string, when present | why it cannot be installed |
+| `skills[].files` | array of `{path, bytes, sha256, executable, binary, script?, text?}` | every file. `text` is present for non-binary files up to 64KB. `script` marks a shell, Python, JS, … extension |
+| `skills[].warnings` | array of `{kind, text}` | `kind` is `executable`, `scripts`, `binary`, `hooks` or `allowed-tools` |
+
+#### `POST /api/skills/import/install`
+
+```json
+{ "id": "Xk2…", "digest": "9298…", "skills": ["pdf"],
+  "target": { "runtime": "codex", "scope": "user" }, "project": "", "overwrite": false }
+```
+
+Writes the ticked skills into an editable root. **First the bridge hashes the staged
+files again and refuses with `409 conflict` unless they are exactly the manifest
+`digest` describes.** So what lands is byte-for-byte what the client showed.
+`skills` holds `folder` values. An existing skill of the same `installAs` is refused
+(`409 exists`) unless `overwrite: true`, in which case the old one goes to the trash
+first. Modes are kept. On success the staging is deleted. Answers
+`200 {installed: [{name, dir, trashed?}], root: {runtime, scope, dir, label}}`.
+
+#### `DELETE /api/skills/import/:id`
+
+Discards a staging. Answers `200 {ok: true, discarded}`, where `discarded` is `false`
+for an id that was already gone.
+
+There is no `/api/events` event for skills. A client re-reads the list after its own
+writes.
 
 ### `POST /api/restart`
 

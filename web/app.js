@@ -26,6 +26,7 @@ import { paint, tickCardClocks } from './boards/parts.js';
 import { loadDash, paintDashBadge, renderDash } from './boards/dashboard.js';
 import { applySessionSpend, loadAnalytics, loadSessionSpend, renderAnalytics } from './boards/analytics.js';
 import { loadHooks, renderHooks } from './hooks/page.js';
+import { loadSkills, renderSkills } from './skills/page.js';
 import { closeHeaderReview, forgetReviews } from './pr-review.js';
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
@@ -1339,6 +1340,9 @@ export function rememberView() {
     } else if (state.hooks.open) {
         q.set('view', 'hooks');
         if (state.live.open) q.set('live', '1');
+    } else if (state.skills.open) {
+        q.set('view', 'skills');
+        if (state.live.open) q.set('live', '1');
     } else if (state.sx.open) {
         q.set('view', 'search');
         if (state.live.open) q.set('live', '1');
@@ -1503,7 +1507,7 @@ const DASH_STALE_MS = 45_000;
 // assignments repeated inside five functions, which is exactly the shape that
 // goes wrong when a sixth arrives: adding Settings would have meant editing
 // five other functions, none of which would have complained about being missed.
-const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings', 'analytics', 'hooks', 'sx'];
+const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings', 'analytics', 'hooks', 'skills', 'sx'];
 
 // Which `live.*` key says whether the board stays up over each panel.
 const LIVE_OVER_KEY = {
@@ -1513,6 +1517,8 @@ const LIVE_OVER_KEY = {
     analytics: null,
     // Nor this: hooks are configuration, read and written like Settings.
     hooks: null,
+    // Nor this, for the same reason: skills are files you configure.
+    skills: null,
     // No setting of its own: a search is a short errand, and nothing keeps the
     // board up over it.
     sx: null,
@@ -1553,7 +1559,7 @@ export function closePanels() {
     const close = {
         taskboard: showTaskboard, dash: showDash, notes: showNotes,
         drafts: showDrafts, sched: showSched, settings: showSettings,
-        analytics: showAnalytics, hooks: showHooks, sx: showSearch,
+        analytics: showAnalytics, hooks: showHooks, skills: showSkills, sx: showSearch,
     };
     for (const p of PANELS) if (state[p].open) close[p](false);
 }
@@ -1642,7 +1648,7 @@ export function paintPanels() {
         [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
         [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open],
         [dom.btnSettings, state.settings.open], [dom.btnAnalytics, state.analytics.open],
-        [dom.btnHooks, state.hooks.open]]) {
+        [dom.btnHooks, state.hooks.open], [dom.btnSkills, state.skills.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -1698,6 +1704,31 @@ export function showAnalytics(on) {
     if (on) {
         if (Date.now() - state.analytics.at > ANALYTICS_STALE_MS) loadAnalytics();
         else renderAnalytics();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+// ── skills ──────────────────────────────────────────────────────────────
+//
+// Every skill Claude Code and Codex can load, as files (web/skills/page.js).
+// Re-read on the way in, like Hooks: an import or a plugin update may have
+// changed the directories since the page was last drawn. A file being edited
+// is kept in state.skills while the panel is closed.
+
+export function showSkills(on) {
+    state.skills.open = on;
+    if (on) closeOtherPanels('skills');
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+    if (on) {
+        if (state.skills.file && state.skills.file.dirty) renderSkills();
+        else loadSkills();
     } else if (state.live.open) {
         renderLive();
         if (state.current) termPane.refit();
@@ -4417,6 +4448,7 @@ dom.tbSearch.addEventListener('keydown', (e) => {
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.btnAnalytics.addEventListener('click', () => showAnalytics(!state.analytics.open));
 dom.btnHooks.addEventListener('click', () => showHooks(!state.hooks.open));
+dom.btnSkills.addEventListener('click', () => showSkills(!state.skills.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
 dom.btnNotes.addEventListener('click', () => showNotes(!state.notes.open));
@@ -4561,6 +4593,7 @@ const VIEWS = {
     // No shortcut of its own — the Ctrl digits are spent — but the palette
     // and Ctrl+1's close-everything go through here like the rest.
     'view.hooks': (on) => showHooks(on),
+    'view.skills': (on) => showSkills(on),
 };
 
 export function showView(command) {
@@ -4624,6 +4657,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.analytics.open) { showAnalytics(false); return; }
     if (e.key === 'Escape' && state.hooks.open) { showHooks(false); return; }
+    if (e.key === 'Escape' && state.skills.open) { showSkills(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
     // Schedules was missing from this ladder — Escape closed the other four
@@ -4923,6 +4957,7 @@ function restoreView(q) {
     const st = q.get('view') === 'settings';
     const an = q.get('view') === 'analytics';
     const hk = q.get('view') === 'hooks';
+    const sk = q.get('view') === 'skills';
     const sx = q.get('view') === 'search';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
@@ -4932,6 +4967,7 @@ function restoreView(q) {
     if (st) showSettings(true);
     if (an) showAnalytics(true);
     if (hk) showHooks(true);
+    if (sk) showSkills(true);
     if (sx) showSearch(true);
     if (q.get('focus') === '1') setFocus(true);
 

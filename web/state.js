@@ -555,6 +555,15 @@ export const state = {
         // (web/hooks/codex.js).
         agent: 'claude', codex: { dir: null, data: null, loading: false, error: null },
     },
+    // The Skills page (web/skills/page.js): /api/skills for one project.
+    // `sel` is the selected skill's directory, `file` the one file open in the
+    // editor (its text, stamp, draft and any 409), `creating` the New skill
+    // form, and `imp` the import view's search, staging and ticks
+    // (web/skills/import.js) while `mode` is 'import'.
+    skills: {
+        open: false, dir: null, data: null, loading: false, error: null,
+        filter: '', sel: null, file: null, creating: null, mode: 'browse', imp: null,
+    },
     // And Claude Code's memory files, which are two rather than four and are
     // additive rather than a chain — see the Memory section below. All of it is
     // a draft: the whole control is one document being typed into, so `draft`

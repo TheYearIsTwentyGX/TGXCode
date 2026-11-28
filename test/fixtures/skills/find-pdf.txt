@@ -1,0 +1,40 @@
+
+Install with npx skills add <owner/repo@skill>
+
+anthropics/skills@pdf 239.6K installs
+└ https://skills.sh/anthropics/skills/pdf
+
+vercel-labs/json-render@react-pdf 2.5K installs
+└ https://skills.sh/vercel-labs/json-render/react-pdf
+
+openai/skills@pdf 14.1K installs
+└ https://skills.sh/openai/skills/pdf
+
+github/awesome-copilot@pdftk-server 10K installs
+└ https://skills.sh/github/awesome-copilot/pdftk-server
+
+anthropics/knowledge-work-plugins@view-pdf 6.5K installs
+└ https://skills.sh/anthropics/knowledge-work-plugins/view-pdf
+
+tanis90/pdf-converter-mineru@pdf-converter 9.8K installs
+└ https://skills.sh/tanis90/pdf-converter-mineru/pdf-converter
+
+claude-office-skills/skills@pdf-extraction 9.7K installs
+└ https://skills.sh/claude-office-skills/skills/pdf-extraction
+
+pilioai/skills@remove-pdf-watermark 7.4K installs
+└ https://skills.sh/pilioai/skills/remove-pdf-watermark
+
+nexu-io/open-design@pdf 3.3K installs
+└ https://skills.sh/nexu-io/open-design/pdf
+
+claude-office-skills/skills@pdf-to-docx 6.3K installs
+└ https://skills.sh/claude-office-skills/skills/pdf-to-docx
+
+claude-office-skills/skills@PDF OCR Extraction 6.1K installs
+└ https://skills.sh/claude-office-skills/skills/pdf-ocr-extraction
+
+claude-office-skills/skills@PDF Converter 5.4K installs
+└ https://skills.sh/claude-office-skills/skills/pdf-converter
+
+claude-office-skills/skills@Chat with PDF 5.1K installs

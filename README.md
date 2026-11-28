@@ -414,6 +414,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume, moving it (Move to main checkout, Move to…, a move queued for the end of its turn) and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
+| `bridge/routes/skills.js` | `/api/skills` — the Skills page's list, files, create, copy, delete, search and import. Local callers only |
 | `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
@@ -510,6 +511,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/claude-docs.js` | The memory files, `CLAUDE.md` and `AGENTS.md` — which one a kind and scope mean, and reading and writing it whole |
 | `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |
 | `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
+| `bridge/skills.js` | Every skill on disk for Claude Code and Codex — the roots, which are read-only and why, and reading, writing, creating, copying and trashing one |
+| `bridge/skill-import.js` | Importing a skill: `npx skills find` parsed into results, a source fetched into staging, the hashed preview manifest, and an install that refuses unless the staged bytes are still what was shown |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/models.js` | The models and effort levels every picker offers, with a line on when each fits — the one list the composer, the Start dialog, the orchestrator settings and `spawn_worker` read (`GET /api/models`, and the `tgx-models` `<meta>` tag) |
@@ -612,6 +615,8 @@ Two rules worth knowing before you send a patch:
 | `web/hooks/editor.js` | The hooks editor on that page — a draft of one file's `hooks` block, its review and the save |
 | `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
 | `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
+| `web/skills/page.js` | The Skills page — the rail by runtime and scope, the file editor with stamp and 409, New skill, copy a read-only skill, delete to trash |
+| `web/skills/import.js` | The import view on that page — search via `npx skills find`, a source box, the per-file preview with warnings, the target and Install |
 | `web/settings/updates.js` | The Updates group — where the shell looks for a build, what it found, Restart to update, and Build update |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md and AGENTS.md files — and the full-height dialog on the same file |
 | `web/settings/codex-config.js` | The Codex group, shown where Codex is installed: one key saved per change |
@@ -708,6 +713,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/analytics.css` | The analytics board and the header's cost |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
 | `web/css/hooks.css` | The Hooks page and its editor. Right after `settings.css`, whose controls the editor is built from and overrides |
+| `web/css/skills.css` | The Skills page and its import view |
 | `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
