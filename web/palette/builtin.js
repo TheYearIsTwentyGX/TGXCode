@@ -17,9 +17,10 @@
 
 import { state } from '../state.js';
 import { copyText, dom, toast } from '../dom.js';
-import { openPreviewPages, previewPane, resumeCommand, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
+import { openPreviewPages, previewPane, resumeCommand, scrollToEnd, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
+import { jumpToTurn } from '../transcript/turn-rail.js';
 import { openComposerFind } from '../composer/find.js';
 import { SETTINGS } from '../settings/general.js';
 import { openSettingsAt } from '../settings/index.js';
@@ -123,6 +124,20 @@ export function registerBuiltins() {
         keywords: 'terminal shell continue clipboard cli',
         when: () => !!resumeCommand(state.current),
         run: () => copyText(resumeCommand(state.current), 'Resume command'),
+    });
+    // Getting back to the end after scrolling up mid-turn was a long scroll, and
+    // the start of a long session needed the turn rail. Pinned again on the
+    // way down, so what streams in next follows you as it did.
+    registerAction({
+        id: 'conversation.latest', group: 'Actions', title: 'Jump to latest message',
+        keywords: 'bottom end newest scroll', when: () => !!state.current && !state.agent,
+        run: () => { state.pinned = true; scrollToEnd(false); },
+    });
+    registerAction({
+        id: 'conversation.first', group: 'Actions', title: 'Jump to first message',
+        keywords: 'top start oldest beginning scroll', when: () => !!state.current && !state.agent,
+        // Through the turn rail, which loads the earlier stretch it is in first.
+        run: () => (state.turns.length ? jumpToTurn(state.turns[0]) : (dom.scroll.scrollTop = 0)),
     });
     registerAction({
         id: 'find.open', group: 'Actions', title: 'Find in conversation', command: 'find.open',
