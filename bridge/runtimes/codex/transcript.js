@@ -24,6 +24,9 @@
 //                                code-mode script that called it)
 //   SubAgentActivity items       a spawned agent, drawn as Claude's `Agent` row
 //   compacted                    `compact`
+//   our own envelopes            `handoff`, `orchestrator-inbox` and
+//                                `orchestrator-message`, as the Claude reader
+//                                draws them (bridge/envelopes.js)
 //
 // Decided, all of it measured on 0.172.0 against test/fixtures/codex/:
 //
@@ -62,6 +65,12 @@
 //   finishes it. The agent's own rollout (a thread with `parent_thread_id`) is
 //   its transcript: it opens with a copy of the parent's history, which
 //   `ownLines` skips (`subagent_history_start_ordinal`).
+// - **What the bridge wrote is not what the person said.** A handoff, an
+//   orchestrator's nudge and its message to a worker all reach Codex as the text
+//   of a user turn, because that is the only way in. They are drawn as their own
+//   cards and kept out of `userMessages` and `lastUserTs` — which the rail sorts
+//   on — exactly as the Claude reader keeps them, with the same parsers. A Codex
+//   worker showed each instruction as raw `<orchestrator-message>` markup before.
 // - **`.jsonl.zst` is read when Node can.** `zlib.zstdDecompressSync` is Node
 //   22.15+. Older Node reads a compressed rollout as nothing, rather than throwing.
 
@@ -74,6 +83,7 @@ const { projectRootOf, worktreeNameOf, branchOf } = require('../../places');
 const items = require('../../codex/items');
 const plans = require('../../codex/plan');
 const { parseSuggestion } = require('../../mcp-calls');
+const { parseHandoff, parseOrchestratorInbox, parseOrchestratorMessage } = require('../../envelopes');
 
 // The rollout's file name: `rollout-<timestamp>-<uuid>.jsonl[.zst]`.
 const ROLLOUT_RE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(\.zst)?$/i;
@@ -202,6 +212,24 @@ function reasoningText(payload) {
         .join('\n\n');
 }
 
+/**
+ * One of the bridge's own envelopes, read off a user message's text:
+ * `{kind, fields}` with the event kind it is drawn as, or null for words a person
+ * wrote. The parsers are bridge/envelopes.js's, so both readers agree on what a
+ * handoff looks like; each is a real parse, since a person can quote a tag.
+ */
+function envelopeOf(text) {
+    const t = String(text || '');
+    if (!t.trimStart().startsWith('<')) return null;
+    const handoff = parseHandoff(t);
+    if (handoff) return { kind: 'handoff', fields: handoff };
+    const inbox = parseOrchestratorInbox(t);
+    if (inbox) return { kind: 'orchestrator-inbox', fields: inbox };
+    const msg = parseOrchestratorMessage(t);
+    if (msg) return { kind: 'orchestrator-message', fields: msg };
+    return null;
+}
+
 /** A real person's message, by the rules above: `{text, images}` or null. */
 function personMessage(payload) {
     if (!payload || payload.type !== 'message' || payload.role !== 'user') return null;
@@ -321,6 +349,16 @@ function scanMeta(file) {
             if (p.role === 'assistant') { meta.assistantMessages++; continue; }
             const person = personMessage(p);
             if (!person) continue;
+            // Ours, not theirs: see the header. A handoff is still counted as one.
+            const env = envelopeOf(person.text);
+            if (env) {
+                if (env.kind === 'handoff') {
+                    meta.handoffs++;
+                    if (ts) meta.lastHandoffTs = ts;
+                    meta.lastHandoffFrom = env.fields.fromTitle || env.fields.from || meta.lastHandoffFrom;
+                }
+                continue;
+            }
             meta.userMessages++;
             if (ts) meta.lastUserTs = ts;
             const said = person.text.slice(0, 400);
@@ -573,6 +611,12 @@ function buildEvents(entries, ctx = {}) {
             if (p.type === 'message' && p.role === 'user') {
                 const person = personMessage(p);
                 if (!person) continue;
+                const env = envelopeOf(person.text);
+                if (env) {
+                    events.push({ id: messageId(p.id) || `${env.kind}:${e.ordinal != null ? e.ordinal : ts}`,
+                        kind: env.kind, ts, ...env.fields });
+                    continue;
+                }
                 const { text, command } = asCommand(person.text, skillsAfter(list, i));
                 events.push({
                     id: messageId(p.id) || `user:${e.ordinal != null ? e.ordinal : ts}`, kind: 'user', ts,
@@ -813,7 +857,7 @@ function todoProgress(file) {
 }
 
 module.exports = {
-    readFile, parseLines, scanMeta, buildEvents, inherited, isTurnStart, personMessage,
+    readFile, parseLines, scanMeta, buildEvents, inherited, isTurnStart, personMessage, envelopeOf,
     idFromName, isRollout, modeOf, ownLines, branchPoint, todoList, todoProgress, messageId,
     ROLLOUT_RE, CAN_ZSTD,
 };

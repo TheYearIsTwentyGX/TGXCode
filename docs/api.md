@@ -888,7 +888,9 @@ strings by a client that then rendered `[object Object]`:
 
 `handoff`, `orchestrator-inbox` and `orchestrator-message` arrive as ordinary user
 messages on disk but are **not counted as turns**: they do not move `userMessages`,
-`lastUserTs` (which the session list sorts on) or `firstPrompt`.
+`lastUserTs` (which the session list sorts on) or `firstPrompt`. The same holds for a
+Codex session (`runtime: "codex"`): the rollout reader recognises all three and emits
+these kinds, with the same fields, never a `user` event with the markup in its `text`.
 
 **`tool.status` is `"pending"`, not absent, while a call is running**, and `"ok"` or
 `"error"` once it resolves. A client switching on it needs three cases, and the third
