@@ -86,8 +86,8 @@ function build(index, pool, { includeTest = false, idle = 'recent' } = {}) {
     for (const s of summaries) {
         const runner = statuses[s.sessionId] || null;
         const col = column(s, runner);
-        if (col === 'needs') needs.push(card(s, runner, col));
-        else if (col === 'working') working.push(card(s, runner, col));
+        if (col === 'needs') needs.push(card(s, runner, col, index));
+        else if (col === 'working') working.push(card(s, runner, col, index));
         else if (col === 'idle') allIdle.push(s);
     }
 
@@ -146,7 +146,7 @@ const byActivity = (a, b) => overview.activityAt(b) - overview.activityAt(a);
  * does not answer it — the card has to *say* what it is waiting on, and
  * `publicAsk` is where the kind and the tool's display name live.
  */
-function card(s, runner, col) {
+function card(s, runner, col, index = null) {
     return {
         sessionId: s.sessionId,
         column: col,
@@ -183,8 +183,18 @@ function card(s, runner, col) {
         // Only where it means something. An idle session's list is whatever it
         // was left at, which is not news, and asking would be a directory read
         // per card down a column that can be hundreds long.
-        tasks: col === 'working' ? tasks.progress(s.sessionId) : null,
+        //
+        // A Codex session has no task directory: its checklist is in its
+        // rollout (bridge/codex/plan.js), so it is the one card that names a file.
+        tasks: col === 'working' ? tasks.progress(s.sessionId, codexFile(index, s)) : null,
     };
+}
+
+/** A Codex session's rollout, for its checklist; null for anything else. */
+function codexFile(index, s) {
+    if (!index || s.runtime !== 'codex') return null;
+    const rec = index.get(s.sessionId);
+    return rec ? rec.file : null;
 }
 
 module.exports = { build, column };

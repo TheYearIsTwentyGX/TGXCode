@@ -403,6 +403,10 @@ async function handle(req, res, url, pathname, seg, who) {
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
             if (readOnly(res, sessionId, 'send')) return;
+            // A copy, or a copy cut at a turn, is a capability of its own: a
+            // runtime that can take a message need not be able to branch.
+            if (body.fork && readOnly(res, sessionId, 'fork')) return;
+            if (fromUuid && readOnly(res, sessionId, 'branchFromTurn')) return;
             const cwd = sessionCwd(summary);
 
             // Where the copy is cut, worked out here rather than taken from the
@@ -412,7 +416,12 @@ async function handle(req, res, url, pathname, seg, who) {
             let branch = null;
             if (fromUuid) {
                 const rec = index.get(sessionId);
-                const at = rec && rec.file ? branchPoint(rec.file, fromUuid) : null;
+                // A Codex fork's history is spread over its parents' rollouts, so
+                // the index reads it rather than one file. `parent` is then the
+                // turn to fork before, not a chain entry.
+                const at = summary.runtime === 'codex'
+                    ? index.codexBranchPoint(sessionId, fromUuid)
+                    : rec && rec.file ? branchPoint(rec.file, fromUuid) : null;
                 if (!at) {
                     return send(res, 400, { error: 'no turn of yours with that id in this session' });
                 }

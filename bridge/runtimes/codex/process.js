@@ -53,9 +53,30 @@
 //     mechanism; nothing goes on the wire for the ask itself.
 //   - **Images go as `localImage`**, by the path attachments.js staged. No base64.
 //
-// Kept deliberately out of here, for Phase 4: fork and branch (`thread/fork`),
-// the tgxcode MCP server in the thread `config`, the checklist from
-// `turn/plan/updated`, and the slash palette from `skills/list`. `capabilities` in bridge/runtimes/index.js says false for each.
+// Phase 4's conversation features (docs/plans/23-codex.md):
+//
+//   - **Fork and branch are `thread/fork`**, made in the handshake in place of
+//     `thread/resume`, with `excludeTurns: true`. The reply names the new thread
+//     and is an `init` that is not `minted`, so the runner announces it as a fork
+//     exactly as it does Claude's `--fork-session`. A branch from a turn adds
+//     `beforeTurnId`: the send route's `branch.parent` is the turn the edited
+//     message was in (bridge/runtimes/codex/transcript.js, `branchPoint`).
+//   - **The checklist is `update_plan`**, opt-in, so every thread this adapter
+//     opens says `tools.update_plan.enabled` in its config. The list itself is read
+//     from the rollout (bridge/codex/plan.js); `turn/plan/updated` is the live
+//     copy, and becomes the activity line — the step in progress.
+//   - **Spawned agents share this connection.** A subagent's thread runs in this
+//     app-server, so its `turn/started`, items and `turn/completed` arrive here
+//     under *its* `threadId`. They are never this thread's turn — a child's
+//     `turn/completed` used to end the parent's — and are read only as the
+//     subagent's progress; the parent's own `subAgentActivity` items are what
+//     start and finish it as background work (`task`, `agent-done`).
+//   - **A slash command is a skill.** `/name args` for a skill the palette listed
+//     (bridge/codex/skills.js) goes as `{type:"skill", name, path}` beside the
+//     text `$name args`, as Codex's own clients send one.
+//
+// Kept out of here, for the rest of Phase 4: the tgxcode MCP server in the thread
+// `config`.
 
 const path = require('path');
 
@@ -67,7 +88,8 @@ const { KNOWN_NOTIFICATIONS, OPT_OUT } = require('../../codex/protocol');
 // The one table of item kinds, shared with the rollout reader (D2): the same item
 // is a `tool` event in a transcript and a `tool-start` label here, under the
 // same name, so a card, a row and the activity line agree on what a call is.
-const { TOOL, KINDS, toolEvent, scriptOf, contextOf } = require('../../codex/items');
+const { TOOL, KINDS, toolEvent, scriptOf, contextOf, taskNameOf } = require('../../codex/items');
+const codexSkills = require('../../codex/skills');
 const { describeTool } = require('./tools');
 
 let bridgeVersion = '0.0.0';
@@ -190,6 +212,10 @@ function startError(kind, message) {
  * sessionEnv in bridge/runtimes/claude/process.js, which says why), with sudo's
  * askpass when Settings › Sudo is on and the secrets port beside it.
  */
+// The thread config every conversation is opened with. `update_plan` is opt-in on
+// 0.172.0, and it is what the checklist and the boards are built from.
+const THREAD_CONFIG = Object.freeze({ 'tools.update_plan.enabled': true });
+
 function codexEnv({ sudo: sudoAccess = null } = {}) {
     const env = { ...process.env };
     deleteBoth(env, 'PORT');
@@ -205,13 +231,23 @@ function codexEnv({ sudo: sudoAccess = null } = {}) {
  * the same two helpers the Claude adapter uses, so the transcript reader sees the
  * same text whichever runtime wrote it.
  */
-function inputFor(entry) {
+function inputFor(entry, skillOf = null) {
     const files = entry.attachments || [];
-    if (!files.length) return [{ type: 'text', text: entry.text || '' }];
+    // `/name args` for a skill Codex listed: the skill as an input, and the text
+    // as Codex's own clients write a mention of it.
+    let text = entry.text || '';
+    const skills = [];
+    const m = /^\/([A-Za-z0-9][\w:.-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    const skill = m && typeof skillOf === 'function' ? skillOf(m[1]) : null;
+    if (skill) {
+        skills.push({ type: 'skill', name: skill.name, path: skill.path });
+        text = m[2] ? `$${skill.name} ${m[2].trim()}` : `$${skill.name}`;
+    }
+    if (!files.length) return [...skills, { type: 'text', text }];
     const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine, isImageType } = require('../../attachments');
-    const lines = [entry.text ? `${entry.text}\n\n${ATTACHMENT_NOTE_HEAD}` : ATTACHMENT_NOTE_HEAD];
+    const lines = [text ? `${text}\n\n${ATTACHMENT_NOTE_HEAD}` : ATTACHMENT_NOTE_HEAD];
     for (const a of files) lines.push(attachmentNoteLine(a));
-    const input = [{ type: 'text', text: lines.join('\n') }];
+    const input = [...skills, { type: 'text', text: lines.join('\n') }];
     for (const a of files) {
         if (a && a.path && isImageType(a.mediaType)) input.push({ type: 'localImage', path: a.path });
     }
@@ -267,6 +303,8 @@ class CodexAdapter {
         this.systemPrompt = null;
         this.wasPlan = false;        // the last turn/start was in plan mode
         this.current = null;            // {plan, text, error} for the turn running
+        this.agents = new Map();        // spawned agents' thread ids -> their task name
+        this.finished = new Set();      // the ones whose end has been reported
     }
 
     get name() { return 'codex'; }
@@ -294,9 +332,6 @@ class CodexAdapter {
         this.effort = o.effort || null;
         if (o.model) this.model = o.model;
         this.systemPrompt = o.systemPrompt || null;
-        if (o.fork || o.branch) {
-            throw startError('unknown', 'Branching a Codex session is not supported yet.');
-        }
 
         try {
             await this.rpc('initialize', {
@@ -327,7 +362,25 @@ class CodexAdapter {
             sandbox: s.sandbox,
             approvalsReviewer: s.reviewer,
             ...(this.systemPrompt && { developerInstructions: this.systemPrompt }),
+            config: { ...THREAD_CONFIG },
         };
+        if (o.fork) {
+            // A copy, or a copy cut before a turn. The new thread's id comes back
+            // in the reply, which `read` makes the fork's `init`.
+            const cut = o.branch && o.branch.parent ? { beforeTurnId: o.branch.parent } : {};
+            try {
+                await this.rpc('thread/fork', { threadId: o.sessionId, ...common, excludeTurns: true, ...cut });
+            } catch (err) {
+                if (o.branch) {
+                    throw startError('branch-refused', `Codex would not branch from that turn: ${err.message}`);
+                }
+                if (/not found|no (?:such )?thread|no rollout/i.test(err.message)) {
+                    throw startError('missing', 'Codex could not find this conversation to copy.');
+                }
+                throw startError('unknown', `Codex would not copy this conversation: ${err.message}`);
+            }
+            return;
+        }
         if (o.isNew) {
             try {
                 await this.rpc('thread/start', { ...common, historyMode: 'paginated' });
@@ -401,14 +454,18 @@ class CodexAdapter {
             this.version = versionOf(result.userAgent);
         }
         if (ok && result.thread && result.thread.id
-            && (verb === 'thread/start' || verb === 'thread/resume' || verb === 'thread/unarchive' || !verb)) {
+            && (verb === 'thread/start' || verb === 'thread/resume' || verb === 'thread/unarchive'
+                || verb === 'thread/fork' || !verb)) {
             this.threadId = result.thread.id;
             if (result.model) this.model = result.model;
             if (result.cwd) this.cwd = result.cwd;
             // On a replay there is no verb; a thread reply that is the one this
-            // process started under says so by being new (no turns, no preview).
+            // process started under says so by being new (no turns, no preview,
+            // not a fork). A fork's reply is a new id that is not minted: the
+            // runner announces it as `forked`.
             const minted = verb ? verb === 'thread/start'
-                : !(result.thread.turns && result.thread.turns.length) && !result.thread.preview;
+                : !result.thread.forkedFromId
+                    && !(result.thread.turns && result.thread.turns.length) && !result.thread.preview;
             out.push({ type: 'init', version: this.version, sessionId: this.threadId, minted,
                 cwd: this.cwd, raw: null });
         }
@@ -463,6 +520,13 @@ class CodexAdapter {
             console.warn(`[codex] ignoring unknown notification ${method}`);
         }
         if (p.threadId && !this.threadId) this.threadId = p.threadId;
+        // A spawned agent's thread runs on this connection too. Nothing it says is
+        // this thread's turn; see the header. Only a thread a `subAgentActivity`
+        // named is a child: anything else is taken as this thread, as it was
+        // before agents were known, rather than dropped.
+        if (p.threadId && p.threadId !== this.threadId && this.agents.has(String(p.threadId).toLowerCase())) {
+            return this._child(method, p);
+        }
         switch (method) {
             case 'thread/started':
                 if (p.thread && p.thread.id && !this.threadId) this.threadId = p.thread.id;
@@ -477,6 +541,7 @@ class CodexAdapter {
                 const item = p.item || {};
                 if (item.id) this.items.set(item.id, item);
                 if (this.items.size > 200) this.items.delete(this.items.keys().next().value);
+                if (item.type === 'subAgentActivity') return this._agentActivity(item);
                 if (item.type === 'reasoning') return [{ type: 'thinking' }];
                 if (item.type === 'agentMessage' || item.type === 'plan') return [{ type: 'writing' }];
                 const d = describeItem(item);
@@ -487,6 +552,10 @@ class CodexAdapter {
                 const item = p.item || {};
                 const out = [{ type: 'tools-done', ids: item.id ? [item.id] : [] }];
                 if (item.id) this.items.delete(item.id);
+                // A spawn's `started` item says it twice, started and completed;
+                // the second is not news.
+                if (item.type === 'subAgentActivity' && item.kind === 'started') return out;
+                if (item.type === 'subAgentActivity') return [...out, ...this._agentActivity(item)];
                 const t = this.current || (this.current = { plan: null, text: '', error: null });
                 if (item.type === 'plan' && item.text) t.plan = item.text;
                 if (item.type === 'agentMessage' && typeof item.text === 'string') {
@@ -545,6 +614,17 @@ class CodexAdapter {
             case 'account/rateLimits/updated':
                 return p.rateLimits ? [{ type: 'limits', limits: p.rateLimits }] : [];
 
+            case 'turn/plan/updated': {
+                // The checklist, live. The list is read from the rollout (the
+                // checklist panel, the boards); this is what the turn is on now.
+                const plan = Array.isArray(p.plan) ? p.plan : [];
+                const at = plan.findIndex(s => s && (s.status === 'inProgress' || s.status === 'in_progress'));
+                if (at < 0) return [];
+                const step = String(plan[at].step || '').trim();
+                return [{ type: 'tool-start', id: `plan:${p.turnId || this.turnId || ''}`, name: 'update_plan',
+                    label: `${step || 'Working'} (${at + 1} of ${plan.length})` }];
+            }
+
             case 'serverRequest/resolved': {
                 // Sent after every request, answered or not. Only one we did not
                 // answer has been withdrawn.
@@ -582,10 +662,60 @@ class CodexAdapter {
         }
     }
 
+    /**
+     * A spawned agent's `subAgentActivity`, as background work: `started` is a
+     * task the process runs on its own, and `completed` or `interrupted` ends it
+     * and says so (`agent-done`). Keyed by the agent's thread id, which is also
+     * the id of its row in the transcript and how `GET …/subagent` finds it.
+     */
+    _agentActivity(item) {
+        const id = item.agentThreadId ? String(item.agentThreadId).toLowerCase() : null;
+        if (!id) return [];
+        if (item.kind === 'started') {
+            if (this.agents.has(id)) return [];
+            this.agents.set(id, taskNameOf(item.agentPath) || 'subagent');
+            return [{ type: 'task', id, state: 'started', taskType: 'agent' },
+                { type: 'tool-start', id: item.id || id, name: TOOL.subagent,
+                    label: `Started a subagent: ${this.agents.get(id)}` }];
+        }
+        if (item.kind !== 'completed' && item.kind !== 'interrupted') return [];
+        if (!this.agents.has(id)) return [];
+        // Kept as a known child, so its last notifications are still not ours;
+        // `finished` is what says it has been reported.
+        if (this.finished.has(id)) return [];
+        this.finished.add(id);
+        return [{ type: 'task', id, state: 'done', taskType: 'agent' },
+            { type: 'agent-done', taskId: id, toolUseId: id,
+                status: item.kind === 'completed' ? 'completed' : 'interrupted', summary: null, durationMs: null }];
+    }
+
+    /**
+     * What a spawned agent's own thread said. Its turn is not ours to start or
+     * end; its items are only what it is doing, which the activity line shows
+     * while the parent waits on it.
+     */
+    _child(method, p) {
+        // An agent spawned by an agent: a child of this connection too.
+        const item = p.item || {};
+        if (item.type === 'subAgentActivity' && item.agentThreadId) {
+            const id = String(item.agentThreadId).toLowerCase();
+            if (item.kind === 'started' && method === 'item/started') this.agents.set(id, taskNameOf(item.agentPath) || 'subagent');
+            return [];
+        }
+        if (method === 'item/completed' && p.item && p.item.id) {
+            return [{ type: 'tools-done', ids: [`${p.threadId}:${p.item.id}`] }];
+        }
+        if (method !== 'item/started') return [];
+        const d = describeItem(p.item);
+        const who = this.agents.get(String(p.threadId).toLowerCase());
+        return d && who ? [{ type: 'tool-start', id: `${p.threadId}:${p.item.id}`, name: d.name,
+            label: `${who}: ${d.label}` }] : [];
+    }
+
     turn(entry, { handOver }) {
         const id = `cx_${++this.seq}`;
         this.own.set(id, { kind: handOver ? 'steer' : 'start', uuid: entry.uuid });
-        const input = inputFor(entry);
+        const input = inputFor(entry, (name) => codexSkills.lookup(this.cwd, name));
         if (handOver) {
             return { id, method: 'turn/steer', params: {
                 threadId: this.threadId, expectedTurnId: this.turnId || '', input,
@@ -690,6 +820,6 @@ class CodexAdapter {
 
 module.exports = {
     Adapter: CodexAdapter, CodexAdapter,
-    MODES, POLICY,
+    MODES, POLICY, THREAD_CONFIG,
     decisionOf, unwrapCommand, describeItem, inputFor, questionsFrom, asyncQuestionsFrom, codexEnv, versionOf,
 };

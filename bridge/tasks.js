@@ -25,6 +25,12 @@
 // and keep no directory; `todoList`/`todoProgress` in transcript.js cover those,
 // and both entry points below fall back to them.
 //
+// A Codex session keeps its checklist in its rollout, as `update_plan` calls
+// (bridge/codex/plan.js), and the Codex reader answers the same two questions
+// in TodoWrite's shape — so a Codex list is a `todo` list here, flat, with no
+// ids and no dependencies. Which reader is asked is decided by the file: a
+// rollout's name says it is one.
+//
 // **The tools are off by default on current models.** Claude Code stopped
 // offering TaskCreate/Update and TodoWrite to Opus 4.8, Sonnet 5 and newer
 // unless CLAUDE_CODE_ENABLE_TODO_TOOLS=1 is set, which is why `bridge/config.js`
@@ -44,7 +50,13 @@ const fs = require('fs');
 const path = require('path');
 
 const { HOME } = require('./config');
-const { todoProgress, todoList } = require('./transcript');
+const claude = require('./transcript');
+const codex = require('./runtimes/codex/transcript');
+
+/** The reader whose `todoList`/`todoProgress` fit `file`. */
+const readerOf = (file) => (codex.ROLLOUT_RE.test(path.basename(String(file))) ? codex : claude);
+const todoProgress = (file) => readerOf(file).todoProgress(file);
+const todoList = (file) => readerOf(file).todoList(file);
 
 const TASKS_DIR = process.env.TGXCODE_TASKS_DIR
     || path.join(HOME, '.claude', 'tasks');

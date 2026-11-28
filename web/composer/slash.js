@@ -145,7 +145,7 @@ export const live = makeComposer({
     // worktree that has since been landed and removed. A client cannot, having no
     // way to ask whether a path still exists.
     ctx: () => (state.current
-        ? { cwd: state.current.cwd, sessionId: state.current.sessionId }
+        ? { cwd: state.current.cwd, sessionId: state.current.sessionId, runtime: state.current.runtime || null }
         : null),
     // Main-window furniture that would otherwise sit over the popover. A
     // composer inside a modal has none of it, and passes nothing.
@@ -184,10 +184,19 @@ function slashFragment(c) {
  * Cached per working directory, because that is what decides the answer — every
  * session in a checkout shares a list, so one session's fetch warms the rest.
  */
+/**
+ * The cache key for a composer's context. A Codex session's palette is its
+ * skills, not the directory's Claude commands, so the two never share a slot.
+ */
+function slashKey(at) {
+    const where = at.cwd || at.sessionId;
+    return at.runtime === 'codex' ? `codex:${where}` : where;
+}
+
 async function loadSlashCommands(c) {
     const at = c.ctx();
     if (!at) return [];
-    const key = at.cwd || at.sessionId;
+    const key = slashKey(at);
     const hit = state.slashCommands.get(key);
     if (hit) return hit.commands;
 
@@ -198,14 +207,14 @@ async function loadSlashCommands(c) {
     // an `&` in it would otherwise reach the bridge truncated.
     const q = at.sessionId
         ? `session=${encodeURIComponent(at.sessionId)}`
-        : `cwd=${encodeURIComponent(at.cwd)}`;
+        : `cwd=${encodeURIComponent(at.cwd)}${at.runtime ? `&runtime=${encodeURIComponent(at.runtime)}` : ''}`;
     const r = await get(`/api/slash-commands?${q}`);
     const entry = { commands: r.commands || [], at: r.at, exact: r.exact };
     state.slashCommands.set(key, entry);
     // The bridge resolves a cwd that no longer exists to the project directory,
     // so its answer can differ from the summary's. Store both, and the SSE
     // event — which speaks in the bridge's cwd — invalidates the right one.
-    if (r.cwd) state.slashCommands.set(r.cwd, entry);
+    if (r.cwd) state.slashCommands.set(slashKey({ ...at, cwd: r.cwd }), entry);
     return entry.commands;
 }
 
@@ -287,7 +296,7 @@ export async function updateSlashMenu(c) {
     }
 
     const seq = ++c.slash.seq;
-    const key = at.cwd || at.sessionId;
+    const key = slashKey(at);
     let items = state.slashCommands.has(key) ? state.slashCommands.get(key).commands : null;
 
     if (!items) {

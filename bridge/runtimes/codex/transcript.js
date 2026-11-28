@@ -19,7 +19,10 @@
 //   response_item function_call  `request_user_input` only — the blocking question
 //   event_msg item_completed     every tool: commands, patches, plans, MCP calls…
 //   event_msg turn_aborted       an `interrupted` system row
-//   event_msg plan_update        the checklist, drawn as an `update_plan` row
+//   update_plan, in any form     the checklist, drawn as an `update_plan` row
+//                                (bridge/codex/plan.js: on 0.172.0 it is only the
+//                                code-mode script that called it)
+//   SubAgentActivity items       a spawned agent, drawn as Claude's `Agent` row
 //   compacted                    `compact`
 //
 // Decided, all of it measured on 0.172.0 against test/fixtures/codex/:
@@ -43,6 +46,22 @@
 //   parent's lines up to that point. By ordinal where the lines carry one, because
 //   the byte offset is only true of the file Codex wrote — a copy that was edited,
 //   as the fixtures are, has moved its bytes and kept its ordinals.
+// - **A turn you took can be branched from.** A person's message is keyed by its
+//   own id (`msg_<uuid>` on disk, the uuid here) and carries the turn it is in as
+//   `parent`, null on the first input of the conversation (`user_input_order`
+//   0, counted across a fork's inherited history). `branchPoint` answers with
+//   that turn, which the process adapter forks before (`beforeTurnId`). Context
+//   free on purpose: the turn index and the live tail read one line at a time.
+// - **A skill is a command.** Codex runs a skill named as `$name` at the start of
+//   a message, and writes the `<skill>` it injected as a harness message after
+//   it; a palette sends a `{type:"skill"}` input beside that text. Either way the
+//   person's message is a `user` event with `command {name, args}`, as a Claude
+//   slash command is, found by looking ahead to the turn's next few lines.
+// - **A spawned agent is a subagent row.** `SubAgentActivity` `started` is an
+//   `Agent` tool row keyed by the agent's thread id; `completed` or `interrupted`
+//   finishes it. The agent's own rollout (a thread with `parent_thread_id`) is
+//   its transcript: it opens with a copy of the parent's history, which
+//   `ownLines` skips (`subagent_history_start_ordinal`).
 // - **`.jsonl.zst` is read when Node can.** `zlib.zstdDecompressSync` is Node
 //   22.15+. Older Node reads a compressed rollout as nothing, rather than throwing.
 
@@ -53,6 +72,7 @@ const zlib = require('zlib');
 const { parseLines } = require('../../jsonl');
 const { projectRootOf, worktreeNameOf, branchOf } = require('../../places');
 const items = require('../../codex/items');
+const plans = require('../../codex/plan');
 
 // The rollout's file name: `rollout-<timestamp>-<uuid>.jsonl[.zst]`.
 const ROLLOUT_RE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(\.zst)?$/i;
@@ -225,6 +245,12 @@ function scanMeta(file) {
         // forked from, if any.
         originator: null,
         forkedFrom: null,
+        // A spawned agent's thread names the thread that spawned it. Such a
+        // thread is a subagent of that one, not a conversation of its own, and
+        // bridge/sessions.js files it there instead of listing it.
+        parentThreadId: null,
+        agentPath: null,
+        agentNickname: null,
         bytes: text.length,
     };
 
@@ -250,6 +276,12 @@ function scanMeta(file) {
             meta.sessionKind = p.source || null;
             meta.originator = p.originator || null;
             meta.forkedFrom = p.forked_from_id || null;
+            const spawn = p.source && typeof p.source === 'object' && p.source.subagent
+                && p.source.subagent.thread_spawn;
+            meta.parentThreadId = (p.parent_thread_id || (spawn && spawn.parent_thread_id) || null);
+            if (meta.parentThreadId) meta.parentThreadId = String(meta.parentThreadId).toLowerCase();
+            meta.agentPath = p.agent_path || (spawn && spawn.agent_path) || null;
+            meta.agentNickname = p.agent_nickname || (spawn && spawn.agent_nickname) || null;
             if (p.git && typeof p.git.branch === 'string') meta.gitBranch = p.git.branch;
             if (!meta.firstTs) meta.firstTs = p.timestamp || ts;
             continue;
@@ -351,11 +383,100 @@ function inherited(entries, { locate } = {}, depth = 0) {
 // Full transcript parse (drives the conversation view)
 // ---------------------------------------------------------------------------
 
-/** `pending | in_progress | completed`, whichever spelling Codex used. */
-function stepStatus(s) {
-    if (s === 'inProgress' || s === 'in_progress') return 'in_progress';
-    if (s === 'completed') return 'completed';
-    return 'pending';
+/**
+ * A spawned agent's own lines: its rollout opens with its `session_meta` and a
+ * copy of the parent's history up to the spawn, then its own from
+ * `subagent_history_start_ordinal` on. Anything else comes back as it was.
+ */
+function ownLines(entries) {
+    const head = (entries || []).find(e => e && e.type === 'session_meta');
+    const start = head && head.payload && Number(head.payload.subagent_history_start_ordinal);
+    if (!Number.isFinite(start)) return entries || [];
+    return entries.filter(e => e === head || typeof e.ordinal !== 'number' || e.ordinal >= start);
+}
+
+/** `msg_<uuid>` → `<uuid>`: the id a person's message is keyed by, branchable. */
+function messageId(id) {
+    const m = /^msg_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(String(id || ''));
+    return m ? m[1].toLowerCase() : id || null;
+}
+
+/**
+ * The turn a person's message is in, or null when it is the first input of the
+ * conversation — `parent` on the `user` event. See the header.
+ */
+function turnOf(entry) {
+    const p = entry.payload || {};
+    const meta = p.internal_chat_message_metadata_passthrough || {};
+    const order = entry.metadata && entry.metadata.user_input_order;
+    if (order === 0) return null;
+    return typeof meta.turn_id === 'string' ? meta.turn_id : null;
+}
+
+// How far ahead of a person's message its skill is looked for: the harness's
+// `<skill>` message and the `UserMessage` item follow it within a line or two.
+const SKILL_LOOKAHEAD = 6;
+const SKILL_TAG_RE = /^<skill>\s*<name>([^<]+)<\/name>/;
+const DOLLAR_RE = /^\$([A-Za-z0-9][\w:.-]*)(?:\s+([\s\S]*))?$/;
+
+/**
+ * The skills Codex ran for the person's message at `entries[i]`: names from the
+ * `<skill>` harness messages and `{type:"skill"}` inputs after it, up to the
+ * next assistant message or turn. `{names, explicit}`, `explicit` being the
+ * names that came as an input rather than only as a `$name` mention.
+ */
+function skillsAfter(entries, i) {
+    const names = new Set();
+    const explicit = new Set();
+    for (let j = i + 1; j < entries.length && j <= i + SKILL_LOOKAHEAD; j++) {
+        const e = entries[j];
+        if (!e || e.type === 'turn_context') break;
+        const p = e.payload || {};
+        if (e.type === 'response_item' && p.type === 'message') {
+            if (p.role === 'assistant') break;
+            if (p.role === 'user' && personMessage(p)) break;
+            for (const b of p.content || []) {
+                const m = b && typeof b.text === 'string' && SKILL_TAG_RE.exec(b.text.trimStart());
+                if (m) names.add(m[1].trim());
+            }
+        }
+        if (e.type === 'event_msg' && p.type === 'item_completed' && p.item && p.item.type === 'UserMessage') {
+            for (const c of p.item.content || []) {
+                if (c && c.type === 'skill' && c.name) { names.add(String(c.name)); explicit.add(String(c.name)); }
+            }
+        }
+    }
+    return { names, explicit };
+}
+
+/** A person's message as `{text, command}`, the skill it ran taken out as a command. */
+function asCommand(text, skills) {
+    const m = DOLLAR_RE.exec(String(text || '').trim());
+    if (m && skills.names.has(m[1])) return { text: '', command: { name: m[1], args: (m[2] || '').trim() } };
+    if (skills.explicit.size) {
+        const [name] = skills.explicit;
+        return { text: '', command: { name, args: String(text || '').trim() } };
+    }
+    return { text, command: null };
+}
+
+/** The descriptor a subagent row carries as `agent` (docs/api.md, `tool.agent`). */
+function agentOf(item, ctx) {
+    const threadId = item.agentThreadId ? String(item.agentThreadId).toLowerCase() : null;
+    const has = threadId && typeof ctx.hasAgent === 'function' ? !!ctx.hasAgent(threadId) : false;
+    const nick = threadId && typeof ctx.agentNickname === 'function' ? ctx.agentNickname(threadId) : null;
+    return {
+        agentId: threadId,
+        agentType: nick || null,
+        description: items.taskNameOf(item.agentPath) || null,
+        model: item.model || null,
+        isAsync: false,
+        durationMs: null,
+        tokens: null,
+        toolUses: null,
+        spawnDepth: items.depthOf(item.agentPath),
+        ...(has && { hasTranscript: true }),
+    };
 }
 
 /** `request_user_input`'s answer, keyed by question text as AskUserQuestion's is. */
@@ -390,7 +511,10 @@ function buildEvents(entries, ctx = {}) {
     // Which turn the lines belong to, so an event can say. Used for ids only.
     let turnId = null;
 
-    for (const e of entries || []) {
+    const agents = new Map();
+    const list = entries || [];
+    for (let i = 0; i < list.length; i++) {
+        const e = list[i];
         if (!e || typeof e !== 'object') continue;
         const p = e.payload || {};
         const ts = typeof e.timestamp === 'string' ? e.timestamp : null;
@@ -413,13 +537,14 @@ function buildEvents(entries, ctx = {}) {
             if (p.type === 'message' && p.role === 'user') {
                 const person = personMessage(p);
                 if (!person) continue;
+                const { text, command } = asCommand(person.text, skillsAfter(list, i));
                 events.push({
-                    id: p.id || `user:${e.ordinal != null ? e.ordinal : ts}`, kind: 'user', ts,
-                    text: person.text, images: person.images, files: [], command: null,
+                    id: messageId(p.id) || `user:${e.ordinal != null ? e.ordinal : ts}`, kind: 'user', ts,
+                    text, images: person.images, files: [], command,
                     origin: 'human',
-                    // A Codex turn cannot be branched from yet (`branchFromTurn` is
-                    // false), so there is no chain entry to name.
-                    parent: null,
+                    // The turn this message is in, which a branch from it forks
+                    // before; null on the conversation's first input. See the header.
+                    parent: turnOf(e),
                 });
                 continue;
             }
@@ -456,6 +581,19 @@ function buildEvents(entries, ctx = {}) {
                 events.push(ev);
                 continue;
             }
+            // The checklist. A code-mode script that called update_plan, or the
+            // call itself where code mode is off; see bridge/codex/plan.js.
+            if ((p.type === 'custom_tool_call' || (p.type === 'function_call' && p.name === 'update_plan'))
+                && plans.mayHavePlan(typeof p.input === 'string' ? p.input : p.name)) {
+                const plan = plans.planOfLine(e);
+                if (plan) {
+                    events.push({
+                        id: p.call_id || p.id || `plan:${e.ordinal != null ? e.ordinal : ts}`, kind: 'tool', ts,
+                        name: 'update_plan', input: plan, status: 'ok', result: { text: '' }, agent: null,
+                    });
+                }
+                continue;
+            }
             if (p.type === 'function_call_output' && p.call_id) {
                 const ask = asks.get(p.call_id);
                 const call = ask || (ctx.pendingAsks && ctx.pendingAsks.get(p.call_id));
@@ -482,6 +620,30 @@ function buildEvents(entries, ctx = {}) {
         if (p.type === 'item_completed') {
             const item = items.fromRollout(p.item);
             if (!item) continue;
+            // A spawned agent: its row when it starts, its result when it stops.
+            if (item.type === 'subAgentActivity') {
+                const t = items.toolEvent(item);
+                const id = item.agentThreadId ? String(item.agentThreadId).toLowerCase() : item.id;
+                const at = typeof p.completed_at_ms === 'number' ? new Date(p.completed_at_ms).toISOString() : ts;
+                if (item.kind === 'started') {
+                    if (agents.has(id)) continue;
+                    const ev = { id, kind: 'tool', ts: at, name: t.name, input: t.input, status: 'pending',
+                        result: null, agent: agentOf(item, ctx), durationMs: null, resultTs: null };
+                    agents.set(id, ev);
+                    events.push(ev);
+                } else if (item.kind === 'completed' || item.kind === 'interrupted') {
+                    const row = agents.get(id);
+                    if (row) {
+                        Object.assign(row, { status: t.status, result: t.result, resultTs: at });
+                        if (row.ts && at) row.durationMs = Date.parse(at) - Date.parse(row.ts);
+                        row.agent.durationMs = row.durationMs;
+                    } else {
+                        events.push({ id: `${id}:result`, kind: 'tool-result', toolId: id, ts: at,
+                            status: t.status, result: t.result, resultTs: at });
+                    }
+                }
+                continue;
+            }
             // A question asked without waiting exists only as an item.
             if (item.type === 'agentMessage' && item.delivery === 'async' && item.text) {
                 events.push({ id: `${item.id}:text`, kind: 'assistant', ts, text: item.text, model });
@@ -520,11 +682,7 @@ function buildEvents(entries, ctx = {}) {
         if (p.type === 'plan_update') {
             events.push({
                 id: `plan:${e.ordinal != null ? e.ordinal : ts}`, kind: 'tool', ts,
-                name: 'update_plan',
-                input: {
-                    explanation: p.explanation || null,
-                    plan: (p.plan || []).map(s => ({ step: s.step || '', status: stepStatus(s.status) })),
-                },
+                name: 'update_plan', input: plans.planOfLine(e) || { explanation: null, plan: [] },
                 status: 'ok', result: { text: '' }, agent: null,
             });
         }
@@ -538,7 +696,82 @@ function isTurnStart(entry) {
     return !!entry && entry.type === 'turn_context';
 }
 
+/**
+ * Where a branch from your message `id` cuts the conversation: `{parent, last}`
+ * as the Claude reader's `branchPoint` answers, or null when there is no such
+ * message. `parent` is the turn the message is in — the turn a branch forks
+ * before — and null for the conversation's first input, which there is nothing
+ * before to keep. `entries` are the whole history, a fork's inherited lines
+ * first (bridge/sessions.js reads them).
+ */
+function branchPoint(entries, id) {
+    const turns = buildEvents(entries).events.filter(ev => ev.kind === 'user');
+    const i = turns.findIndex(ev => ev.id === id);
+    if (i < 0) return null;
+    return { parent: turns[i].parent, last: i === turns.length - 1 };
+}
+
+// How much of a rollout's end is read for its checklist: a board asks about
+// every working session once a second, and a rollout carries Codex's whole
+// instructions at its head, so the head is never what is wanted.
+const TODO_TAIL_BYTES = 512 * 1024;
+
+/** A rollout's last `bytes`, starting at a line. A `.zst` is read whole. */
+function tailOf(file, bytes) {
+    if (file.endsWith('.zst')) return readFile(file);
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+        const size = fs.fstatSync(fd).size;
+        const from = Math.max(0, size - bytes);
+        const buf = Buffer.alloc(size - from);
+        fs.readSync(fd, buf, 0, buf.length, from);
+        if (from === 0) return buf;
+        const nl = buf.indexOf(0x0a);
+        return nl < 0 ? Buffer.alloc(0) : buf.subarray(nl + 1);
+    } catch {
+        return null;
+    } finally {
+        if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ }
+    }
+}
+
+/**
+ * The current checklist out of a rollout's tail, in TodoWrite's shape —
+ * `{items: [{content, status, activeForm}], ts}` — or null, exactly as the
+ * Claude reader's `todoList` answers, so bridge/tasks.js reads either.
+ */
+function todoList(file) {
+    const buf = tailOf(file, TODO_TAIL_BYTES);
+    if (!buf) return null;
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (!plans.mayHavePlan(lines[i])) continue;
+        const e = safeParse(lines[i]);
+        const plan = plans.planOfLine(e);
+        if (!plan || !plan.plan.length) continue;
+        return { items: plans.todosOf(plan), ts: typeof e.timestamp === 'string' ? e.timestamp : null };
+    }
+    return null;
+}
+
+/** How far through its checklist a thread is — the Claude reader's five keys. */
+function todoProgress(file) {
+    const list = todoList(file);
+    if (!list) return null;
+    const active = list.items.find(t => t.status === 'in_progress') || null;
+    const done = list.items.filter(t => t.status === 'completed').length;
+    return {
+        done,
+        total: list.items.length,
+        current: active ? active.content : null,
+        idle: !active && done < list.items.length,
+        ts: list.ts,
+    };
+}
+
 module.exports = {
     readFile, parseLines, scanMeta, buildEvents, inherited, isTurnStart, personMessage,
-    idFromName, modeOf, ROLLOUT_RE, CAN_ZSTD,
+    idFromName, modeOf, ownLines, branchPoint, todoList, todoProgress, messageId,
+    ROLLOUT_RE, CAN_ZSTD,
 };

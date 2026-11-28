@@ -138,12 +138,13 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
 
 // --- the runtime ----------------------------------------------------------------------------------
 {
-    // Driven since Phase 3: sent to, steered, with its asks and images. What is
-    // still false is Phase 4's or has no Codex equivalent; deleting stays false,
+    // Driven since Phase 3: sent to, steered, with its asks and images; forked,
+    // branched, with a checklist and a skill palette since Phase 4. What is still
+    // false has no Codex equivalent or is another slice's; deleting stays false,
     // because a rollout is Codex's store and Codex deletes it.
     const caps = runtimes.capabilitiesOf('codex');
-    assert.deepStrictEqual(caps, { fork: false, branchFromTurn: false, planMode: true, askUser: true,
-        peers: false, tasks: false, scratchpad: false, slashCommands: false, steer: true, images: true,
+    assert.deepStrictEqual(caps, { fork: true, branchFromTurn: true, planMode: true, askUser: true,
+        peers: false, tasks: true, scratchpad: false, slashCommands: true, steer: true, images: true,
         allowForSession: false, send: true, delete: false, updateCheck: true });
     assert.ok(Object.isFrozen(caps));
     assert.ok(runtimes.readable('codex') && runtimes.known('codex'), 'read, and run');
