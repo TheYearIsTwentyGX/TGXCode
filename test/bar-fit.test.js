@@ -47,6 +47,13 @@ process.removeAllListeners('warning');
     assert.deepStrictEqual(plan(740), { compact: true, spill: ['schedules', 'devbrowser'] });
     ok('buttons leave from the end, in bar order, past the quota pill');
 
+    // Something fixed that shrinks with the words (the version pill): the
+    // compact sum is taken with the compact width, so a bar that only fits
+    // compact is not pushed into spilling by the full-width pill.
+    assert.deepStrictEqual(plan(compactW - 20, { fixed: 320, fixedCompact: 280 }), { compact: true, spill: [] });
+    assert.deepStrictEqual(plan(fullW, { fixed: 320, fixedCompact: 280 }), { compact: true, spill: [] });
+    ok('a fixed item that shrinks when compact is measured compact');
+
     const tight = plan(100);
     assert.ok(!tight.spill.includes('quota'));
     assert.strictEqual(tight.spill.length, 7);

@@ -83,12 +83,15 @@ export async function fillSelectFor(sel, kind, runtime = 'claude') {
     const keep = sel.value;
     while (sel.options.length > 1) sel.remove(1);
     const items = kind === 'effort' ? (list.efforts || []).map(e => ({ id: e, label: e })) : (list.models || []);
+    // The runtime's own default is the first option, "Default"; which model that
+    // is goes on its tooltip, rather than a second "(default)" further down.
+    const def = items.find(m => m.default);
+    if (sel.options[0]) sel.options[0].title = def ? `Default: ${def.label || def.id}` : '';
     for (const m of items) {
         const o = document.createElement('option');
         o.value = m.id;
         o.textContent = m.label || m.id;
         if (m.note) o.title = m.note;
-        if (m.default) o.textContent += ' (default)';
         sel.append(o);
     }
     sel.value = [...sel.options].some(o => o.value === keep) ? keep : '';

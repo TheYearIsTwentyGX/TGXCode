@@ -233,6 +233,7 @@ function fitBar() {
     const next = planBar({
         avail: full.avail,
         fixed: full.fixed,
+        fixedCompact: compact.fixed,
         reserve: full.reserve,
         items: full.items.map(i => ({ ...i, compact: compact.items.find(c => c.id === i.id).full })),
         more: full.more,

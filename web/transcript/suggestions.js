@@ -153,8 +153,8 @@ function taskActions(ev) {
     if (acted && acted.status === 'started') {
         return html`<div class="task-done">
             <span>Started</span>
-            ${acted.startedId ? linky('open it', openIt) : null}
-            ${linky('offer again', () => actOnSuggestion(ev, null))}
+            ${acted.startedId ? linky('Open session', openIt) : null}
+            ${linky('Offer again', () => actOnSuggestion(ev, null))}
         </div>`;
     }
     // Said by whoever did the work, usually an agent through `set_task_status`,
@@ -167,21 +167,21 @@ function taskActions(ev) {
             <span>Done</span>
             ${url ? html`<a class="linky" href=${url} target="_blank" rel="noopener">${url}</a>`
                 : (note ? html`<span>${note}</span>` : null)}
-            ${acted.startedId ? linky('open it', openIt) : null}
-            ${linky('offer again', () => actOnSuggestion(ev, null))}
+            ${acted.startedId ? linky('Open session', openIt) : null}
+            ${linky('Offer again', () => actOnSuggestion(ev, null))}
         </div>`;
     }
     if (acted && acted.status === 'dismissed') {
         return html`<div class="task-done">
             <span>Dismissed</span>
             ${acted.note ? html`<span>${acted.note}</span>` : null}
-            ${linky('undo', () => actOnSuggestion(ev, null))}
+            ${linky('Undo', () => actOnSuggestion(ev, null))}
         </div>`;
     }
     const starting = state.taskStarting.has(ev.id);
     return html`<div class="task-btns">
         <button class="more-btn primary" type="button" disabled=${starting}
-            onClick=${() => startSuggestion(ev)}>${starting ? 'Starting' : 'Start'}</button>
+            onClick=${() => startSuggestion(ev)}>${starting ? 'Starting…' : 'Start'}</button>
         <button class="more-btn" type="button"
             onClick=${() => { closeTaskDialog(); openNew({ cwd: ev.cwd || '', prompt: ev.prompt }); }}
             >Edit first</button>
@@ -275,7 +275,6 @@ export async function startSuggestion(ev) {
         state.taskStarting.delete(ev.id);
         renderTasks();
         closeTaskDialog();
-        toast('Session started.', 'ok');
         openSessionSoon(r.sessionId);
     } catch (err) {
         state.taskStarting.delete(ev.id);

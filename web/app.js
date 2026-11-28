@@ -816,7 +816,6 @@ async function confirmDelete() {
     try {
         await del(`/api/sessions/${s.sessionId}`);
         closeDelete();
-        toast(`Deleted “${clip(s.title, 40)}”.`, 'ok');
         // The bridge broadcasts as well, so this is only about not waiting for a
         // round trip to stop showing a conversation that no longer exists.
         forgetSession(s.sessionId);
@@ -4056,11 +4055,13 @@ dom.btnStop.addEventListener('click', async () => {
         if (out.dropped && out.dropped.length) {
             restoreToComposer(out.dropped.join('\n\n'));
             back = out.dropped.length === 1
-                ? ' The message that was waiting is back in the box.'
-                : ` The ${out.dropped.length} waiting messages are back in the box.`;
+                ? 'The message that was waiting is back in the box.'
+                : `The ${out.dropped.length} waiting messages are back in the box.`;
         }
         if (out.how === 'soft') {
-            toast('Asked the turn to stop — the session stays resumable.' + back, 'ok');
+            // The status line says it is stopping; only the messages put back
+            // are news.
+            if (back) toast(back, 'ok');
             armForce();
         } else if (out.how === null) {
             // A runner with no process behind it — the route 404s when there is no
@@ -4071,12 +4072,12 @@ dom.btnStop.addEventListener('click', async () => {
             state.stopArmed = 0;
             paintStop();
             toast(back
-                ? 'That session\u2019s process had already stopped.' + back
-                : 'That session\u2019s process had already stopped — nothing to stop.', 'ok');
+                ? `That session\u2019s process had already stopped. ${back}`
+                : 'That session\u2019s process had already stopped.', 'ok');
         } else {
             state.stopArmed = 0;
             paintStop();
-            toast('Killed the process. Whatever was written is in the transcript.' + back, 'warn');
+            toast(`Killed the process. Whatever was written is in the transcript.${back ? ` ${back}` : ''}`, 'warn');
         }
     } catch (err) {
         toast(`Could not stop: ${err.message}`, 'error');

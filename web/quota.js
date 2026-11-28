@@ -47,7 +47,7 @@
 import { html, render } from './vendor/preact.js';
 import { get, post } from './api.js';
 import { state } from './state.js';
-import { dom, toast } from './dom.js';
+import { dom, el, toast } from './dom.js';
 import { pad, shortPath } from './format.js';
 import { pullAndRestart } from './restart.js';
 import { showNewMenu } from './new-session/recent.js';
@@ -253,7 +253,7 @@ function codexPill(codex, afterClaude) {
     if (!codex) return [];
     const name = html`<span key="codex-name" class=${'q-runtime' + (afterClaude ? ' after' : '')}>Codex</span>`;
     if (codex.signedIn === false) {
-        return [name, html`<span key="codex-signin" class="q-signin">sign in</span>`];
+        return [name, html`<span key="codex-signin" class="q-signin" aria-hidden="true"></span>`];
     }
     if (!codex.windows.length) {
         return [name, html`<span key="codex-empty" class="q-win"><span class="q-num">—</span></span>`];
@@ -335,16 +335,22 @@ function drawQuotaWindows() {
         return;
     }
 
-    // Left: where the number came from and when. Right: the reset, which is
-    // the other half of the question and comes from the stream, so it stays
-    // current even when the percentage does not.
+    // Left: only when the number needs a word — there is none, or it is old.
+    // A fresh reading says nothing here; the note under the rows says when the
+    // readings came in, once. Right: the reset, which comes from the stream and
+    // stays current even when the percentage does not.
     render(windows.map(w => panelWindow(w, w.type, w.usedPercent === null
-        ? (w.status ? 'status only — no percentage sent' : 'not observed yet')
-        : `${w.usedPercentSource === 'stream' ? 'from a turn' : 'from the status line'}, `
-            + fmtAge(quotaAge(w.usedPercentAt)))), dom.quotaWindows);
+        ? (w.status ? 'no percentage sent' : 'not observed yet')
+        : ageWord(w.usedPercentAt))), dom.quotaWindows);
 }
 
-/** One window's row in the popover, either meter's. `left` says where it is from. */
+/** "2h old" for a reading past QUOTA_STALE_AFTER, else nothing. */
+function ageWord(at) {
+    const age = quotaAge(at);
+    return age !== null && age > QUOTA_STALE_AFTER ? fmtAge(age).replace(/ ago$/, ' old') : '';
+}
+
+/** One window's row in the popover, either meter's. `left` is what it needs saying, if anything. */
 function panelWindow(w, key, left) {
     const age = quotaAge(w.usedPercentAt);
     const stale = age !== null && age > QUOTA_STALE_AFTER;
@@ -357,7 +363,7 @@ function panelWindow(w, key, left) {
     return html`<div key=${key} class=${'q-row' + (stale ? ' stale' : '')}>
         <div class="q-row-top">
             <span>${w.label}</span>
-            <span class="q-pct">${pct === null ? 'no reading' : `${pct.toFixed(1)}%`}</span>
+            <span class="q-pct">${pct === null ? 'no reading' : `${Math.round(pct)}%`}</span>
         </div>
         ${bar && html`<span class="q-win" data-status=${w.status || ''}>${bar}</span>`}
         <div class="q-row-sub">
@@ -390,11 +396,10 @@ function drawQuotaCodex() {
                 >${busy ? 'Refreshing…' : 'Refresh'}</button>
         </div>`,
         codex.signedIn === false && html`<div key="signin" class="quota-note">
-            <div class="warn">Sign in to Codex: run <code>codex login</code></div>
-            <div>Where no browser opens, <code>codex login --device-auth</code>. Then press Refresh.</div>
+            <div class="warn" title="Where no browser opens: codex login --device-auth. Then press Refresh."
+                >Sign in to Codex: run <code>codex login</code></div>
         </div>`,
-        ...codex.windows.map(w => panelWindow(w, w.type,
-            `from Codex, ${fmtAge(quotaAge(w.usedPercentAt))}`)),
+        ...codex.windows.map(w => panelWindow(w, w.type, ageWord(w.usedPercentAt))),
         codex.signedIn && !codex.windows.length && !codex.error && html`<div key="none" class="q-row-sub">
             <span>Codex reports no usage windows for this account.</span>
         </div>`,
@@ -455,7 +460,7 @@ function quotaNoteLines() {
         line('sl', 'Percentages come from the Claude Code status line, which only runs in a terminal. To turn it on:');
         out.push(html`<code key="sl-cmd">node scripts/install-quota-statusline.js</code>`);
     } else if (sl && sl.present) {
-        line('sl', `Last harvested from the status line ${fmtAge(quotaAge(sl.capturedAt))}.`);
+        line('sl', `Updated ${fmtAge(quotaAge(sl.capturedAt))}`);
     }
 
     // Why the number is or is not moving. Without this a stale reading is
@@ -468,10 +473,10 @@ function quotaNoteLines() {
     if (quota.refreshError) line('refresh', `Refresh: ${quota.refreshError}`, 'warn');
 
     if (!bc.dir) {
-        line('bc', 'Refreshing it without a terminal open needs the quota beacon: '
-            + 'set quota.beacon and quota.beaconDir in ~/.tgxcode/settings.json. '
-            + 'Open Claude Code in that directory yourself once first — the beacon '
-            + 'will not answer the trust prompt.');
+        // The setup, the trust prompt and the rest are in docs/manual.md; this is
+        // the line that says there is a setting at all.
+        out.push(html`<div key="bc" title="Set quota.beacon and quota.beaconDir in ~/.tgxcode/settings.json. Open Claude Code in that directory once first: the beacon cannot answer the trust prompt."
+            >Auto-refresh is off: set <code>quota.beaconDir</code> in settings.json.</div>`);
         return out;
     }
 
@@ -479,9 +484,7 @@ function quotaNoteLines() {
     // timer that flag governs — so say that rather than repeating the setup
     // instructions at somebody who has already followed them.
     if (!bc.enabled) {
-        line('bc', `Automatic refresh is off (quota.beacon), so the percentage only `
-            + `moves while a terminal is open — or when you press Refresh, which `
-            + `runs it once in ${bc.dir}.`);
+        line('bc', 'Auto-refresh is off (quota.beacon). Refresh runs it once.');
         return out;
     }
 
@@ -489,9 +492,7 @@ function quotaNoteLines() {
     // age that will never move: on a dev window the beacon is the everyday
     // instance's job, and the reading here is whatever that one last harvested.
     if (bc.suppressed === 'dev-bridge') {
-        line('bc', 'Automatic refresh is off on a dev bridge — the everyday instance '
-            + 'runs the clock. The percentages here are whatever it last '
-            + 'harvested, and Refresh still works if you want one now.');
+        line('bc', 'Auto-refresh runs on the everyday instance.');
         return out;
     }
 
@@ -515,10 +516,11 @@ function quotaNoteLines() {
                 + `in ${bc.dir} yourself and clear whatever is waiting.`);
         if (bc.screen) out.push(html`<code key="bc-screen">${bc.screen}</code>`);
     } else if (bc.ok) {
-        line('bc', `Beacon on, ${every}, in ${bc.dir} — last run ${fmtAge(quotaAge(bc.at))}`
-            + `${typeof bc.ms === 'number' ? ` (${(bc.ms / 1000).toFixed(1)}s)` : ''}.`);
+        out.push(html`<div key="bc" title=${`In ${bc.dir}, last run ${fmtAge(quotaAge(bc.at))}`
+            + `${typeof bc.ms === 'number' ? ` (${(bc.ms / 1000).toFixed(1)}s)` : ''}`}
+            >${`Auto-refresh ${every || 'on'}`}</div>`);
     } else {
-        line('bc', `Beacon on, ${every}, in ${bc.dir} — not run yet.`);
+        out.push(html`<div key="bc" title=${`In ${bc.dir}`}>${`Auto-refresh ${every || 'on'}, not run yet`}</div>`);
     }
     return out;
 }
@@ -563,12 +565,12 @@ export function renderQuotaRestart() {
     dom.quotaRestartLabel.textContent = busy ? 'Restarting…' : 'Restart bridge';
     dom.quotaRestartSub.textContent = busy
         ? 'Waiting for the replacement to answer'
-        // shortPath rather than the raw checkout: this popover is 306px wide,
-        // and every path on this machine opens with the same 18 characters.
-        : `Pull and restart ${state.root ? shortPath(state.root) : 'this bridge'}`;
+        // The checkout is in the tooltip: a path wrapped over three lines of a
+        // 306px popover, and it is the same path every time.
+        : 'Pull and restart';
     btn.title = busy
         ? 'Waiting for a bridge with a different pid to answer'
-        : 'Fast-forward the checkout this bridge is serving, then restart it';
+        : `Fast-forward ${state.root ? shortPath(state.root) : 'the checkout this bridge is serving'}, then restart it`;
 }
 
 export function renderQuota() {
@@ -910,10 +912,13 @@ function renderCv() {
     dom.cvWrap.hidden = !show;
     if (!show) showCv(false);
     if (cv) {
-        const text = cv.behind
-            ? `Claude ↑ ${cv.latest}`
-            : `${stale.length} on old Claude`;
-        dom.cvPill.textContent = text;
+        // "Claude" is a span of its own so a compact bar can drop it and keep
+        // the arrow and the version, which are the news.
+        if (cv.behind) {
+            dom.cvPill.replaceChildren(el('span', { class: 'cv-name' }, 'Claude '), `↑ ${cv.latest}`);
+        } else {
+            dom.cvPill.textContent = `${stale.length} on old Claude`;
+        }
         dom.cvPill.dataset.kind = cv.behind ? 'behind' : 'stale';
         dom.cvPill.title = cv.behind
             ? `Claude Code ${cv.installed} is installed; ${cv.latest} is the newest on ${cv.channel}`

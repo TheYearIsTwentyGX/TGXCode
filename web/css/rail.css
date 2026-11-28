@@ -162,6 +162,10 @@
 
 
 .rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: var(--sp-6); }
+/* The global ring sits outside the element, and a full-width row or card head in
+   a scroller has nothing outside it that is not clipped: the ring lost its
+   sides. Inside, as .tasks-strip does. */
+.rail :is(.strip-main, .group-head):focus-visible { outline-offset: calc(-1 * var(--focus-w) - 1px); }
 
 /* Each group is a card, so where one project ends and the next begins is a
    change of surface rather than something the eye has to infer from spacing.
@@ -186,7 +190,6 @@
     padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r);
     font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
-    letter-spacing: 0.04em;
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease);
 }
@@ -446,12 +449,10 @@
     padding: 0 var(--sp-3);
     border-radius: var(--r-xs);
     font: 500 var(--fs-2xs)/var(--lh-none) var(--mono);
-    letter-spacing: 0.06em;
 }
 .tag-test {
     background: var(--s4);
     color: var(--text-3);
-    text-transform: uppercase;
 }
 /* A session this bridge reads but cannot run — a Codex thread, for now. Named by
    its CLI, outlined rather than filled: it is real work, just not work you can
@@ -468,7 +469,6 @@
 .tag-orch {
     background: var(--blue-tint);
     color: var(--blue);
-    letter-spacing: 0.04em;
 }
 .tag-orch.paused {
     background: var(--yellow-cont);
@@ -605,7 +605,6 @@
 .tag-bg {
     background: var(--s3);
     color: var(--text-4);
-    text-transform: uppercase;
 }
 
 .rail-empty {
@@ -628,6 +627,18 @@
     border-radius: var(--pill);
     background: var(--red-cont);
     color: var(--red);
+    font-size: var(--fs-xs);
+}
+/* Blocked on you: a permission, a plan, a question. The stalled badge's shape in
+   the amber the app uses for "your turn" (the approval card, the plan bar), so
+   the two read as one family: one says nothing is happening, this one says what
+   is needed to make it happen. */
+.tag-ask {
+    flex: none;
+    padding: 1px var(--sp-3);
+    border-radius: var(--pill);
+    background: var(--yellow-cont);
+    color: var(--yellow);
     font-size: var(--fs-xs);
 }
 .strip[data-stalled="true"] .strip-meta::before {

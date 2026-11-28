@@ -433,8 +433,13 @@ Everything passes (8/8). Want me to open a pull request?`, { last: true });
         },
     };
     const ended = { flaky: 90_000, offline: 9 * MIN, shortcuts: 4 * MIN, darkMode: 70 * MIN };
+    // The call each chat leaves open, so the stub's ask can name it the way a
+    // real permission request names its tool_use — which is how the open row
+    // knows it is waiting rather than running.
+    const openCall = {};
     for (const w of workers) {
         const conv = workerChats[w.key]();
+        openCall[w.key] = conv.pendingUse;
         save(conv, ended[w.key]);
     }
 
@@ -629,7 +634,7 @@ async function get(path, params = {}) {
             text: 'Fix is in; re-running the loop to be sure it holds.',
             input: { file_path: path.join(wt.flaky.dir, 'test/tasks.test.js'), old_string: 'x', new_string: 'y' } },
         [id.offline]: { kind: 'plan', plan: planText },
-        [id.shortcuts]: { kind: 'permission', tool: 'Bash',
+        [id.shortcuts]: { kind: 'permission', tool: 'Bash', toolUseId: openCall.shortcuts,
             input: { command: 'git push --force-with-lease origin worktree-keyboard-shortcuts-9d20c4', description: 'Push the rebased branch' } },
     };
 

@@ -77,7 +77,7 @@
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
     .status-line[data-state="retrying"] .led,
-    :is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg,
+    :is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
@@ -704,9 +704,7 @@
 .slash-menu .menu-group {
     padding: var(--sp-4) var(--sp-5) var(--sp-2);
     font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-4);
+    color: var(--text-3);
 }
 .slash-menu .menu-group:first-child { padding-top: var(--sp-1); }
 
@@ -938,7 +936,7 @@
 .input-marks mark {
     color: transparent;
     background: var(--mark-bg);
-    border-radius: 2px;
+    border-radius: var(--r-2xs);
 }
 /* The current one: the conversation find's yellow would put the box's light
    text on a light ground, so it is the match colour with a yellow edge
@@ -1189,6 +1187,11 @@
 /* Each label sits with the control it names, and the pairs stand apart: the same
    gap between every word made "Model haiku Effort inherit" one run of text. */
 .opts select + label { margin-left: var(--sp-4); }
+/* The composer's pairs are boxed (`.opt`), so a wrapping row breaks between
+   pairs rather than leaving "Permissions" at the end of one line and its select
+   at the start of the next. */
+.composer .opt { display: inline-flex; align-items: center; gap: var(--sp-3); white-space: nowrap; }
+.composer .opt + .opt { margin-left: var(--sp-4); }
 .opts select {
     height: 28px;
     background: var(--s2);

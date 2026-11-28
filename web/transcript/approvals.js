@@ -42,7 +42,7 @@ import { state } from '../state.js';
 import { agentOf } from '../capabilities.js';
 import { paintPerm, scrollToEnd } from '../app.js';
 import { closeFind } from './find.js';
-import { toolSummary } from './tools.js';
+import { markWaitingTool, toolSummary } from './tools.js';
 import { toolDisplayName } from '../tool-name.js';
 import { exit, grow, isLeaving, isUp, present } from '../motion.js';
 
@@ -69,15 +69,15 @@ import { exit, grow, isLeaving, isUp, present } from '../motion.js';
 const DECISION_WORD = {
     allow: 'Allowed.', 'allow-always': 'Allowed for the rest of this session.',
     deny: 'Denied.', stopped: 'Stopped before it was approved.',
-    cancelled: 'Withdrawn — the turn ended.',
+    cancelled: 'Withdrawn when the turn ended.',
     superseded: 'Replaced by a later request.',
-    'auto-denied': 'Denied automatically — nobody answered.',
+    'auto-denied': 'Nobody answered, so it was denied.',
     abandoned: 'The agent process exited before this was answered.',
     'plan-approved': 'Approved.',
-    'plan-approved-note': 'Approved, with a note to bear in mind.',
-    'plan-rejected': 'Sent back for more planning.',
+    'plan-approved-note': 'Approved with a note.',
+    'plan-rejected': 'Kept planning.',
     answered: 'Answered.',
-    dismissed: 'Dismissed — the agent carries on unaided.',
+    dismissed: 'Skipped.',
 };
 
 /** Head words per kind: what the card calls itself. */
@@ -197,6 +197,7 @@ export function renderAsk() {
     }
     if (kind !== 'plan') present(dom.planPane, false, { as: 'arrive' });
 
+    markWaitingTool(kind === 'tool' ? ask.toolUseId : null);
     if (!kind) return;
     if (kind === 'plan') renderPlanPane(ask);
     else if (kind === 'question') renderQuestionDock(ask, keep);
@@ -224,7 +225,7 @@ function renderToolCard(ask) {
         el('span', { class: 'perm-tool', title: ask.tool || null }, toolDisplayName(ask.displayName)),
         el('span', { class: 'perm-title' }, 'permission needed')));
 
-    if (ask.agentId) card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
+    if (ask.agentId) card.append(el('div', { class: 'perm-why' }, 'From a subagent.'));
 
     // toolSummary is the collapsed-row text of an ordinary tool block. Shape
     // the ask like the event it reads and the two render identically.
@@ -396,8 +397,7 @@ function planFoot(ask, pending, feedback) {
     // says what is true and stops.
     if (ask.readOnly) {
         return html`<div key="elsewhere" class="plan-elsewhere"><span class="plan-elsewhere-mark">◇</span>${
-            'This session is running in another window. The plan can be read here,'
-            + ' and has to be approved where it is running.'}</div>`;
+            'Approve it in the window running it.'}</div>`;
     }
     return [
         html`<div key="btns" class="perm-btns" hidden=${!!feedback}>
@@ -406,17 +406,16 @@ function planFoot(ask, pending, feedback) {
                 onClick=${() => answerAsk({ decision: 'allow', mode: 'auto' })}>Approve <kbd>Y</kbd></button>
             <button class="perm-btn" type="button" disabled=${pending}
                 title="Start work, and let file edits through without asking"
-                onClick=${() => answerAsk({ decision: 'allow', mode: 'acceptEdits' })}>Approve — auto-accept edits <kbd>A</kbd></button>
+                onClick=${() => answerAsk({ decision: 'allow', mode: 'acceptEdits' })}>Approve, accept edits <kbd>A</kbd></button>
             <button class="perm-btn" type="button" disabled=${pending}
                 title="Approve the plan, with something to bear in mind while doing it"
-                onClick=${() => openFeedback('approve')}>Approve with feedback <kbd>F</kbd></button>
+                onClick=${() => openFeedback('approve')}>Approve with note <kbd>F</kbd></button>
             <button class="perm-btn deny" type="button" disabled=${pending}
                 onClick=${() => openFeedback('reject')}>Keep planning <kbd>N</kbd></button>
         </div>`,
         feedback
             ? html`<${Feedback} key=${`fb:${ask.requestId}:${feedback}`} how=${feedback} pending=${pending} />`
             : null,
-        html`<div key="why" class="perm-why">Approving leaves plan mode and sets the permission mode under the composer.</div>`,
     ];
 }
 
@@ -496,11 +495,11 @@ function Feedback({ how, pending }) {
         <textarea ref=${ta} class="perm-fb" rows="3" onKeyDown=${onKeyDown}
             aria-label=${approving ? `What should ${agentOf().name} bear in mind?` : 'What should change about this plan?'}
             placeholder=${approving
-                ? 'Anything to bear in mind? Enter to approve, Esc to go back.'
-                : 'What should change? Enter to send, Esc to go back.'}></textarea>
+                ? 'Anything to bear in mind?'
+                : 'What should change?'}></textarea>
         <div class="perm-btns">
             <button class=${`perm-btn ${approving ? 'allow' : 'deny'}`} type="button" disabled=${pending}
-                onClick=${send}>${approving ? 'Approve with this note ' : 'Send it back '}<kbd>⏎</kbd></button>
+                onClick=${send}>${approving ? 'Approve with note ' : 'Keep planning '}<kbd>⏎</kbd></button>
             <button class="perm-btn" type="button" disabled=${pending} onClick=${cancel}>Cancel</button>
         </div>
     </div>`;
@@ -819,6 +818,6 @@ export function resolveAsk(outcome) {
     const word = DECISION_WORD[outcome] || 'Answered.';
     // The transcript will carry the real record; this is only the acknowledgement
     // that the card is gone and why.
-    dom.log.append(el('div', { class: 'perm-done' }, `${tool} — ${word}`));
+    dom.log.append(el('div', { class: 'perm-done' }, `${tool}: ${word}`));
     if (state.pinned) scrollToEnd(false);
 }

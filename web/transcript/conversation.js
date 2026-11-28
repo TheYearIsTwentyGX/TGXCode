@@ -27,7 +27,7 @@ import { agentOf, can } from '../capabilities.js';
 import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
 import { dom, el, toast } from '../dom.js';
-import { ago, clip, clockOf, dateOf, dur, shortModel } from '../format.js';
+import { ago, clip, clockOf, dateOf, dur, plural, shortModel } from '../format.js';
 import { toolDisplayName } from '../tool-name.js';
 import { PR_ICON } from '../icons.js';
 import { html, render } from '../vendor/preact.js';
@@ -487,9 +487,9 @@ export function renderHeader() {
     // where to continue it. Keyed on the capability; the name is only a label.
     if (!can('send', s) && s.runtime) {
         bits.push(sep('runtime'), html`<span key="runtime" class="runtime-chip"
-            title="Read-only here: this bridge reads this session but does not run it">${`${s.runtime} · read-only`}</span>`);
+            title=${`Written by ${s.runtime}; this bridge reads it but does not run it`}>read-only</span>`);
     }
-    bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
+    bits.push(sep('turns'), html`<span key="turns">${plural(s.userMessages, 'turn')}</span>`);
     const context = contextBit(s);
     if (context) bits.push(sep('context'), context);
     const spend = spendBit(sep);
@@ -531,9 +531,8 @@ export function paintComposerAccess() {
     if (open) { dom.composerReadonly.replaceChildren(); return; }
     const who = s.runtime || 'another program';
     dom.composerReadonly.replaceChildren(
-        el('strong', {}, 'Read-only here. '),
-        el('span', {}, `This conversation was written by ${who}, and this bridge reads it without running it. `
-            + 'Continue it where it was started.'),
+        el('strong', {}, 'Read-only. '),
+        el('span', {}, `Continue it in ${who}.`),
     );
 }
 

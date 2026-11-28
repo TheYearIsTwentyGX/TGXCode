@@ -100,7 +100,7 @@
     border-radius: var(--pill);
     background: var(--s5);
     color: var(--text);
-    font: 600 10px/14px var(--sans);
+    font: 600 var(--fs-2xs)/14px var(--sans);
     text-align: center;
 }
 .pv-page-count[hidden] { display: none; }
@@ -350,8 +350,7 @@
 }
 /* Lit while commands are arriving, so "connected" and "doing something now"
    read differently. */
-.pv-driving.active .pv-driving-dot { animation: pv-driving-pulse 1s ease-in-out infinite; }
-@keyframes pv-driving-pulse { 50% { opacity: 0.25; } }
+.pv-driving.active .pv-driving-dot { --pulse-dim: 0.25; animation: pulse var(--dur-loop) var(--ease-standard) infinite; }
 @media (prefers-reduced-motion: reduce) {
     .pv-driving.active .pv-driving-dot { animation: none; }
 }
@@ -396,7 +395,7 @@
    screen, and the list. In the port strip, so they borrow .channel's shape. */
 .channel.pv-pages-chip { padding-right: var(--sp-3); }
 .channel.pv-agent-chip { background: var(--blue-cont); padding-right: var(--sp-3); }
-.channel.pv-agent-chip .led { background: var(--blue); animation: pv-driving-pulse 1.4s ease-in-out infinite; }
+.channel.pv-agent-chip .led { background: var(--blue); --pulse-dim: 0.25; animation: pulse var(--dur-loop) var(--ease-standard) infinite; }
 .channel.pv-agent-chip .name { max-width: 320px; color: var(--text-2); }
 .channel.pv-agent-chip .name strong { color: var(--text); font-weight: 500; }
 @media (prefers-reduced-motion: reduce) {

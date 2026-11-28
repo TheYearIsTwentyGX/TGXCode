@@ -268,8 +268,8 @@
 
 /* Chunk C (UI audit). The one pulse: a skeleton line, a status that is waiting
    on something. `--pulse-dim` sets how far it fades; the period is the caller's,
-   normally `var(--dur-loop)`. The older per-file pulses (skel-pulse, crv-pulse,
-   cmd-pulse, pv-driving-pulse) still exist and can move onto this one. */
+   normally `var(--dur-loop)`. The skeleton, the command dot and the preview's
+   driving dot use it; reviews.css's crv-pulse can move onto it too. */
 @keyframes pulse { 50% { opacity: var(--pulse-dim, 0.4); } }
 
 /* Everything CSS animates, stopped in one place for a reader who asked for less
@@ -983,7 +983,29 @@ html[data-titlebar="custom"][data-window-focus="off"] :is(
    popover. Named, because two sets of bars with no names are one confusing set. */
 .q-runtime { color: var(--text-3); font-size: var(--fs-sm); }
 .q-runtime.after { padding-left: var(--sp-5); border-left: 1px solid var(--s4); }
-.q-signin { color: var(--yellow); }
+/* Codex signed out: a dot after its name. The words are the pill's tooltip and
+   the popover's first line; in the bar they cost the room the view buttons'
+   labels needed. */
+.q-signin {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--yellow);
+}
+
+/* A compact bar is one that ran out of room for the view buttons' words. The
+   pills give up their decoration first — the mini bars, the countdown and the
+   version pill's name — so the numbers stay and the buttons can stay on the bar.
+   The status the bar's colour carried moves to the number. Both still sit in the
+   tooltip and the popover. fitBar measures the bar compact as well as full, so
+   it sees the smaller pills. */
+.bar.compact .quota-pill .q-bar,
+.bar.compact .quota-pill .q-reset,
+.bar.compact .cv-pill .cv-name { display: none; }
+.bar.compact .quota-pill .q-win[data-status="allowed_warning"] .q-num { color: var(--yellow); }
+.bar.compact .quota-pill .q-win[data-status="rejected"] .q-num { color: var(--red); }
+.bar.compact .quota-pill .q-win.stale .q-num { color: var(--text-4); }
 .quota-codex { margin-top: var(--sp-6); padding-top: var(--sp-6); border-top: 1px solid var(--s4); }
 .quota-codex[hidden] { display: none; }
 

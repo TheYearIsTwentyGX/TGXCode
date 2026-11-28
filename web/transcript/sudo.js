@@ -64,8 +64,8 @@ export function resolveSudo(p) {
     state.sudoAsk = null;
     renderSudo();
     let word = OUTCOME_WORD[p.outcome] || 'Answered.';
-    if (p.outcome === 'cancelled') word += p.reason ? ` — ${p.reason}.` : '.';
-    dom.log.append(el('div', { class: 'perm-done' }, `sudo — ${word}`));
+    if (p.outcome === 'cancelled') word += p.reason ? `: ${p.reason}.` : '.';
+    dom.log.append(el('div', { class: 'perm-done' }, `sudo: ${word}`));
     if (state.pinned) scrollToEnd(false);
 }
 
@@ -81,7 +81,7 @@ function sudoCard(ask) {
         ask.runsShell ? el('span', { class: 'sudo-flag' }, 'runs a shell') : null));
 
     // What sudo was given, exactly — read from the sudo process, not from the agent.
-    card.append(el('div', { class: 'perm-arg', title: 'The command line of the waiting sudo process' },
+    card.append(el('div', { class: 'perm-arg' },
         ask.sudoLine));
 
     const as = ask.group ? `${ask.user}:${ask.group}` : ask.user;
@@ -100,8 +100,7 @@ function sudoCard(ask) {
     // of what is being approved.
     if (ask.context && ask.context.trim() !== ask.sudoLine) {
         card.append(el('div', { class: 'perm-why' },
-            'Part of this Bash command. sudo remembers the password for the rest of it, '
-            + 'so any later sudo in it runs without asking:'));
+            'Later sudo calls in this command run without asking:'));
         card.append(el('div', { class: 'perm-arg sudo-context' }, clip(ask.context, 1200)));
     }
     if (ask.attempt > 1) {
@@ -112,7 +111,7 @@ function sudoCard(ask) {
     const deny = el('button', { class: 'perm-btn deny', type: 'button' }, 'Deny');
     if (!canAnswer) {
         card.append(el('div', { class: 'perm-why' },
-            'Approve at the desktop. Answering sudo from a phone is off in Settings › Sudo.'));
+            'Approve at the desktop: phone answers are off in Settings › Sudo.'));
         card.append(el('div', { class: 'perm-btns' }, deny));
         deny.addEventListener('click', () => send(card, 'deny'));
         return card;
