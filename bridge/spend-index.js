@@ -43,6 +43,18 @@
 //   is read, so the cache is small and a rollup is a sum. `day` is the local
 //   date of the entry's timestamp.
 //
+// - **Codex is counted in tokens and never in dollars.** Its rollouts carry a
+//   `token_usage_record` per response; a ChatGPT plan is not billed per token
+//   and there is no price table for its models, so nothing here prices them. The
+//   rollup keeps Codex apart (`codex`, beside Claude's figures) rather than
+//   adding its tokens to totals that sit next to a cost they are not part of.
+//   Records are filtered to the thread whose file it is, because a spawned
+//   agent's rollout copies its parent's history, and a spawned agent's tokens
+//   are added to the session at the top of its chain. A fork inherits no lines,
+//   so nothing is counted twice. The running totals in `token_count` events are
+//   not used: a fork's carries its parent's. A rollout from a Codex older than
+//   0.172.0 has no records and counts nothing.
+//
 // - **Persisted to CACHE_DIR/spend.json,** debounced, written to a temporary
 //   file and renamed. Losing it costs one cold pass and nothing else.
 
@@ -52,6 +64,7 @@ const path = require('path');
 
 const { CACHE_DIR } = require('./config');
 const { costOf, tokensOf, normalizeModel } = require('./pricing');
+const codex = require('./runtimes/codex/transcript');
 const { projectName, isTemp } = require('./sessions');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'spend.json');
@@ -138,6 +151,50 @@ function absorb(state, entries) {
     return state;
 }
 
+/** One Codex response's contribution. Tokens only: no price is looked up. */
+function codexContribution(entry, model) {
+    const u = (entry.payload && entry.payload.usage) || {};
+    const day = dayOf(entry.timestamp);
+    if (!day) return null;
+    const n = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+    const cacheRead = n(u.cached_input_tokens);
+    const cacheWrite = n(u.cache_write_input_tokens);
+    // Codex's input_tokens includes both; ours is the uncached input.
+    const input = Math.max(0, n(u.input_tokens) - cacheRead - cacheWrite);
+    const output = n(u.output_tokens);
+    const tokens = input + output + cacheRead + cacheWrite;
+    if (!tokens) return null;
+    return {
+        key: `${day}|${normalizeModel(model) || 'unknown'}`,
+        c: { input, output, cacheRead, cacheWrite, tokens, messages: 1, costUsd: 0, unpricedTokens: tokens },
+    };
+}
+
+/**
+ * Fold a rollout's lines, in file order, into a file's state. The thread is the
+ * one the first `session_meta` names — its own — and only its records count.
+ */
+function absorbCodex(state, entries) {
+    for (const entry of entries) {
+        const p = (entry && entry.payload) || {};
+        if (entry.type === 'session_meta') {
+            if (!state.thread) state.thread = p.id || null;
+        } else if (entry.type === 'turn_context') {
+            if (p.model) state.model = p.model;
+        } else if (entry.type === 'token_usage_record' && p.thread_id === state.thread) {
+            const id = p.response_id || null;
+            if (id && state.recent.includes(id)) continue;
+            if (id) {
+                state.recent.push(id);
+                if (state.recent.length > RECENT) state.recent.shift();
+            }
+            const add = codexContribution(entry, state.model);
+            if (add) apply(state, add);
+        }
+    }
+    return state;
+}
+
 function apply(state, m) {
     if (!m.key) return;
     const b = state.buckets[m.key] || (state.buckets[m.key] = emptyTotals());
@@ -162,6 +219,7 @@ function mergeBuckets(list) {
 }
 
 const round = (t) => ({ ...t, costUsd: Math.round(t.costUsd * 1e6) / 1e6 });
+const isCodexEntry = (e) => e.runtime === 'codex';
 
 /** The last `days` local dates, oldest first, ending with `now`'s. */
 function dayRange(days, now) {
@@ -179,11 +237,24 @@ function dayRange(days, now) {
 /**
  * The rollup the route serves.
  *
- * `entries` is `[{sessionId, projectCwd, projectName, buckets}]`; every
- * breakdown is restricted to the last `days` days ending today, and `allTime`
- * is the one figure that is not.
+ * `entries` is `[{sessionId, projectCwd, projectName, runtime, buckets}]`;
+ * every breakdown is restricted to the last `days` days ending today, and
+ * `allTime` is the one figure that is not. Codex sessions are in none of those
+ * figures: they have a rollup of their own under `codex`, in tokens, or null
+ * when no Codex session has used any. See the header.
  */
-function rollup(entries, { days = 30, now = Date.now(), top = TOP_SESSIONS } = {}) {
+function rollup(entries, opts = {}) {
+    const theirs = entries.filter(isCodexEntry);
+    const out = sumUp(entries.filter(e => !isCodexEntry(e)), opts);
+    let codexOut = null;
+    if (theirs.length) {
+        const { days, unpricedTokens, ...rest } = sumUp(theirs, opts);
+        if (rest.allTime.tokens) codexOut = rest;
+    }
+    return { ...out, codex: codexOut };
+}
+
+function sumUp(entries, { days = 30, now = Date.now(), top = TOP_SESSIONS } = {}) {
     const range = dayRange(days, now);
     const inRange = new Set(range);
     const daily = new Map(range.map(d => [d, emptyTotals()]));
@@ -255,8 +326,12 @@ function sessionTotals(buckets) {
 /** Lines that could carry usage, tested on the raw JSON before parsing. */
 const wanted = (s) => s.includes('"usage"') && s.includes('"type":"assistant"');
 
-/** Complete lines of `buf` that `wanted` accepts, parsed; and how far it read. */
-function parseChunk(buf) {
+/** The same for a rollout: its thread, its models and its usage records. */
+const wantedCodex = (s) => s.includes('"type":"token_usage_record"')
+    || s.includes('"type":"turn_context"') || s.includes('"type":"session_meta"');
+
+/** Complete lines of `buf` that `want` accepts, parsed; and how far it read. */
+function parseChunk(buf, want = wanted) {
     const entries = [];
     let consumed = 0;
     let start = 0;
@@ -268,7 +343,7 @@ function parseChunk(buf) {
         consumed = start;
         if (!slice.length) continue;
         const s = slice.toString('utf8');
-        if (!wanted(s)) continue;
+        if (!want(s)) continue;
         try { entries.push(JSON.parse(s)); } catch { /* not a whole line */ }
     }
     return { entries, consumed };
@@ -289,21 +364,37 @@ async function headOf(fh, size) {
  * transcript does not hold the event loop.
  */
 async function updateFile(file, state) {
+    const isRollout = codex.isRollout(file);
+    // A rollout read before rollouts were counted was consumed and kept nothing.
+    if (state && isRollout && !state.codex) state = null;
+    const want = isRollout ? wantedCodex : wanted;
+    const fold = isRollout ? absorbCodex : absorb;
+    const fresh = (head) => ({ ...freshState(head), ...(isRollout && { codex: true }) });
     let fh;
     try {
         // A stat before an open: nearly every file is unchanged, and this is the
         // whole cost of a warm refresh.
         const { size } = await fs.promises.stat(file);
+        if (isRollout && file.endsWith('.zst')) {
+            // Decompressed whole, so read from the start whenever it changes.
+            // `consumed` is the size on disk: unchanged is the same size.
+            if (state && state.consumed === size) return state;
+            const buf = codex.readFile(file);
+            if (!buf) return null;
+            const whole = { ...fresh(''), consumed: size };
+            fold(whole, parseChunk(buf, want).entries);
+            return whole;
+        }
         if (state && size === state.consumed) return state;
         fh = await fs.promises.open(file, 'r');
         const head = await headOf(fh, size);
-        if (!state || size < state.consumed || head !== state.head) state = freshState(head);
+        if (!state || size < state.consumed || head !== state.head) state = fresh(head);
         let chunk = CHUNK;
         while (state.consumed < size) {
             const len = Math.min(chunk, size - state.consumed);
             const buf = Buffer.alloc(len);
             const { bytesRead } = await fh.read(buf, 0, len, state.consumed);
-            const { entries, consumed } = parseChunk(buf.subarray(0, bytesRead));
+            const { entries, consumed } = parseChunk(buf.subarray(0, bytesRead), want);
             if (!consumed) {
                 // A single line longer than the chunk, or a final line still
                 // being written. Widen once the chunk is full; otherwise wait.
@@ -311,7 +402,7 @@ async function updateFile(file, state) {
                 chunk *= 2;
                 continue;
             }
-            absorb(state, entries);
+            fold(state, entries);
             state.consumed += consumed;
             await new Promise(r => setImmediate(r));
         }
@@ -375,11 +466,29 @@ class SpendIndex {
     /** Session id -> every file holding its spend: each top-level copy and its subagents. */
     static fileMap(index, only = null) {
         const map = new Map();
-        for (const rec of index.byFile.values()) {
-            const id = path.basename(rec.file, '.jsonl');
-            if (only && id !== only) continue;
+        const add = (id, ...paths) => {
+            if (only && id !== only) return;
             const files = map.get(id) || map.set(id, []).get(id);
-            files.push(rec.file, ...SpendIndex.subagentFiles(rec.file));
+            files.push(...paths);
+        };
+        for (const rec of index.byFile.values()) {
+            if (codex.isRollout(rec.file)) continue;
+            add(path.basename(rec.file, '.jsonl'), rec.file, ...SpendIndex.subagentFiles(rec.file));
+        }
+        // Codex: one file per thread, taken from the chosen records so that a
+        // rollout caught mid-move is not counted from both places. Sessions
+        // first, so a session's own file leads its list.
+        for (const [id, rec] of index.sessions || []) {
+            if (rec.meta && rec.meta.runtime === 'codex') add(id, rec.file);
+        }
+        const agents = index.codexAgents || new Map();
+        for (const rec of agents.values()) {
+            let m = rec.meta;
+            for (let depth = 0; m && m.parentThreadId && depth < 8; depth++) {
+                const parent = agents.get(m.parentThreadId) || index.sessions.get(m.parentThreadId);
+                m = parent ? parent.meta : null;
+            }
+            if (m) add(m.sessionId, rec.file);
         }
         return map;
     }
@@ -435,12 +544,16 @@ class SpendIndex {
         return mergeBuckets(files.map(f => (this.files.get(f) || {}).buckets));
     }
 
-    /** `{sessionId, totals, models, firstDay, lastDay}`, or null if unknown. */
+    /**
+     * `{sessionId, totals, models, firstDay, lastDay, priced}`, or null if
+     * unknown. `priced` false is a Codex session: tokens, and no cost.
+     */
     forSession(index, sessionId) {
         const files = (this._map && this._map.get(sessionId))
             || SpendIndex.fileMap(index, sessionId).get(sessionId);
         if (!files || !files.length) return null;
-        return { sessionId, ...sessionTotals(this._bucketsOf(files)) };
+        return { sessionId, priced: !codex.isRollout(files[0]),
+            ...sessionTotals(this._bucketsOf(files)) };
     }
 
     /**
@@ -458,13 +571,13 @@ class SpendIndex {
             if (!includeTest && index.flags && index.flags.isTest(id)) continue;
             const cwd = m.projectCwd || m.cwd || null;
             out.push({ sessionId: id, projectCwd: cwd, projectName: projectName(cwd),
-                buckets: this._bucketsOf(files) });
+                runtime: m.runtime || 'claude', buckets: this._bucketsOf(files) });
         }
         return out;
     }
 }
 
 module.exports = {
-    SpendIndex, rollup, sessionTotals, absorb, freshState, mergeBuckets, parseChunk,
+    SpendIndex, rollup, sessionTotals, absorb, absorbCodex, freshState, mergeBuckets, parseChunk,
     updateFile, dayOf, dayRange, INDEX_VERSION, CACHE_FILE,
 };

@@ -1295,7 +1295,10 @@ pool.on('turn-complete', (r) => {
     // The header's running total. The turn's own `costUsd` covers this turn
     // alone, so the session's transcript is re-read for the whole of it.
     spend.refreshSession(index, r.sessionId).then((out) => {
-        if (out) broadcast('session-spend', { sessionId: r.sessionId, totals: out.totals });
+        if (out) {
+            broadcast('session-spend', { sessionId: r.sessionId, totals: out.totals,
+                basis: out.priced ? 'api-equivalent' : 'tokens' });
+        }
     }).catch(() => { /* the next request catches up */ });
 });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });

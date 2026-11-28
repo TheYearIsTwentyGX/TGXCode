@@ -29,6 +29,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 
 const { spawnAppServer, initialize } = require('../../../bridge/codex/client');
 const { RpcError } = require('../../../bridge/codex/rpc');
@@ -217,6 +218,25 @@ class Recording {
 }
 
 // ---- scenarios ----------------------------------------------------------------
+
+/** A square PNG of one colour, `size` pixels a side. */
+function solidPng(size, [red, green, blue]) {
+    const chunk = (type, data) => {
+        const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+        const out = Buffer.alloc(body.length + 8);
+        out.writeUInt32BE(data.length, 0);
+        body.copy(out, 4);
+        out.writeUInt32BE(zlib.crc32(body), body.length + 4);
+        return out;
+    };
+    const head = Buffer.alloc(13);
+    head.writeUInt32BE(size, 0);
+    head.writeUInt32BE(size, 4);
+    head.set([8, 2, 0, 0, 0], 8);
+    const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array(size).fill([red, green, blue]).flat())]);
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head),
+        chunk('IDAT', zlib.deflateSync(Buffer.concat(Array(size).fill(row)))), chunk('IEND', Buffer.alloc(0))]);
+}
 
 const ASK = { approvalPolicy: 'untrusted', sandboxPolicy: { type: 'readOnly' } };
 
@@ -409,6 +429,25 @@ const SCENARIOS = {
         const before = await r.rpc.request('thread/fork',
             { threadId: t.id, excludeTurns: true, beforeTurnId: turns[1] });
         await r.turn(before.thread.id, 'List every word I asked you to remember, comma-separated. Nothing else.');
+    },
+
+    /**
+     * Images: one attached as `localImage`, and one the model opens itself with
+     * its view_image tool, so the rollout holds both an input and an output.
+     */
+    async images(r) {
+        await r.init();
+        await r.account();
+        fs.writeFileSync(path.join(r.cwd, 'attached.png'), solidPng(24, [220, 40, 40]));
+        fs.writeFileSync(path.join(r.cwd, 'looked-at.png'), solidPng(32, [40, 80, 220]));
+        const t = await r.startThread();
+        const done = r.waitFor('turn/completed', (p) => p.threadId === t.id);
+        await r.rpc.request('turn/start', { threadId: t.id, input: [
+            { type: 'text', text: 'Use your view_image tool on looked-at.png in this directory. '
+                + 'Then reply with just two words: the colour of the attached image and the colour of that one.' },
+            { type: 'localImage', path: path.join(r.cwd, 'attached.png') },
+        ] });
+        await done;
     },
 
     /** The checklist: `update_plan`, opt-in on 0.172.0, turned on in the thread config. */

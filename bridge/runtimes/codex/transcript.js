@@ -105,6 +105,11 @@ function idFromName(file) {
     return m ? m[1].toLowerCase() : null;
 }
 
+/** Whether this path is a rollout, by Codex's naming. A Claude transcript is `<uuid>.jsonl`. */
+function isRollout(file) {
+    return ROLLOUT_RE.test(path.basename(String(file || '')));
+}
+
 /** Whether Node can read a `.zst` rollout here. */
 const CAN_ZSTD = typeof zlib.zstdDecompressSync === 'function';
 
@@ -139,11 +144,29 @@ function isHarness(payload) {
     return false;
 }
 
+// An attached file is written as its `input_image` between two text blocks that
+// name it: `<image name=[Image #1] path="…">` and `</image>`. They are Codex's
+// markup for the model, not words the person typed.
+const IMAGE_OPEN_RE = /^<image name=\[Image #\d+\][^\n]*>$/;
+
+/** The content blocks of a message with the tags around each attached image dropped. */
+function withoutImageTags(content) {
+    return content.filter((b, i) => {
+        if (!b || b.type !== 'input_text' || typeof b.text !== 'string') return true;
+        const t = b.text.trim();
+        const next = content[i + 1];
+        const prev = content[i - 1];
+        if (IMAGE_OPEN_RE.test(t)) return !(next && next.type === 'input_image');
+        if (t === '</image>') return !(prev && prev.type === 'input_image');
+        return true;
+    });
+}
+
 /** The parts of a user message a person wrote: `{text, images}`. */
 function userParts(payload) {
     const texts = [];
     const images = [];
-    for (const b of payload.content || []) {
+    for (const b of withoutImageTags(payload.content || [])) {
         if (!b) continue;
         if (b.type === 'input_text' && typeof b.text === 'string') {
             const t = b.text.trimStart();
@@ -791,6 +814,6 @@ function todoProgress(file) {
 
 module.exports = {
     readFile, parseLines, scanMeta, buildEvents, inherited, isTurnStart, personMessage,
-    idFromName, modeOf, ownLines, branchPoint, todoList, todoProgress, messageId,
+    idFromName, isRollout, modeOf, ownLines, branchPoint, todoList, todoProgress, messageId,
     ROLLOUT_RE, CAN_ZSTD,
 };

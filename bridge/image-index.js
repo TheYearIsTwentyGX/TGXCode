@@ -25,6 +25,23 @@
 //   · Scratchpad files. They are a directory, not the chat; one Claude looked at
 //     is here already, as the Read that looked at it.
 //
+// **A Codex rollout** (told by its name) holds the same two things as
+// `input_image` blocks on `response_item` lines, measured on 0.172.0:
+//
+//   · in a person's `message`: an attached picture, a `localImage` input
+//     included — Codex writes its bytes inline beside the path;
+//   · in a `custom_tool_call_output` or `function_call_output`: what a tool put
+//     in front of the model (`view_image`, or a script that passed a result to
+//     `image()`). The line names the code-mode script, not the tool, so the call
+//     is the `item_completed` item written between the two: that item's id is
+//     the transcript's tool row.
+//
+// And an `image_generation_call`'s `result`, which is read from the schema and
+// has not been seen. Not counted: the `item_completed` copies (they repeat what
+// the model was shown, or show it nothing). A spawned agent's rollout opens with
+// a copy of its parent's history, which is skipped by ordinal. A fork's index
+// holds its own lines only.
+//
 // Decided:
 //
 // - **Deduplicated by content**: the key is the sha256 of the *decoded* bytes,
@@ -59,6 +76,8 @@ const path = require('path');
 
 const { CACHE_DIR } = require('./config');
 const { toolDisplayName } = require('./tool-name');
+const codex = require('./runtimes/codex/transcript');
+const codexItems = require('./codex/items');
 
 const INDEX_DIR = path.join(CACHE_DIR, 'images');
 // Bump when an entry's shape or derivation changes, so an old file is rebuilt.
@@ -134,6 +153,34 @@ function imageSize(buf) {
     return null;
 }
 
+const CODEX_OUTPUTS = new Set(['custom_tool_call_output', 'function_call_output']);
+
+/** A `data:` URL as the image block the rest of this file reads, or null. */
+function blockOf(url) {
+    const m = typeof url === 'string' && /^data:([^;,]+);base64,/.exec(url);
+    if (!m) return null;
+    return { type: 'image', source: { type: 'base64', media_type: m[1], data: url.slice(m[0].length) } };
+}
+
+/** `imagesIn` for a rollout line, in the order its content holds them. */
+function codexImagesIn(entry) {
+    const p = (entry && entry.payload) || {};
+    if (p.type === 'image_generation_call' && typeof p.result === 'string' && p.result) {
+        const block = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: p.result } };
+        return [{ block, source: 'tool', toolUseId: null, n: null }];
+    }
+    const user = p.type === 'message' && p.role === 'user';
+    if (!user && !CODEX_OUTPUTS.has(p.type)) return [];
+    const content = user ? p.content : p.output;
+    if (!Array.isArray(content)) return [];
+    const out = [];
+    for (const b of content) {
+        const block = b && b.type === 'input_image' ? blockOf(b.image_url) : null;
+        if (block) out.push({ block, source: user ? 'user' : 'tool', toolUseId: null, n: null });
+    }
+    return out;
+}
+
 /**
  * The image blocks in one entry, in a fixed order — top-level blocks first, then
  * each tool_result's — which is the `i` a location records. Each carries where
@@ -141,6 +188,7 @@ function imageSize(buf) {
  * own tool result's images, the same `n` `/tool-image` takes.
  */
 function imagesIn(entry) {
+    if (entry && entry.type === 'response_item') return codexImagesIn(entry);
     const content = entry && entry.message && entry.message.content;
     if (!Array.isArray(content)) return [];
     const out = [];
@@ -231,6 +279,117 @@ function absorbLine(idx, slice, src, offset) {
     }
 }
 
+/** Count one picture: `occ` is where it was seen, `block` holds its bytes. */
+function addImage(idx, block, occ) {
+    const buf = bytesOf(block);
+    if (!buf || !buf.length) return;
+    const key = sha256(buf);
+    let img = idx.images[key];
+    if (!img) {
+        const size = imageSize(buf);
+        img = idx.images[key] = {
+            seq: idx.seq++,
+            mediaType: (block.source && block.source.media_type) || 'image/png',
+            bytes: buf.length,
+            width: size ? size.width : null,
+            height: size ? size.height : null,
+            count: 0,
+            occurrences: [],
+        };
+    }
+    img.count++;
+    if (img.occurrences.length < OCCURRENCES_MAX) img.occurrences.push(occ);
+}
+
+// What a rollout line has to hold to matter here.
+const CODEX_NEEDLES = ['"input_image"', '"type":"item_completed"', '"role":"user"',
+    '"type":"custom_tool_call"', '"type":"function_call"', '"image_generation_call"',
+    '"type":"session_meta"'].map(n => Buffer.from(n));
+const SPAWN_NEEDLE = Buffer.from('"SubAgentActivity"');
+
+/** What a tool item is called when it is the source of a picture. */
+function codexLabel(item) {
+    if (item.type === 'imageView' && item.path) return path.basename(item.path);
+    if (item.type === 'mcpToolCall') return toolDisplayName(`mcp__${item.server}__${item.tool}`);
+    return 'Tool result';
+}
+
+/**
+ * `absorbLine` for a rollout. `idx.codex[src]` carries what a later line needs:
+ * the tool items completed since the last call (`calls`), the person's last
+ * message (`user`), and where a spawned agent's own lines start (`start`).
+ */
+function absorbCodexLine(idx, slice, src, offset) {
+    if (!CODEX_NEEDLES.some(n => slice.indexOf(n) !== -1)) return;
+    const st = idx.codex[src] || (idx.codex[src] = { calls: [], user: null, start: null, seen: false });
+    // A command's output is the one big line with nothing here to take from it
+    // but its id, and a command makes no picture.
+    if (slice.length > (1 << 20) && slice.indexOf('"type":"CommandExecution"') !== -1) return;
+    let e;
+    try { e = JSON.parse(slice.toString('utf8')); } catch { return; }
+    if (!e || typeof e !== 'object') return;
+    const p = e.payload || {};
+
+    if (e.type === 'session_meta') {
+        // The first is the thread's own; a spawned agent's copy of its parent's follows.
+        if (!st.seen) {
+            st.seen = true;
+            const start = Number(p.subagent_history_start_ordinal);
+            st.start = Number.isFinite(start) ? start : null;
+        }
+        return;
+    }
+    if (st.start !== null && typeof e.ordinal === 'number' && e.ordinal < st.start) return;
+
+    if (e.type === 'event_msg' && p.type === 'item_completed') {
+        const item = codexItems.fromRollout(p.item);
+        if (!item || !codexItems.toolEvent(item)) return;
+        if (item.type === 'subAgentActivity') {
+            // The agent's row is keyed by its thread, as the transcript keys it.
+            const id = item.agentThreadId && String(item.agentThreadId).toLowerCase();
+            if (id && item.kind === 'started' && slice.indexOf(SPAWN_NEEDLE) !== -1) {
+                idx.agents[id] = { src, offset, uuid: null };
+            }
+            return;
+        }
+        st.calls.push({ id: item.id, label: codexLabel(item), picture: item.type === 'imageView'
+            || slice.indexOf('"type":"image"') !== -1 || slice.indexOf('"inputImage"') !== -1 });
+        if (st.calls.length > 32) st.calls.shift();
+        return;
+    }
+    if (e.type !== 'response_item') return;
+    if (p.type === 'custom_tool_call' || p.type === 'function_call') { st.calls = []; return; }
+
+    const person = p.type === 'message' && p.role === 'user' ? codex.personMessage(p) : null;
+    if (p.type === 'message' && !person) return;
+    if (person) st.user = codex.messageId(p.id);
+
+    const found = codexImagesIn(e);
+    if (!found.length) return;
+    // The items that made a picture, in order; a script that looked at two files
+    // printed two images. With none marked, the last call is the best answer.
+    const marked = st.calls.filter(c => c.picture);
+    const counts = new Map();
+    for (let i = 0; i < found.length; i++) {
+        const f = found[i];
+        const call = f.source === 'tool'
+            ? marked[i] || marked[marked.length - 1] || st.calls[st.calls.length - 1] || null : null;
+        const n = call ? counts.get(call.id) || 0 : null;
+        if (call) counts.set(call.id, n + 1);
+        addImage(idx, f.block, {
+            src, offset, i,
+            // With no call to point at, the message the turn answered.
+            uuid: f.source === 'user' ? st.user : call ? null : st.user,
+            at: e.timestamp || null,
+            source: f.source,
+            toolUseId: call ? call.id : null,
+            n,
+            label: f.source === 'user' ? 'Your message' : call ? call.label : 'Tool result',
+        });
+    }
+    if (p.type !== 'message') st.calls = [];
+}
+
 function absorbBuffer(idx, buf, src, base) {
     let consumed = 0;
     let start = 0;
@@ -241,23 +400,33 @@ function absorbBuffer(idx, buf, src, base) {
         const slice = buf.subarray(start, nl);
         start = nl + 1;
         consumed = start;
-        if (slice.length) absorbLine(idx, slice, src, base + off);
+        if (slice.length) (idx.codex ? absorbCodexLine : absorbLine)(idx, slice, src, base + off);
     }
     return consumed;
+}
+
+const isZst = (file) => file.endsWith('.zst');
+
+/** A transcript's size as this index measures it: a `.zst` rollout's is decompressed. */
+function sizeOf(file) {
+    const st = fs.statSync(file);
+    if (!isZst(file)) return st.size;
+    const buf = codex.readFile(file);
+    if (!buf) throw new Error(`cannot read ${file}`);
+    return buf.length;
 }
 
 function headOf(file, size) {
     const n = Math.min(size, HEAD_BYTES);
     if (!n) return '';
-    const buf = Buffer.alloc(n);
-    const fd = fs.openSync(file, 'r');
-    try { fs.readSync(fd, buf, 0, n, 0); } finally { fs.closeSync(fd); }
+    const buf = readRange(file, 0, n);
     const nl = buf.indexOf(0x0a);
     return crypto.createHash('sha1').update(nl === -1 ? buf : buf.subarray(0, nl)).digest('hex');
 }
 
 function readRange(file, from, to) {
     const len = to - from;
+    if (isZst(file)) return (codex.readFile(file) || Buffer.alloc(0)).subarray(from, to);
     const buf = Buffer.alloc(len);
     if (!len) return buf;
     const fd = fs.openSync(file, 'r');
@@ -267,6 +436,11 @@ function readRange(file, from, to) {
 
 /** The whole line that starts at `offset`, read a chunk at a time until its newline. */
 function lineAt(file, offset) {
+    if (isZst(file)) {
+        const buf = (codex.readFile(file) || Buffer.alloc(0)).subarray(offset);
+        const nl = buf.indexOf(0x0a);
+        return nl === -1 ? buf : buf.subarray(0, nl);
+    }
     const fd = fs.openSync(file, 'r');
     try {
         const parts = [];
@@ -340,22 +514,27 @@ class ImageIndex {
 
     /**
      * The index brought up to date with the session's file and its subagents'.
-     * `agents` is readSubagentIndex's map, tool_use id → `{file}`. Null if the
-     * session's own file cannot be read.
+     * `agents` is readSubagentIndex's map, tool_use id → `{file}`; for a Codex
+     * session, each spawned thread's id → `{file}`. Null if the session's own
+     * file cannot be read.
      */
     update(sessionId, file, agents = new Map()) {
         const files = [[MAIN, file]];
         for (const [id, a] of agents) if (a && a.file) files.push([id, a.file]);
         const stats = new Map();
         for (const [src, f] of files) {
-            try { stats.set(src, fs.statSync(f)); } catch {
+            try { stats.set(src, { size: sizeOf(f) }); } catch {
                 if (src === MAIN) return null;
                 // A subagent whose transcript is not written yet has nothing to add.
             }
         }
 
-        const fresh = () => ({ version: INDEX_VERSION, sources: {}, images: {}, calls: {}, agents: {}, seq: 0 });
+        const isRollout = codex.isRollout(file);
+        const fresh = () => ({ version: INDEX_VERSION, sources: {}, images: {}, calls: {}, agents: {}, seq: 0,
+            ...(isRollout && { codex: {} }) });
         let idx = this._load(sessionId);
+        // A rollout indexed before rollouts were read here was consumed and kept nothing.
+        if (idx && isRollout && !idx.codex) idx = null;
         // A source that is gone, moved or rewritten from the start means the
         // merged list holds occurrences nothing can account for any more.
         const stale = (i) => {
@@ -444,6 +623,16 @@ class ImageIndex {
             const buf = f && bytesOf(f.block);
             if (buf && sha256(buf) === key) {
                 return { mediaType: (f.block.source && f.block.source.media_type) || img.mediaType, data: buf };
+            }
+        }
+        return null;
+    }
+
+    /** `{mediaType, data}` of a tool call's `n`th image, or null. */
+    toolBytes(idx, toolUseId, n = 0) {
+        for (const [key, img] of Object.entries(idx.images)) {
+            if (img.occurrences.some(o => o.toolUseId === toolUseId && o.n === n)) {
+                return this.bytes(idx, key);
             }
         }
         return null;

@@ -13,8 +13,9 @@
 > are listed and read through `bridge/runtimes/codex/transcript.js`, and they are
 > started and driven through `bridge/runtimes/codex/process.js`. Phase 4's
 > conversation features (fork, branch, checklist, subagents, the skill palette) and
-> its quota and version are built; see under Phase 4. The rest of Phase 4 onwards
-> is not.
+> its quota and version are built; see under Phase 4. Search, spend, images and
+> archived threads read Codex too; see *Reading beside the transcript* under
+> Phase 4. The rest of Phase 4 onwards is not.
 
 ## Why
 
@@ -298,7 +299,8 @@ reads correctly, with no Codex process started by the bridge.
   folded message is for Claude.
 - Not done here, and harmless: search, spend, images and skill runs read a Codex
   rollout with Claude's parsers and find nothing in it. `archived_sessions/` is
-  not indexed.
+  not indexed. (All but skill runs have since been done; see *Reading beside the
+  transcript* under Phase 4.)
 
 ### Phase 3 — Driving Codex
 
@@ -560,6 +562,28 @@ gate, none of them large but all of them the gate's design rather than this slic
 Until then a Codex gate is a `runtime: "codex"` schedule whose prompt is written out
 rather than a Claude skill's name, and it ends on a `VERDICT:` line like any other.
 
+**Reading beside the transcript.** What Phase 2 left reading a rollout with
+Claude's parsers, closed later; `test/codex-gaps.test.js` pins it, with `images`
+recorded for it. Measured on 0.172.0:
+
+- **Search** reads a rollout one line at a time through the Codex reader, so a hit's
+  turn is the rail's turn. Results carry `agent`, which labels the reply.
+- **Spend is tokens only.** `token_usage_record` has one `usage` per response and
+  names its thread, which is what makes it countable: `token_count`'s running total is
+  inherited by a fork, and a spawned agent's rollout copies its parent's lines. There
+  are no Codex prices and a ChatGPT plan is not billed per token, so the board has a
+  Codex card beside Claude's figures rather than tokens added into them.
+- **Images** are `input_image` blocks. A tool's picture is on the code-mode script's
+  `custom_tool_call_output`, and the call that made it is the `item_completed` written
+  between the two. An attached file is wrapped in `<image name=… path=…>` text blocks,
+  which the transcript had been showing as the person's words.
+- **Archived threads** move, flat, to `$CODEX_HOME/archived_sessions/`. They are listed
+  as `archived`; restoring one here is remembered in `flags.json` and writes nothing to
+  Codex's store.
+- Still not done: skill runs (`bridge/skill-runs.js`) find nothing in a rollout, and a
+  fork's search and image indexes hold its own lines, not the inherited ones. A
+  `.jsonl.zst` is read by all four, whole.
+
 ### Phase 5 — Config surfaces
 
 - **A Codex tab in Settings.** Read it through `config/read` and write it
@@ -602,6 +626,11 @@ rather than a Claude skill's name, and it ends on a `VERDICT:` line like any oth
 | Quota | ✅ | `account/rateLimits/*`, which is simpler than Claude's |
 | Scheduling, PR gate | ✅ | `runtime` on rows; `review/start` as an option |
 | Worktrees | ✅ | Ours are plain git. A Codex session started in one just has that `cwd`. |
+| Global search | ✅ | The rollout through the Codex reader. A fork is searched for its own lines |
+| Images pane | ✅ | `input_image` in messages and tool outputs. A fork lists its own |
+| Archived sessions | ✅ | `archived_sessions/`, shown as archived. Restoring here does not run `codex unarchive`; sending to it does |
+| Spend and analytics | 🟡 | Tokens only, in a card of their own: no price table, and a ChatGPT plan is not billed per token |
+| Skill-run history | ❌ | Not built: `skill-runs.js` reads Claude transcripts only |
 | Plan mode | 🟡 | A `plan` item, not an approval. The buttons send the next turn. |
 | Permission modes | 🟡 | Mapped per turn (D5), and measured |
 | Branch from a turn | 🟡 | Paginated-history threads only, which is every thread from 0.160.1 |

@@ -837,6 +837,9 @@ async function handle(req, res, url, pathname, seg, who) {
             const after = index.summary(sessionId) || summary;
             return send(res, 200, {
                 ok: true, sessionId, ...next,
+                // As the row now shows it: a Codex thread Codex archived is
+                // archived with no flag of ours saying so.
+                archived: after.archived,
                 title: after.title, titleSource: after.titleSource,
                 runsStopped: stopped,
             });

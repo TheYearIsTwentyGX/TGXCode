@@ -118,6 +118,7 @@ const FROM_DISK = {
     Reasoning: (i) => ({ type: 'reasoning', id: i.id,
         summary: i.summary_text || [], content: i.raw_content || [] }),
     Plan: (i) => ({ type: 'plan', id: i.id, text: i.text || '' }),
+    ImageView: (i) => ({ type: 'imageView', id: i.id, path: pathOf(i.path) }),
     CommandExecution: (i) => ({
         type: 'commandExecution',
         id: i.id,

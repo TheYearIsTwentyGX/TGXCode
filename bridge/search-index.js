@@ -31,6 +31,13 @@
 //   input and result together) and only searched when asked: they are most of a
 //   transcript's bytes and almost all of its noise. Thinking is not kept.
 //
+// - **A Codex rollout is read by the Codex reader,** one line at a time as the
+//   turn index reads it, so its turns, ids and offsets are the rail's there too.
+//   A rollout is told by its name. A fork's index holds its own lines only (the
+//   history it inherited is the parent's, and is found there), and a spawned
+//   agent's rollout is not a session, as a Claude subagent's is not. A `.zst` is
+//   read whole and re-read whole when its size changes.
+//
 // - **Never a long stall.** `update` takes a byte budget and stops at a line
 //   boundary inside it, holding the rest for the next call, so the warmer
 //   (below) can build a 50MB transcript in slices of a few milliseconds and a
@@ -42,8 +49,10 @@ const fs = require('fs');
 const path = require('path');
 
 const { CACHE_DIR } = require('./config');
+const runtimes = require('./runtimes');
 const { buildEvents } = require('./transcript');
-const { linesFrom } = require('./turn-index');
+const { linesFrom, sourceOf } = require('./turn-index');
+const codex = require('./runtimes/codex/transcript');
 
 const INDEX_DIR = path.join(CACHE_DIR, 'search');
 // Bump when what is stored, or how it is derived, changes.
@@ -114,6 +123,21 @@ function wantLine(s) {
     return !(s.length > HUGE_LINE && s.includes('"tool_result"') && !s.includes('"type":"assistant"'));
 }
 
+// The lines of a rollout that can hold something to search, or start a turn.
+const CODEX_NEEDLES = ['"type":"turn_context"', '"role":"user"', '"role":"assistant"',
+    '"type":"item_completed"', '"name":"request_user_input"'];
+
+/**
+ * The rollout's `wantLine`. A huge `item_completed` is a command's output and is
+ * skipped, as a huge Claude tool result is; a huge message is an attached image
+ * beside words that were typed, and is not.
+ */
+function wantCodexLine(s) {
+    if (!CODEX_NEEDLES.some(n => s.includes(n))) return false;
+    return !(s.length > HUGE_LINE && s.includes('"type":"item_completed"')
+        && !s.includes('"type":"AgentMessage"'));
+}
+
 /** Rough size of an index in memory, for the LRU. */
 function weigh(idx) {
     let n = 0;
@@ -155,6 +179,44 @@ function absorb(idx, lines) {
     idx.open = Object.fromEntries(keep);
 }
 
+/**
+ * `absorb` for a rollout. `idx.turnAt` is where the turn in progress began,
+ * held across reads because one can end between a `turn_context` and its message.
+ */
+function absorbCodex(idx, lines) {
+    if (!lines.length) return;
+    const open = new Map(Object.entries(idx.open));
+    for (const { entry, offset } of lines) {
+        if (codex.isTurnStart(entry)) { idx.turnAt = offset; continue; }
+        for (const ev of codex.buildEvents([entry]).events) {
+            const t = idx.turns.length - 1;
+            if (ev.kind === 'user') {
+                idx.turns.push([ev.id, idx.turnAt == null ? offset : idx.turnAt, ev.ts || null]);
+                // A skill is a command with no text of its own; what was typed
+                // is still what somebody would search for.
+                const said = ev.text
+                    || (ev.command ? `$${ev.command.name} ${ev.command.args || ''}`.trim() : '');
+                if (said) idx.docs.push([t + 1, 'u', ev.id, clip(said, TEXT_MAX)]);
+            } else if (ev.kind === 'assistant') {
+                idx.docs.push([t, 'a', ev.id, clip(ev.text, TEXT_MAX)]);
+            } else if (ev.kind === 'tool') {
+                const r = resultText(ev.result);
+                idx.docs.push([t, 't', ev.id, r ? `${toolText(ev)}\n${r}` : toolText(ev)]);
+                if (!ev.result) open.set(ev.id, idx.docs.length - 1);
+            } else if (ev.kind === 'tool-result' && open.has(ev.toolId)) {
+                const d = idx.docs[open.get(ev.toolId)];
+                const r = resultText(ev.result);
+                if (d && d[2] === ev.toolId && r) d[3] = `${d[3]}\n${r}`;
+                open.delete(ev.toolId);
+            }
+        }
+    }
+    idx.open = Object.fromEntries([...open.entries()].slice(-OPEN_MAX));
+}
+
+/** What the manifest and `stale` compare a file's size against. */
+const seenOf = (idx) => (idx.zst != null ? idx.zst : idx.consumed);
+
 class SearchIndex {
     constructor(dir = INDEX_DIR, { memMax = MEM_MAX } = {}) {
         this.dir = dir;
@@ -165,7 +227,7 @@ class SearchIndex {
         /** sessionId -> bytes consumed when last written to disk. */
         this.savedAt = new Map();
         /**
-         * sessionId -> [file, consumed] for every index on disk, so asking
+         * sessionId -> [file, consumed, codex?] for every index on disk, so asking
          * whether one is behind costs a stat and not a parse of the index. Read
          * once; written, a little behind, as indexes are saved.
          */
@@ -192,7 +254,7 @@ class SearchIndex {
 
     _note(sessionId, idx) {
         this._known(sessionId);
-        if (idx) this.manifest.set(sessionId, [idx.file, idx.consumed]);
+        if (idx) this.manifest.set(sessionId, [idx.file, seenOf(idx), ...(idx.codex ? [1] : [])]);
         else this.manifest.delete(sessionId);
         if (this._manifestTimer) return;
         this._manifestTimer = setTimeout(() => this.flushManifest(), 2000);
@@ -273,8 +335,11 @@ class SearchIndex {
         let st;
         try { st = fs.statSync(file); } catch { return false; }
         const held = this.mem.get(sessionId);
-        const [f, consumed] = held ? [held.file, held.consumed] : (this._known(sessionId) || []);
-        return f !== file || consumed !== st.size;
+        const [f, seen, isCodex] = held
+            ? [held.file, seenOf(held), held.codex] : (this._known(sessionId) || []);
+        // A rollout indexed before rollouts were read here consumed the file and
+        // kept nothing of it.
+        return f !== file || seen !== st.size || (codex.isRollout(file) && !isCodex);
     }
 
     /**
@@ -287,41 +352,57 @@ class SearchIndex {
         try { st = fs.statSync(file); } catch { return null; }
         let idx = this._load(sessionId);
         let head = null;
+        const isRollout = codex.isRollout(file);
+        if (idx && isRollout && !idx.codex) idx = null;
+        const zst = isRollout && file.endsWith('.zst');
         const fresh = () => ({
             version: INDEX_VERSION, file, head, consumed: 0, turns: [], docs: [], open: {},
+            ...(isRollout && { codex: true, turnAt: null }),
         });
+        // Compressed, a rollout is written once and its offsets are into the
+        // decompressed bytes: unchanged is "the same size on disk".
+        if (zst && idx && idx.file === file && idx.zst === st.size) {
+            idx.done = true;
+            return idx;
+        }
         try {
-            if (!idx || idx.file !== file || st.size < idx.consumed) {
-                head = headOf(file, st.size);
+            const src = zst ? sourceOf(file, st) : {
+                size: st.size,
+                head: () => headOf(file, st.size),
+                range: (a, b) => readRange(file, a, b),
+            };
+            if (!idx || zst || idx.file !== file || src.size < idx.consumed) {
+                head = src.head();
                 idx = fresh();
-            } else if (st.size === idx.consumed) {
+            } else if (src.size === idx.consumed) {
                 idx.done = true;
                 return idx;
             } else {
                 // Checked only when there is something to read anyway, so an
                 // unchanged file costs one stat — turn-index.js's bargain.
-                head = headOf(file, st.size);
+                head = src.head();
                 if (head !== idx.head) idx = fresh();
             }
             if (!idx.head) idx.head = head;
 
             // Read up to the budget, and further only if not one whole line fit:
             // progress has to be made, and a line cannot be read in halves.
-            let want = Math.min(st.size - idx.consumed, Math.max(1, maxBytes));
+            let want = Math.min(src.size - idx.consumed, Math.max(1, zst ? src.size : maxBytes));
             let buf;
             let got;
             for (;;) {
-                buf = readRange(file, idx.consumed, idx.consumed + want);
-                got = linesFrom(buf, idx.consumed, wantLine);
-                if (got.consumed || idx.consumed + want >= st.size) break;
-                want = Math.min(st.size - idx.consumed, want * 4);
+                buf = src.range(idx.consumed, idx.consumed + want);
+                got = linesFrom(buf, idx.consumed, isRollout ? wantCodexLine : wantLine);
+                if (got.consumed || idx.consumed + want >= src.size) break;
+                want = Math.min(src.size - idx.consumed, want * 4);
             }
-            absorb(idx, got.lines);
+            (isRollout ? absorbCodex : absorb)(idx, got.lines);
             // A read that reached the end of the file is caught up even if a
             // last line is left over: that line has no newline yet, so it is
             // still being written and is not ours to read.
-            idx.done = idx.consumed + want >= st.size;
+            idx.done = idx.consumed + want >= src.size;
             idx.consumed += got.consumed;
+            if (zst) idx.zst = st.size;
         } catch { return null; }
         this._remember(sessionId, idx);
         const last = this.savedAt.get(sessionId) || 0;
@@ -485,6 +566,9 @@ function search(sidx, candidates, { q, kinds = ['user', 'assistant'], limit, per
         const s = c.summary || {};
         sessions.push({
             sessionId: c.sessionId,
+            // Who the `assistant` hits are: what a client labels them with.
+            runtime: s.runtime || runtimes.DEFAULT,
+            agent: runtimes.agentOf(s.runtime),
             title: s.title || null,
             projectName: s.projectName || null,
             cwd: s.cwd || null,

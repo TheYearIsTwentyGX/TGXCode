@@ -409,4 +409,4 @@ function boundaries(idx) {
     return set;
 }
 
-module.exports = { TurnIndex, boundaries, linesFrom, wanted, INDEX_DIR, INDEX_VERSION };
+module.exports = { TurnIndex, boundaries, linesFrom, wanted, sourceOf, INDEX_DIR, INDEX_VERSION };
