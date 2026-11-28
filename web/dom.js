@@ -26,7 +26,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-wispr', 'wispr-menu', 'new-btn-wispr', 'new-wispr-menu',
     'set-g-wispr', 'wispr-list', 'wispr-add',
     'model', 'effort', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
-    'rail-sort', 'sort-menu',
+    'rail-sort', 'sort-menu', 'rail-fold',
     'db-status', 'db-label', 'toasts', 'digest',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live', 'quota-codex',

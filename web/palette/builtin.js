@@ -27,6 +27,7 @@ import { clickCommand } from '../commands.js';
 import { openInDevBrowser } from '../channels.js';
 import { showPhoneInstalls } from '../phone-installs.js';
 import { registerAction, registerSource } from './registry.js';
+import { railAllShut, toggleAllGroups } from '../rail.js';
 
 const shown = (node) => !!node && !node.hidden && !node.disabled;
 // For the bar's pills, which can also be folded into the overflow menu; a pill
@@ -155,6 +156,11 @@ export function registerBuiltins() {
         id: 'rail.hideDone', group: 'Actions', keywords: 'rail filter',
         title: () => (state.hideDone ? 'Show finished sessions' : 'Hide finished sessions'),
         when: () => onScreen(dom.hideDone), run: () => dom.hideDone.click(),
+    });
+    registerAction({
+        id: 'rail.collapseAll', group: 'Actions', keywords: 'rail fold groups projects expand',
+        title: () => (railAllShut() ? 'Expand all rail groups' : 'Collapse all rail groups'),
+        run: () => toggleAllGroups(),
     });
 
     // ── what the open session has ──

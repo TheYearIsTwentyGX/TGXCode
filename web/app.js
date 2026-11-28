@@ -17,7 +17,7 @@ import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { liveOverDock, liveOverFixed } from './live-over.js';
 import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
-import { drawRail } from './rail.js';
+import { drawRail, railAllShut, toggleAllGroups } from './rail.js';
 import { togglePalette, wirePalette } from './palette.js';
 import { registerBuiltins } from './palette/builtin.js';
 import { liveStrip, renderLive } from './boards/live.js';
@@ -510,6 +510,7 @@ export const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
  */
 export function renderRail() {
     paintHideDone(drawRail());
+    paintRailFold();
     // The ⋮ menu is fixed and lives outside the rail, so a card that moved leaves
     // it pointing at where the button used to be.
     syncProjMenu();
@@ -534,6 +535,13 @@ function paintHideDone(count) {
     dom.hideDone.title = state.query && state.hideDone
         ? 'Showing finished sessions too, while the filter box has something in it'
         : 'Hide sessions whose pull requests are all merged or closed';
+}
+
+/** Collapse all, or Expand all once every card on screen is shut. */
+function paintRailFold() {
+    const label = railAllShut() ? 'Expand all' : 'Collapse all';
+    dom.railFold.title = `${label} (Alt+click a heading does the same)`;
+    dom.railFold.setAttribute('aria-label', label);
 }
 
 // --- `custom` order: dragging project cards ------------------------------
@@ -2673,6 +2681,7 @@ function closeSortMenu() {
     paintRailSort();
 }
 
+dom.railFold.addEventListener('click', () => toggleAllGroups());
 dom.railSort.addEventListener('click', (e) => {
     e.stopPropagation();
     if (state.sortMenu) closeSortMenu(); else openSortMenu();

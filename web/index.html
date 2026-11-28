@@ -415,6 +415,16 @@
           <span class="rail-filter-label">Hide finished</span>
           <span id="hide-done-count" class="rail-filter-count" hidden></span>
         </button>
+        <!-- Shut every card, or open them all once every one is shut. Icon-only
+             for the order button's reason; the tooltip says which it will do.
+             Alt+click on a heading does the same. -->
+        <button id="rail-fold" class="rail-sort" type="button"
+                aria-label="Collapse all" title="Collapse all">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 4.5 5 5 5-5M7 19.5l5-5 5 5" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <!-- How the project cards are ordered. Icon-only beside the filter, since
              the rail is narrow and the mode is in the tooltip and the menu; it
              lights when the order is anything but the default. -->
