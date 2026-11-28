@@ -278,12 +278,18 @@ function threadConfig(o = {}) {
     // A fork is a new thread too: `sessionId` is the parent's, and the copy's id
     // comes back from `thread/fork`, so it is learned from the call like a new one's.
     const known = !o.isNew && !o.fork && o.sessionId ? o.sessionId : null;
+    // A new thread's placeholder, which is all a `tools/list` can be keyed by:
+    // Codex sends it with no thread id (measured on 0.172.0). Only an orchestrator
+    // reads anything at listing time, and the bridge answers by placeholder for a
+    // while after it re-keys one (`resolveId` in bridge/orchestration.js).
+    const provisional = o.isNew && !o.fork && o.sessionId && o.role === 'orchestrator' ? o.sessionId : null;
     const config = {
         'mcp_servers.tgxcode': {
             command: process.execPath,
             args: [
                 MCP_JS, '--port', String(cfg.PORT),
                 ...(known ? ['--session', known] : []),
+                ...(provisional ? ['--provisional', provisional] : []),
                 '--session-from-call',
                 ...(o.role ? ['--role', o.role] : []),
                 ...(o.preview ? ['--preview'] : []),

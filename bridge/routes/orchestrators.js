@@ -166,7 +166,10 @@ async function handle(req, res, url, pathname, seg, who) {
     if (seg[3] !== 'orchestrator') return NEXT;
     const sub = seg[4] || '';
 
-    if (!sub && req.method === 'GET') return send(res, 200, orchestration.payload(id));
+    // By the id it was started under too, for a few minutes after a Codex
+    // orchestrator was re-keyed: mcp.js lists its tools as the process starts, and
+    // Codex sends that `tools/list` with no thread id to learn the real one from.
+    if (!sub && req.method === 'GET') return send(res, 200, orchestration.payload(orchestration.resolveId(id)));
 
     if (!sub && req.method === 'PUT') {
         const body = await readJson(req);
@@ -298,6 +301,8 @@ async function handle(req, res, url, pathname, seg, who) {
                 ? body.permissionMode : null,
             model: strOr(body.model),
             effort: strOr(body.effort),
+            // claude or codex; left out, the orchestrator's own. Checked there.
+            runtime: strOr(body.runtime),
         }));
     }
     if (sub === 'next') {

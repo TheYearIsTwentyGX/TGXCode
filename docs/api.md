@@ -4652,7 +4652,10 @@ runtime?: "claude" | "codex"}` →
 **`runtime`** (string, default `"claude"`) is the CLI to run it on (§*`runtime` and
 `capabilities`*). An unknown one is `400 {error: "unknown runtime: …"}`. With
 `"codex"`, `model` and `effort` are Codex's (from `GET /api/models?runtime=codex`),
-and `orchestrator: true` is refused `400` — an orchestration cannot run on Codex yet.
+and `orchestrator: true` makes a **Codex orchestrator**: it is marked under a
+placeholder before its process starts (its role decides its tools), and the record
+moves to the id Codex mints before this route answers, so the `sessionId` returned is
+the orchestrator's id everywhere (§*Orchestrators*, *On Codex*).
 
 **For Codex, the `sessionId` returned is the id Codex minted**, not one the bridge
 made up: Codex names a thread at `thread/start`, so this route waits for that — up to
@@ -6809,6 +6812,8 @@ event:
 
 ```
 { orchestratorId: string, enabled: true,
+  runtime: "claude" | "codex",       // what the orchestrator itself runs on
+  runtimes: ["claude" | "codex"],   // it and its open workers, deduplicated
   settings: { maxRunning: number (1–10), worktree: boolean,
               orchestratorModel: string|null, orchestratorEffort: string|null,
               workerModel: "choose" | string, workerEffort: "choose" | string,
@@ -6817,6 +6822,7 @@ event:
                            window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet"|"all",
                            limits: { five_hour, seven_day, seven_day_opus, seven_day_sonnet:
                                      number (1–100) | null },
+                           codexPercent: number (1–100) | null,
                            autoResume: boolean,
                            autoResumeBy: null | { by: "user"|"agent", at: number,
                                                   reason: string|null } } },
@@ -6836,7 +6842,8 @@ event:
               modelSource: null | { model: source, effort: source },
               pr: null | { number: number, url: string|null, repo: string|null,
                            title: string|null, status: string, label: string|null },
-              origin: null | origin }],
+              origin: null | origin,
+              runtime: "claude" | "codex" }],
   pendingSpawns: [{ id, title: string|null, at: number, origin: null | origin,
                    starting?: true }],
   openTasks: [{ id, at: number, status: "new"|"read", text: string,
@@ -7008,6 +7015,18 @@ An orchestrator's message to a worker reaches the worker wrapped in
 both come back as their own event kinds, `orchestrator-inbox` and
 `orchestrator-message` (see the event table), never as `user`.
 
+**Whose usage counts.** Claude and Codex are different accounts with different
+windows, so the cutoff watches each only while it is being spent: **Claude's windows
+while the orchestrator or any open worker runs on Claude, Codex's while any of them runs
+on Codex** (`runtimes` in the payload). A Codex window past its line never pauses an
+all-Claude orchestration, and a Claude window never pauses an all-Codex one. Codex's
+windows are `runtimes.codex.windows` on `GET /api/quota`; here they are typed
+**`codex:primary`** and **`codex:secondary`**, and since their lengths are the plan's
+(one 30-day window on a Free account), every one is held to the single threshold
+**`usageStop.codexPercent`** (default `90`; `null` leaves Codex out), whatever `window`
+says. A Codex trip's reason reads `Codex 30-day usage at 95%, past the 90% cutoff`, and
+auto-resume waits for that window's `resetsAt` the same way.
+
 **The usage cutoff.** When `settings.usageStop.enabled` and the window's
 `usedPercent` (from `GET /api/quota`) reaches `percent` — or, with `window: "all"`,
 when *any* window reaches its own threshold in `limits` (a `null` threshold leaves
@@ -7050,8 +7069,27 @@ makes a test worker, as a test orchestrator does.
 becomes a task with `runtime: "codex"` and starts a **Codex worker**; its model and effort
 are the task's or Codex's default, never a Claude model the orchestrator named or
 Settings fixes for workers. Its worker id — in `spawn`'s reply, `list_workers` and the
-inbox — is the one Codex minted. The orchestrator itself still runs on Claude:
-`POST /api/sessions` refuses `orchestrator: true` with `runtime: "codex"` (`400`).
+inbox — is the one Codex minted.
+
+**On Codex.** An orchestrator can run on Codex: `POST /api/sessions` with
+`runtime: "codex", orchestrator: true`, or `PUT …/orchestrator {enabled: true}` on an
+existing Codex session. What differs:
+
+- **Its id.** A new one is marked under a placeholder and re-keyed to Codex's thread id
+  before the create answers. For a few minutes `GET …/orchestrator` still answers for the
+  placeholder with the re-keyed payload (its `orchestratorId` is the real id). That is
+  for its own MCP server's tool listing, which Codex sends with no thread id. Nothing else
+  takes it.
+- **Its own model** is the composer's, from Codex's list. `orchestratorModel` and
+  `orchestratorEffort` name Claude's models and are not applied to it.
+- **Its workers run on Codex** unless `spawn` says `runtime: "claude"`. A Codex worker's
+  `model` and `effort` are checked against `GET /api/models?runtime=codex` (an unknown
+  one is `400` listing Codex's ids), and `workerModel`/`workerEffort` do not apply to it.
+- **Its cutoff** watches Codex's windows, as *Whose usage counts* says.
+- **A move** resumes the thread in the new directory: `thread/resume {threadId, cwd}`
+  moved it (measured on 0.172.0: commands ran there, files were written there, and the
+  rollout's next `turn_context` names it). It needs the thread's rollout instead of a
+  Claude transcript; see the move route.
 
 A task is never silently lost. An open one — `new`, or `read` but not started — is never
 trimmed from the inbox. Taking it back (below) makes it a draft again, and so does
@@ -7253,7 +7291,9 @@ asks for it with its `move_session` MCP tool, which posts here with its own id.
   So the target does not decide whether it can resume; where the transcript is does. The
   bridge makes the same search, one directory deep under its projects directory, and
   refuses with `409 {error}` naming that directory when the transcript is not there.
-  Nothing is copied or edited.
+  Nothing is copied or edited. **A Codex orchestrator** is resumed by thread id with
+  the new `cwd`, which Codex honours; it needs its rollout on disk instead, and is
+  `409 {error: "its Codex rollout is not on disk…"}` without one.
 - **It is bridge state, not a transcript edit.** The orchestrator record keeps
   `location.override` `{cwd, from, at}`, and from then on the session summary's `cwd` is
   the target, and so is every route that resumes the session: send, handoff, a nudge,
@@ -7295,15 +7335,18 @@ asks for it with its `move_session` MCP tool, which posts here with its own id.
 #### `GET /api/sessions/:id/orchestrator/workers` · `GET …/orchestrator/usage`
 
 The first is `{workers, pendingSpawns, maxRunning, paused}` from the payload. The
-second is `{windows: [{type, usedPercent, usedPercentAt, resetsAt, status}],
-cutoff: settings.usageStop|null, paused}`.
+second is `{windows: [{type, usedPercent, usedPercentAt, resetsAt, status, label?}],
+cutoff: settings.usageStop|null, paused}`: the windows the cutoff is judged against
+(*Whose usage counts*), Codex's typed `codex:*` with a `label` such as `"Codex 30-day"`.
 
 #### The tool routes
 
 All `POST`, all refused remotely, all with the orchestrator's id in the path:
 `spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
-effort?, task?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
-position, running, maxRunning}`, either with **`model`, `effort`** (string or null — what
+effort?, task?, runtime?: "claude"|"codex"}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
+position, running, maxRunning}`, either with **`runtime`** when the worker runs on Codex
+(left out, `runtime` is the orchestrator's own; a task's is the user's and wins; an
+unknown one is `400`), and either with **`model`, `effort`** (string or null — what
 the worker runs, or will run, with), **`modelSource {model, effort}`** and
 **`overridden {model: string|null, effort: string|null}`** — what the orchestrator asked
 for that a fixed `workerModel`/`workerEffort` replaced, `null` where nothing was (see

@@ -91,6 +91,14 @@ const WINDOWS = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']
 // them past its own trips the cutoff.
 const STOP_WINDOWS = [...WINDOWS, 'all'];
 
+// Codex's windows, as `windowsFor` in bridge/orchestration.js names them: the
+// quota snapshot's `primary` and `secondary` (bridge/codex/quota.js), prefixed so
+// they can never be mistaken for one of Claude's. Their lengths are the plan's — a
+// Free account has one 30-day window, others a five-hour and a weekly — so they are
+// judged against one threshold, `usageStop.codexPercent`, rather than by name.
+const CODEX_WINDOW_PREFIX = 'codex:';
+const isCodexWindow = (type) => typeof type === 'string' && type.startsWith(CODEX_WINDOW_PREFIX);
+
 // `workerModel`/`workerEffort` when the orchestrator picks per worker.
 const CHOOSE = 'choose';
 
@@ -116,6 +124,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         window: 'five_hour',
         // For `window: "all"`. Null leaves that window out.
         limits: Object.freeze({ five_hour: 90, seven_day: 95, seven_day_opus: null, seven_day_sonnet: null }),
+        // Every Codex window, whatever `window` says, when Codex is in play: the
+        // orchestrator or one of its open workers runs on it. Null leaves Codex's
+        // usage out of the cutoff.
+        codexPercent: 90,
         // Lift the pause by itself once the window that tripped it resets, and
         // tell the orchestrator so it can carry on. Off: wait for Resume.
         autoResume: false,
@@ -152,6 +164,9 @@ function cleanSettings(raw, base = DEFAULT_SETTINGS) {
             percent: pct(u.percent) ? u.percent : bu.percent,
             window: STOP_WINDOWS.includes(u.window) ? u.window : bu.window,
             limits: cleanLimits(u.limits, bu.limits || DEFAULT_SETTINGS.usageStop.limits),
+            codexPercent: u.codexPercent === null ? null : pct(u.codexPercent) ? u.codexPercent
+                : (bu.codexPercent === null || pct(bu.codexPercent) ? bu.codexPercent
+                    : DEFAULT_SETTINGS.usageStop.codexPercent),
             autoResume: typeof u.autoResume === 'boolean' ? u.autoResume
                 : (typeof bu.autoResume === 'boolean' ? bu.autoResume : false),
             autoResumeBy: 'autoResumeBy' in u ? cleanAutoResumeBy(u.autoResumeBy) : (bu.autoResumeBy || null),
@@ -234,12 +249,14 @@ function resetMs(w) {
 }
 
 /**
- * Every window over its threshold: `[{window, usedPercent, percent, resetsAt}]`,
- * `resetsAt` epoch ms or null. Empty when the cutoff is off or nothing is over.
- * `windows` is `usage.snapshot().windows`.
+ * Every window over its threshold: `[{window, usedPercent, percent, resetsAt,
+ * label}]`, `resetsAt` epoch ms or null. Empty when the cutoff is off or nothing
+ * is over. `windows` is `windowsFor(o)` in bridge/orchestration.js: Claude's
+ * (`usage.snapshot().windows`) and Codex's, each only when that runtime is in play.
  *
- * One window against `percent`, or with `window: "all"` each window against its
- * own entry in `limits` — so five-hour past 90 *or* weekly past 95.
+ * Claude's: one window against `percent`, or with `window: "all"` each window
+ * against its own entry in `limits` — so five-hour past 90 *or* weekly past 95.
+ * Codex's (`codex:*`): each against `codexPercent`, whatever `window` says.
  */
 function usageTrips(settings, windows, now = Date.now()) {
     const u = settings && settings.usageStop;
@@ -257,6 +274,17 @@ function usageTrips(settings, windows, now = Date.now()) {
         const reset = resetMs(w);
         if (reset !== null && reset <= now) continue;
         if (w.usedPercent >= percent) out.push({ window: type, usedPercent: w.usedPercent, percent, resetsAt: reset });
+    }
+    if (pct(u.codexPercent)) {
+        for (const w of windows || []) {
+            if (!w || !isCodexWindow(w.type) || typeof w.usedPercent !== 'number') continue;
+            const reset = resetMs(w);
+            if (reset !== null && reset <= now) continue;
+            if (w.usedPercent >= u.codexPercent) {
+                out.push({ window: w.type, usedPercent: w.usedPercent, percent: u.codexPercent,
+                    resetsAt: reset, label: w.label || null });
+            }
+        }
     }
     return out;
 }
@@ -521,6 +549,10 @@ function cleanWorker(w) {
         effort: str(w.effort, 40),
         modelSource: w.modelSource && typeof w.modelSource === 'object'
             ? { model: str(w.modelSource.model, 20), effort: str(w.modelSource.effort, 20) } : null,
+        // The agent it runs on, kept only when it is not the default, so a Claude
+        // worker's row is exactly what it was before workers could be anything else.
+        ...(typeof w.runtime === 'string' && w.runtime && w.runtime !== 'claude'
+            ? { runtime: str(w.runtime, 40) } : {}),
     };
 }
 
@@ -920,6 +952,28 @@ class Orchestrators {
         return true;
     }
 
+    /**
+     * An orchestrator's own session was given its id by its runtime — a Codex
+     * orchestrator is marked under the placeholder its create route minted, because
+     * its role decides its first start, and Codex names the thread in that start.
+     * The record moves to the real id. The placeholder is recorded as removed, so
+     * the merge in `flush` cannot write it back from another bridge's copy. True
+     * when there was such an orchestrator.
+     */
+    rekeyOrchestrator(from, to) {
+        const o = this.byId.get(from);
+        if (!o || from === to || this.byId.has(to)) return false;
+        this.byId.delete(from);
+        o.id = to;
+        this.byId.set(to, o);
+        this._removed.add(from);
+        this._removed.delete(to);
+        this._dirty.delete(from);
+        this._reindex();
+        this._touch(o);
+        return true;
+    }
+
     worker(orchId, workerId) {
         const o = this.byId.get(orchId);
         return o ? o.workers.find(w => w.id === workerId) || null : null;
@@ -1137,5 +1191,5 @@ module.exports = {
     usageTrips, resumeAtFor, decisionId, cleanMergeOrder, cleanTask, spawnOptsFromTask, isOpenTask,
     liveCwdOverride, resolveWorkerModel,
     CHOOSE, DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY, MAX_DECISIONS,
-    MAX_OPEN_TASKS,
+    MAX_OPEN_TASKS, CODEX_WINDOW_PREFIX, isCodexWindow,
 };

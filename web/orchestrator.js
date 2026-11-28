@@ -305,7 +305,7 @@ export function settings(p) {
             onChange=${(e) => save({ maxRunning: Number(e.target.value) })} /></span> workers running <span class="orch-nw">at once</span></label>
         <label class="orch-check"><input type="checkbox" checked=${s.worktree}
             onChange=${(e) => save({ worktree: e.target.checked })} /><span>Start each worker in its own worktree</span></label>
-        ${modelSettings(s, save)}
+        ${modelSettings(s, save, p.runtime)}
         <label class="orch-check"><input type="checkbox" checked=${s.usageStop.enabled}
             onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} /><span>${all
             ? 'Stop everything past any of these limits '
@@ -331,6 +331,7 @@ export function settings(p) {
                     }} />%</label>`)}
             <div class="orch-note">Leave one empty to ignore that window.</div>
         </div>` : null}
+        ${codexCutoff(p, save, off)}
         <label class="orch-check"><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
             onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} /><span>Carry on by itself when the window resets</span></label>
         ${autoResumeNote(s.usageStop)}
@@ -351,18 +352,43 @@ const modelOptions = (kind) => (kind === 'effort' ? EFFORTS.map(e => ({ id: e, l
  * none, or one model for all of them. A task the user handed over keeps the
  * user's pick either way — said here, since it is the exception to "fixed".
  */
-function modelSettings(s, save) {
+/**
+ * Codex's windows have one threshold between them (`usageStop.codexPercent`),
+ * because their lengths are the plan's, not a fixed pair. Offered while anything
+ * in this orchestration runs on Codex, which is also when it counts. The windows
+ * above are Claude's, and are only watched while something runs on Claude.
+ */
+function codexCutoff(p, save, off) {
+    const rts = p.runtimes || [];
+    if (!rts.includes('codex')) return null;
+    const v = p.settings.usageStop.codexPercent;
+    return html`<label class="orch-line"><span class="orch-nw">Codex: stop at <input type="number"
+        name="codexPercent" min="1" max="100" placeholder="off" defaultValue=${v ?? ''} disabled=${off}
+        key=${`cx:${v ?? ''}`} onChange=${(e) => {
+            const t = e.target.value.trim();
+            save({ usageStop: { codexPercent: t === '' ? null : Number(t) } });
+        }} /></span> % of <span class="orch-nw">any Codex window</span>${rts.includes('claude')
+        ? null : html`<span class="orch-note"> — nothing here runs on Claude, so only this line applies.</span>`}</label>`;
+}
+
+function modelSettings(s, save, runtime = 'claude') {
     const choose = s.workerModel === 'choose';
     const chooseEffort = s.workerEffort === 'choose';
     const nul = (v) => v || null;
-    return html`<div class="orch-models">
-        <label class="orch-line"><span class="orch-nw">Orchestrator runs on <select name="orchestratorModel"
+    // A Codex orchestrator's own model is Codex's, picked in its composer from
+    // Codex's own list; these selects name Claude's models, so they are not offered.
+    const own = runtime !== 'claude'
+        ? html`<div class="orch-note">It runs on Codex, at the model its composer picks. The
+            worker settings below are for Claude workers; a Codex worker runs on Codex's models.</div>`
+        : html`<label class="orch-line"><span class="orch-nw">Orchestrator runs on <select name="orchestratorModel"
             value=${s.orchestratorModel || ''} onChange=${(e) => save({ orchestratorModel: nul(e.target.value) })}>
             <option value="">the composer's pick</option>${modelOptions('model')}
         </select></span> <span class="orch-nw">at <select name="orchestratorEffort"
             value=${s.orchestratorEffort || ''} onChange=${(e) => save({ orchestratorEffort: nul(e.target.value) })}>
             <option value="">the composer's effort</option>${modelOptions('effort')}
-        </select></span></label>
+        </select></span></label>`;
+    return html`<div class="orch-models">
+        ${own}
         <label class="orch-line"><span class="orch-nw">Workers run on <select name="workerModel"
             value=${s.workerModel} onChange=${(e) => save({ workerModel: e.target.value })}>
             <option value="choose">what the orchestrator chooses</option>${modelOptions('model')}

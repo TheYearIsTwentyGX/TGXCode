@@ -109,6 +109,10 @@ let SESSION_ID = flag('session') || null;
 // session — whose `_meta` says nothing of the kind — behaves exactly as before.
 // See threadConfig in bridge/runtimes/codex/process.js.
 const SESSION_FROM_CALL = process.argv.includes('--session-from-call');
+// The placeholder a brand-new Codex orchestrator was started under, for the one
+// read made before any call has named the thread: `tools/list`, which Codex sends
+// without a thread id. Never used to act — every call still waits for its own id.
+const PROVISIONAL = flag('provisional') || null;
 // 'orchestrator', 'worker' or null — which extra tools to list. See
 // bridge/orchestrators.js. Fixed at spawn: the CLI reads the list once.
 const ROLE = flag('role') || null;
@@ -701,12 +705,24 @@ function modelHelp(settings) {
     ];
 }
 
-function spawnWorkerTool(settings = null) {
+function spawnWorkerTool(settings = null, runtime = null) {
+    // A Codex orchestrator's workers run on Codex unless it says otherwise, and
+    // Codex's model ids are Codex's (`model/list`), so the Claude enum would refuse
+    // every one of them before the bridge could check it. The bridge checks either.
+    const codex = runtime === 'codex' || (!runtime && SESSION_FROM_CALL);
     return { ...SPAWN_WORKER,
-        description: [SPAWN_WORKER.description, '', ...modelHelp(settings)].join('\n'),
+        description: [SPAWN_WORKER.description, '', ...modelHelp(settings),
+            ...(codex ? ['', 'You run on Codex, so a worker does too unless you pass runtime: "claude".',
+                'A Codex worker\'s model is one of Codex\'s own ids (your brief lists them); the',
+                'Claude names above are for a Claude worker.'] : [])].join('\n'),
         inputSchema: { ...SPAWN_WORKER.inputSchema, properties: { ...SPAWN_WORKER.inputSchema.properties,
-            model: { type: 'string', enum: [...models.MODEL_IDS],
-                description: 'Which model the worker runs. See the list above.' },
+            model: codex
+                ? { type: 'string', description: 'Which model the worker runs: a Claude name above for a Claude '
+                    + 'worker, a Codex id for a Codex one. Left out, the default.' }
+                : { type: 'string', enum: [...models.MODEL_IDS],
+                    description: 'Which model the worker runs. See the list above.' },
+            ...(codex ? { effort: { type: 'string', description: 'How hard the worker thinks: low, medium '
+                + 'or high, and more on some models.' } } : {}),
         } } };
 }
 
@@ -747,6 +763,11 @@ const SPAWN_WORKER = {
             },
             model: { type: 'string' },
             effort: { type: 'string', enum: EFFORTS, description: 'How hard the worker thinks.' },
+            runtime: {
+                type: 'string', enum: ['claude', 'codex'],
+                description: 'Which agent the worker runs on: claude (Claude Code) or codex (Codex). '
+                    + 'Defaults to the one you run on. A task keeps the user\'s pick.',
+            },
         },
     },
 };
@@ -1052,11 +1073,14 @@ const TOOLS = [GUIDE, SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_S
 async function toolsList() {
     if (ROLE !== 'orchestrator') return TOOLS;
     let settings = null;
-    if (SESSION_ID) {
-        const r = await api('GET', orchRoute(''));
+    let runtime = null;
+    const who = SESSION_ID || PROVISIONAL;
+    if (who) {
+        const r = await api('GET', `/api/sessions/${encodeURIComponent(who)}/orchestrator`);
         if (r.ok && r.body && r.body.settings) settings = r.body.settings;
+        if (r.ok && r.body && typeof r.body.runtime === 'string') runtime = r.body.runtime;
     }
-    return TOOLS.map(t => (t === SPAWN_WORKER ? spawnWorkerTool(settings) : t));
+    return TOOLS.map(t => (t === SPAWN_WORKER ? spawnWorkerTool(settings, runtime) : t));
 }
 
 // What comes back to the model after a suggestion. It says the offer was made
@@ -1608,9 +1632,10 @@ async function callSpawnWorker(id, args) {
         task: args.task,
         prompt: args.prompt, title: args.title, cwd: args.cwd, worktree: args.worktree,
         permissionMode: args.permissionMode, model: args.model, effort: args.effort,
+        runtime: args.runtime,
     });
     if (failed) return failed;
-    const runsAt = modelLine(body);
+    const runsAt = `${body.runtime && body.runtime !== 'claude' ? `on ${body.runtime === 'codex' ? 'Codex' : body.runtime}, ` : ''}${modelLine(body)}`;
     if (body.queued) {
         return say(id, [`Queued: ${body.running} of ${body.maxRunning} workers are already running, so `
             + `this one (position ${body.position}) starts when one finishes its turn. Nothing to do now.`,
@@ -1764,7 +1789,7 @@ async function callGetUsage(id) {
         const at = w.usedPercentAt ? ` (as of ${ago(w.usedPercentAt)})` : '';
         const reset = w.resetsAt
             ? `, resets ${new Date(w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt).toLocaleString()}` : '';
-        return `${w.type}: ${pct}${at}${reset}`;
+        return `${w.label || w.type}: ${pct}${at}${reset}`;
     });
     if (!lines.length) lines.push('No usage reading yet.');
     const c = body.cutoff;
@@ -1774,6 +1799,10 @@ async function callGetUsage(id) {
             .map(([w, v]) => `${w} ${v}%`);
         lines.push(`Cutoff: everything stops when any of these is passed — ${each.join(', ') || 'none set'}.`);
     } else if (c) lines.push(`Cutoff: everything stops at ${c.percent}% of ${c.window}.`);
+    if (c && c.enabled && (body.windows || []).some(w => String(w.type).startsWith('codex:'))) {
+        lines.push(c.codexPercent == null ? 'Codex windows: no cutoff.'
+            : `Codex windows: everything stops at ${c.codexPercent}% of any of them.`);
+    }
     if (c && c.enabled) {
         lines.push(c.autoResume
             ? 'After a stop, you are woken a minute after the window resets.'

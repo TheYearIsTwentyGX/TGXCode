@@ -1128,7 +1128,7 @@ secretAsks.on('resolved', (p) => {
 });
 
 orchestration.init({
-    store: orchestrators, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates,
+    store: orchestrators, pool, index, flags, prefs, usage, codexQuota, normalizeMode, sessionCwd, tooManyCreates,
     // A task taken back, or left behind by an orchestrator that went away,
     // becomes a draft again — and every window's board has to hear about it.
     drafts,
@@ -1150,6 +1150,10 @@ pool.on('quota', (info) => {
 // app-server otherwise. Both land on the same `quota` event as Claude's.
 pool.on('limits', (limits) => codexQuota.notePush(limits));
 codexQuota.on('changed', () => broadcast('quota', quotaPayload()));
+// The cutoff of an orchestration that runs anything on Codex reads Codex's windows
+// (bridge/orchestration.js, `windowsFor`), so a new Codex reading is a moment to
+// check it, as a Claude one is.
+codexQuota.on('changed', () => orchestration.checkUsage());
 // A process that found Codex signed out knows before the timer does.
 pool.on('failed', (f) => { if (f.kind === 'codex-signed-out') codexQuota.refresh(); });
 

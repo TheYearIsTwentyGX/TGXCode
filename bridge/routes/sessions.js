@@ -183,15 +183,11 @@ async function handle(req, res, url, pathname, seg, who) {
         if (!runtimes.known(runtime)) {
             return send(res, 400, { error: `unknown runtime: ${runtime}` });
         }
-        // An orchestrator's role decides its argv before the process starts, keyed
-        // by an id this route mints — and a Codex session's id is not known until
-        // Codex names it, so an orchestrator does not run on Codex yet. A *worker*
-        // can: a Codex draft handed to an orchestrator is spawned on Codex, and
-        // bridge/orchestration.js re-keys the worker when Codex names it.
-        // docs/plans/23-codex.md, Phase 4, says what an orchestrator still needs.
-        if (runtime !== runtimes.DEFAULT && body.orchestrator === true) {
-            return send(res, 400, { error: `an orchestrator cannot run on ${runtime} yet` });
-        }
+        // An orchestrator's role decides its argv before the process starts, so it
+        // is marked under the id this route mints below. On a runtime that names its
+        // own sessions (Codex) that id is a placeholder, and bridge/orchestration.js
+        // moves the record to the real one when the runner says `minted` — before
+        // this route answers, which waits for the same event.
 
         const mode = normalizeMode(body.permissionMode);
         const refusal = modeRefusal(mode, who);

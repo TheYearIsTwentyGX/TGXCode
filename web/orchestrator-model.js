@@ -50,7 +50,11 @@ export function workerStateWord(w) {
 export function workerModelWords(w) {
     if (!w || !('model' in w)) return null;
     const src = w.modelSource || {};
-    const text = [w.model || 'default model', w.effort ? `${w.effort} effort` : null].filter(Boolean).join(' · ');
+    // A worker on another agent says which, first: "Codex · gpt-6-luna". A Claude
+    // worker's words are what they always were.
+    const agent = w.runtime && w.runtime !== 'claude' ? (w.runtime === 'codex' ? 'Codex' : w.runtime) : null;
+    const text = [agent, w.model || 'default model', w.effort ? `${w.effort} effort` : null]
+        .filter(Boolean).join(' · ');
     const why = { user: 'your pick', fixed: 'fixed in settings', orchestrator: 'the orchestrator\'s choice',
         default: 'the default in settings' }[src.model] || null;
     return { text, title: why ? `Model: ${why}` : null };
@@ -433,9 +437,10 @@ const METER_LABEL = { five_hour: '5h', seven_day: 'Week', seven_day_opus: 'Week 
  * The usage meters in the page's head: the five-hour and weekly windows always,
  * and Opus and Sonnet when the cutoff watches them. Each is
  * `{type, label, used, cutoff, tone}`, `used` and `cutoff` whole percents or null,
- * and `tone` `ok`, `near` (within ten points of the cutoff) or `over`.
+ * and `tone` `ok`, `near` (within ten points of the cutoff) or `over`. Codex's
+ * windows (`codex`) follow, held to `codexPercent`; `windows: null` leaves Claude's out.
  */
-export function usageMeters(stop, windows) {
+export function usageMeters(stop, windows, codex = []) {
     const read = (type) => {
         const w = (windows || []).find(x => x && x.type === type);
         return w && Number.isFinite(w.usedPercent) ? Math.round(w.usedPercent) : null;
@@ -445,12 +450,28 @@ export function usageMeters(stop, windows) {
         if (stop.window === 'all') return Number.isFinite(stop.limits && stop.limits[type]) ? stop.limits[type] : null;
         return stop.window === type ? stop.percent : null;
     };
-    const types = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']
+    // `windows: null` is "nothing here runs on Claude": no Claude meters at all,
+    // rather than two empty ones for an account this orchestration never spends.
+    const types = windows === null ? [] : ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']
         .filter(t => t === 'five_hour' || t === 'seven_day' || cutoffFor(t) != null);
     return types.map((type) => {
         const used = read(type);
         const cutoff = cutoffFor(type);
         const tone = used == null || cutoff == null ? 'ok' : used >= cutoff ? 'over' : used >= cutoff - 10 ? 'near' : 'ok';
         return { type, label: METER_LABEL[type], used, cutoff, tone };
+    }).concat(codexMeters(stop, codex));
+}
+
+/**
+ * Codex's meters, one per window it reported (`runtimes.codex.windows` on
+ * `GET /api/quota`), each held to `codexPercent`. Codex's windows are the plan's —
+ * one 30-day window on Free — so they are labelled from their own `shortLabel`.
+ */
+function codexMeters(stop, windows) {
+    return (windows || []).filter(w => w && w.type).map((w) => {
+        const used = Number.isFinite(w.usedPercent) ? Math.round(w.usedPercent) : null;
+        const cutoff = stop && stop.enabled && Number.isFinite(stop.codexPercent) ? stop.codexPercent : null;
+        const tone = used == null || cutoff == null ? 'ok' : used >= cutoff ? 'over' : used >= cutoff - 10 ? 'near' : 'ok';
+        return { type: `codex:${w.type}`, label: `Codex ${w.shortLabel || w.label || ''}`.trim(), used, cutoff, tone };
     });
 }
