@@ -40,6 +40,7 @@ const { broadcast } = require('./events');
 const gate = require('./pr-gate');
 const runtimes = require('./runtimes');
 const { settled } = require('./minted');
+const codexReview = require('./codex/review');
 const {
     SWEEP_MS, REVIEWS_PER_TICK, REVIEWS_IN_FLIGHT, CREATE_RESERVE,
     rangeFailures, noteRangeFailure, sawRangeFailure,
@@ -435,13 +436,24 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER, target = nu
     // session is actually sent, so putting it here is what makes the tick, the
     // pull-request drain and Run now agree; and Run now getting it too is the
     // point of the docstring above, not an oversight.
-    const prompt = unattended(fillPrompt(row.prompt, facts));
     const runtime = row.runtime || runtimes.DEFAULT;
     if (!runtimes.known(runtime)) return { ok: false, skip: 'error', error: `unknown runtime: ${runtime}` };
+    // **A Codex PR gate reviews with Codex's own reviewer**, `review/start` with a
+    // `custom` target naming the range resolved above — see bridge/codex/review.js
+    // for why that target and how its priorities become the `VERDICT:` this file
+    // reads. The schedule's prompt rides along as further instructions, and the
+    // queue chip says which PR it is. Everything after the start — the mint wait,
+    // the label, `rememberScheduledRun`, posting and the test guard — is the same.
+    const review = target && runtime === 'codex' && facts.pr
+        ? { type: 'custom', instructions: codexReview.reviewInstructions(facts, fillPrompt(row.prompt, facts)) }
+        : null;
+    const prompt = review
+        ? `Review #${facts.pr.number}${facts.pr.title ? ` — ${facts.pr.title}` : ''} with Codex's reviewer`
+        : unattended(fillPrompt(row.prompt, facts));
     let out;
     try {
         out = pool.create({ cwd: row.cwd, prompt, model: row.model,
-            effort: row.effort, permissionMode: mode, runtime });
+            effort: row.effort, permissionMode: mode, runtime, ...(review ? { review } : {}) });
     } catch (err) {
         // The marker is untouched, which is the point of doing this in this
         // order: a directory that has moved since you saved the schedule should

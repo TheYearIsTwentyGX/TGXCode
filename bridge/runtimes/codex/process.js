@@ -75,6 +75,12 @@
 //     (bridge/codex/skills.js) goes as `{type:"skill", name, path}` beside the
 //     text `$name args`, as Codex's own clients send one.
 //
+//   - **A queue entry can be a review.** The PR gate hands a Codex schedule's run a
+//     `review` (bridge/codex/review.js): it goes as `review/start {threadId,
+//     target}` instead of `turn/start`, and its reply names the turn the same way.
+//     The turn's result is the `exitedReviewMode` text with a `VERDICT:` line read
+//     off its priorities, so the gate reads it as it reads any other.
+//
 //   - **Our MCP server rides in the thread `config`**: bridge/mcp.js as
 //     `mcp_servers.tgxcode` on `thread/start`, `thread/resume` and `thread/fork`,
 //     with `default_tools_approval_mode = "approve"` standing in for Claude's
@@ -95,6 +101,7 @@ const { TOOL, KINDS, toolEvent, scriptOf, contextOf, taskNameOf } = require('../
 const codexSkills = require('../../codex/skills');
 const hookLog = require('../../codex/hook-log');
 const { describeTool } = require('./tools');
+const { withVerdict } = require('../../codex/review');
 
 let bridgeVersion = '0.0.0';
 try { bridgeVersion = require(path.join(__dirname, '..', '..', '..', 'package.json')).version; } catch { /* packaged */ }
@@ -278,12 +285,18 @@ function threadConfig(o = {}) {
     // A fork is a new thread too: `sessionId` is the parent's, and the copy's id
     // comes back from `thread/fork`, so it is learned from the call like a new one's.
     const known = !o.isNew && !o.fork && o.sessionId ? o.sessionId : null;
+    // A new thread's placeholder, which is all a `tools/list` can be keyed by:
+    // Codex sends it with no thread id (measured on 0.172.0). Only an orchestrator
+    // reads anything at listing time, and the bridge answers by placeholder for a
+    // while after it re-keys one (`resolveId` in bridge/orchestration.js).
+    const provisional = o.isNew && !o.fork && o.sessionId && o.role === 'orchestrator' ? o.sessionId : null;
     const config = {
         'mcp_servers.tgxcode': {
             command: process.execPath,
             args: [
                 MCP_JS, '--port', String(cfg.PORT),
                 ...(known ? ['--session', known] : []),
+                ...(provisional ? ['--provisional', provisional] : []),
                 '--session-from-call',
                 ...(o.role ? ['--role', o.role] : []),
                 ...(o.preview ? ['--preview'] : []),
@@ -393,6 +406,8 @@ class CodexAdapter {
     get product() { return 'Codex'; }
     get bin() { return CODEX_BIN; }
     get handshakeGates() { return true; }
+    // `review/start`, for a queue entry carrying `review` (Runner#send).
+    get reviews() { return true; }
 
     argv() { return ['app-server', '--listen', 'stdio://']; }
     env(o) { return codexEnv(o); }
@@ -639,6 +654,9 @@ class CodexAdapter {
                 if (item.type === 'subAgentActivity') return [...out, ...this._agentActivity(item)];
                 const t = this.current || (this.current = { plan: null, text: '', error: null });
                 if (item.type === 'plan' && item.text) t.plan = item.text;
+                // The reviewer's findings. The turn's last agentMessage repeats them;
+                // either way this turn was a review, and its result gets a verdict.
+                if (item.type === 'exitedReviewMode' && typeof item.review === 'string') t.review = item.review;
                 if (item.type === 'agentMessage' && typeof item.text === 'string') {
                     t.text = item.text;
                     // The async question tool: no request behind it, and the turn
@@ -663,9 +681,11 @@ class CodexAdapter {
                 const failed = status === 'failed';
                 const errText = (turn.error && turn.error.message) || t.error || '';
                 const last = (turn.items || []).filter(i => i && i.type === 'agentMessage').pop();
+                const said = (last && last.text) || t.text || '';
                 const out = [{ type: 'turn-end', result: {
                     isError: failed,
-                    text: failed ? errText || 'The turn failed.' : (last && last.text) || t.text || '',
+                    text: failed ? errText || 'The turn failed.'
+                        : t.review != null && status === 'completed' ? withVerdict(said || t.review) : said,
                     costUsd: 0,
                     durationMs: turn.durationMs || 0,
                     numTurns: 1,
@@ -803,6 +823,12 @@ class CodexAdapter {
 
     turn(entry, { handOver }) {
         const id = `cx_${++this.seq}`;
+        // A review is its own request and starts a turn like `turn/start` does; the
+        // runner never hands one over to a running turn.
+        if (entry.review && !handOver) {
+            this.own.set(id, { kind: 'start', uuid: entry.uuid });
+            return { id, method: 'review/start', params: { threadId: this.threadId, target: entry.review } };
+        }
         this.own.set(id, { kind: handOver ? 'steer' : 'start', uuid: entry.uuid });
         const input = inputFor(entry, (name) => codexSkills.lookup(this.cwd, name));
         if (handOver) {

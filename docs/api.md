@@ -872,7 +872,7 @@ strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text` string — the message with its bookkeeping tags removed, **including a slash command's `<command-*>` tags**: a turn that is only a command has `text: ""` and is drawn from `command` (before October 2026 the tags were left in `text`, so an older bridge sends them; strip `<command-[a-z-]+>…</…>` yourself if you must support one) · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
+| `user` | `text` string — the message with its bookkeeping tags removed, **including a slash command's `<command-*>` tags**: a turn that is only a command has `text: ""` and is drawn from `command` (before October 2026 the tags were left in `text`, so an older bridge sends them; strip `<command-[a-z-]+>…</…>` yourself if you must support one) · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A Codex review's opening message (the instructions of `review/start`, which the PR gate sends) is `"review"`. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
 | `assistant` | `text` string (markdown) · `model` string or null |
 | `thinking` | `text` string |
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
@@ -888,7 +888,9 @@ strings by a client that then rendered `[object Object]`:
 
 `handoff`, `orchestrator-inbox` and `orchestrator-message` arrive as ordinary user
 messages on disk but are **not counted as turns**: they do not move `userMessages`,
-`lastUserTs` (which the session list sorts on) or `firstPrompt`.
+`lastUserTs` (which the session list sorts on) or `firstPrompt`. The same holds for a
+Codex session (`runtime: "codex"`): the rollout reader recognises all three and emits
+these kinds, with the same fields, never a `user` event with the markup in its `text`.
 
 **`tool.status` is `"pending"`, not absent, while a call is running**, and `"ok"` or
 `"error"` once it resolves. A client switching on it needs three cases, and the third
@@ -1286,6 +1288,11 @@ status had to leave out, for a tooltip — and `review`.
 
 `review` is the nightly review's verdict on that PR — an object or `null`:
 `{verdict, count, counts: {critical, warning, note}, sha, at, sessionId, source, stale}`.
+A Codex gate's review (`runtime: "codex"`, see `POST /api/schedules`) has findings
+tagged `[P0]`–`[P3]`. They are parsed by priority: P0 and P1 `critical`, P2 `warning`,
+P3 `note`. Read back from the rollout after its process is gone, its `verdict` comes
+from the structured priorities Codex kept beside the text.
+
 `verdict` is `"BLOCK"`, `"CONCERNS"`, `"CLEAN"` or `null` (the review had no VERDICT
 line); `count` is how many findings parsed out of it (all three severities); `sha`
 the commit it reviewed (a full SHA from the bridge's own record, a 12-character prefix
@@ -4650,7 +4657,10 @@ runtime?: "claude" | "codex"}` →
 **`runtime`** (string, default `"claude"`) is the CLI to run it on (§*`runtime` and
 `capabilities`*). An unknown one is `400 {error: "unknown runtime: …"}`. With
 `"codex"`, `model` and `effort` are Codex's (from `GET /api/models?runtime=codex`),
-and `orchestrator: true` is refused `400` — an orchestration cannot run on Codex yet.
+and `orchestrator: true` makes a **Codex orchestrator**: it is marked under a
+placeholder before its process starts (its role decides its tools), and the record
+moves to the id Codex mints before this route answers, so the `sessionId` returned is
+the orchestrator's id everywhere (§*Orchestrators*, *On Codex*).
 
 **For Codex, the `sessionId` returned is the id Codex minted**, not one the bridge
 made up: Codex names a thread at `thread/start`, so this route waits for that — up to
@@ -5335,7 +5345,23 @@ records (`lastSessionId`, `sessionIds`) is the id Codex minted, and a start that
 before Codex names it (signed out, say) is recorded as a skip — `lastSkipReason:
 "error"`, `lastError` the reason — with the marker left where it was. Its `VERDICT:` line is read from the turn's last
 `agentMessage`. A Claude skill named at the head of the prompt (`/adversarial-reviewer …`)
-is plain text to Codex, so a Codex gate wants a prompt written out in full.
+is plain text to Codex, so a Codex prompt wants to be written out in full.
+
+**A `runtime: "codex"` schedule with an `open-prs` gate reviews with Codex's own
+reviewer** instead of sending the prompt as a turn. Each pull request's run is
+`review/start` with a `custom` target, whose instructions name the range the gate
+resolved (`<mergeBase>..<head>`, the same range `{{range}}` is), say how to read a file
+at the head without a checkout, and end with the schedule's own prompt, filled, as
+further guidance. Its queue chip, before anything is on disk, reads
+`Review #N — <title> with Codex's reviewer`. Codex's reviewer writes findings tagged
+`[P0]`–`[P3]` and no verdict, so the bridge appends one to the turn's result:
+`VERDICT: BLOCK` for any P0 or P1, `CONCERNS` for any P2, `CLEAN` otherwise. The
+appended line says it was mapped from Codex's priorities, with the counts. From there
+the run is any gate run: `lastOutcome`, `reviewed[…].outcome`, the posted comment
+(Codex's text plus that line, under the usual header) and the label all read that
+verdict. A `test` schedule still posts nothing. A Codex schedule with any other gate, or
+none, is an ordinary turn as above. In the session's transcript the review's
+instructions are its opening `user` event, with **`origin: "review"`**, and its title.
 
 **A run is named after its schedule** without a flag being set: a session a schedule
 started lists as `"<schedule title> - <M/D/YY>"` with `titleSource: "schedule"` (see
@@ -6807,6 +6833,8 @@ event:
 
 ```
 { orchestratorId: string, enabled: true,
+  runtime: "claude" | "codex",       // what the orchestrator itself runs on
+  runtimes: ["claude" | "codex"],   // it and its open workers, deduplicated
   settings: { maxRunning: number (1–10), worktree: boolean,
               orchestratorModel: string|null, orchestratorEffort: string|null,
               workerModel: "choose" | string, workerEffort: "choose" | string,
@@ -6815,6 +6843,7 @@ event:
                            window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet"|"all",
                            limits: { five_hour, seven_day, seven_day_opus, seven_day_sonnet:
                                      number (1–100) | null },
+                           codexPercent: number (1–100) | null,
                            autoResume: boolean,
                            autoResumeBy: null | { by: "user"|"agent", at: number,
                                                   reason: string|null } } },
@@ -6834,7 +6863,8 @@ event:
               modelSource: null | { model: source, effort: source },
               pr: null | { number: number, url: string|null, repo: string|null,
                            title: string|null, status: string, label: string|null },
-              origin: null | origin }],
+              origin: null | origin,
+              runtime: "claude" | "codex" }],
   pendingSpawns: [{ id, title: string|null, at: number, origin: null | origin,
                    starting?: true }],
   openTasks: [{ id, at: number, status: "new"|"read", text: string,
@@ -7006,6 +7036,18 @@ An orchestrator's message to a worker reaches the worker wrapped in
 both come back as their own event kinds, `orchestrator-inbox` and
 `orchestrator-message` (see the event table), never as `user`.
 
+**Whose usage counts.** Claude and Codex are different accounts with different
+windows, so the cutoff watches each only while it is being spent: **Claude's windows
+while the orchestrator or any open worker runs on Claude, Codex's while any of them runs
+on Codex** (`runtimes` in the payload). A Codex window past its line never pauses an
+all-Claude orchestration, and a Claude window never pauses an all-Codex one. Codex's
+windows are `runtimes.codex.windows` on `GET /api/quota`; here they are typed
+**`codex:primary`** and **`codex:secondary`**, and since their lengths are the plan's
+(one 30-day window on a Free account), every one is held to the single threshold
+**`usageStop.codexPercent`** (default `90`; `null` leaves Codex out), whatever `window`
+says. A Codex trip's reason reads `Codex 30-day usage at 95%, past the 90% cutoff`, and
+auto-resume waits for that window's `resetsAt` the same way.
+
 **The usage cutoff.** When `settings.usageStop.enabled` and the window's
 `usedPercent` (from `GET /api/quota`) reaches `percent` — or, with `window: "all"`,
 when *any* window reaches its own threshold in `limits` (a `null` threshold leaves
@@ -7048,8 +7090,27 @@ makes a test worker, as a test orchestrator does.
 becomes a task with `runtime: "codex"` and starts a **Codex worker**; its model and effort
 are the task's or Codex's default, never a Claude model the orchestrator named or
 Settings fixes for workers. Its worker id — in `spawn`'s reply, `list_workers` and the
-inbox — is the one Codex minted. The orchestrator itself still runs on Claude:
-`POST /api/sessions` refuses `orchestrator: true` with `runtime: "codex"` (`400`).
+inbox — is the one Codex minted.
+
+**On Codex.** An orchestrator can run on Codex: `POST /api/sessions` with
+`runtime: "codex", orchestrator: true`, or `PUT …/orchestrator {enabled: true}` on an
+existing Codex session. What differs:
+
+- **Its id.** A new one is marked under a placeholder and re-keyed to Codex's thread id
+  before the create answers. For a few minutes `GET …/orchestrator` still answers for the
+  placeholder with the re-keyed payload (its `orchestratorId` is the real id). That is
+  for its own MCP server's tool listing, which Codex sends with no thread id. Nothing else
+  takes it.
+- **Its own model** is the composer's, from Codex's list. `orchestratorModel` and
+  `orchestratorEffort` name Claude's models and are not applied to it.
+- **Its workers run on Codex** unless `spawn` says `runtime: "claude"`. A Codex worker's
+  `model` and `effort` are checked against `GET /api/models?runtime=codex` (an unknown
+  one is `400` listing Codex's ids), and `workerModel`/`workerEffort` do not apply to it.
+- **Its cutoff** watches Codex's windows, as *Whose usage counts* says.
+- **A move** resumes the thread in the new directory: `thread/resume {threadId, cwd}`
+  moved it (measured on 0.172.0: commands ran there, files were written there, and the
+  rollout's next `turn_context` names it). It needs the thread's rollout instead of a
+  Claude transcript; see the move route.
 
 A task is never silently lost. An open one — `new`, or `read` but not started — is never
 trimmed from the inbox. Taking it back (below) makes it a draft again, and so does
@@ -7251,7 +7312,9 @@ asks for it with its `move_session` MCP tool, which posts here with its own id.
   So the target does not decide whether it can resume; where the transcript is does. The
   bridge makes the same search, one directory deep under its projects directory, and
   refuses with `409 {error}` naming that directory when the transcript is not there.
-  Nothing is copied or edited.
+  Nothing is copied or edited. **A Codex orchestrator** is resumed by thread id with
+  the new `cwd`, which Codex honours; it needs its rollout on disk instead, and is
+  `409 {error: "its Codex rollout is not on disk…"}` without one.
 - **It is bridge state, not a transcript edit.** The orchestrator record keeps
   `location.override` `{cwd, from, at}`, and from then on the session summary's `cwd` is
   the target, and so is every route that resumes the session: send, handoff, a nudge,
@@ -7293,15 +7356,19 @@ asks for it with its `move_session` MCP tool, which posts here with its own id.
 #### `GET /api/sessions/:id/orchestrator/workers` · `GET …/orchestrator/usage`
 
 The first is `{workers, pendingSpawns, maxRunning, paused}` from the payload. The
-second is `{windows: [{type, usedPercent, usedPercentAt, resetsAt, status}],
-cutoff: settings.usageStop|null, paused}`.
+second is `{windows: [{type, usedPercent, usedPercentAt, resetsAt, status, label?}],
+cutoff: settings.usageStop|null, paused, runtimes: ["claude"|"codex"]}`: the windows the
+cutoff is judged against (*Whose usage counts*), Codex's typed `codex:*` with a `label`
+such as `"Codex 30-day"`, and `runtimes`, which says whose they are — as in the payload.
 
 #### The tool routes
 
 All `POST`, all refused remotely, all with the orchestrator's id in the path:
 `spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
-effort?, task?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
-position, running, maxRunning}`, either with **`model`, `effort`** (string or null — what
+effort?, task?, runtime?: "claude"|"codex"}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
+position, running, maxRunning}`, either with **`runtime`** when the worker runs on Codex
+(left out, `runtime` is the orchestrator's own; a task's is the user's and wins; an
+unknown one is `400`), and either with **`model`, `effort`** (string or null — what
 the worker runs, or will run, with), **`modelSource {model, effort}`** and
 **`overridden {model: string|null, effort: string|null}`** — what the orchestrator asked
 for that a fixed `workerModel`/`workerEffort` replaced, `null` where nothing was (see

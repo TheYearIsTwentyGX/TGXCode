@@ -29,6 +29,12 @@
 //     section that opens "None." has no findings, whatever bullets of things it
 //     checked follow. When nothing parses, `findings` is empty and `raw` is the
 //     review, which the UI then shows whole.
+//   * **A Codex review is read as Codex writes it.** A `runtime: "codex"` gate
+//     reviews with Codex's own reviewer (bridge/codex/review.js), whose findings
+//     are `- [P1] Title — path:line` lines. Those are findings by priority — P0
+//     and P1 critical, P2 a warning, P3 a note — and a rollout read back from disk
+//     takes its verdict from the structured `review_output` Codex kept beside
+//     the text, since the `VERDICT:` line was the adapter's and is not on disk.
 //   * **Read-only toward GitHub.** Nothing here posts or labels; that is
 //     pr-gate's, and a test schedule's guard lives there.
 
@@ -40,6 +46,8 @@ const pulls = require('./pulls');
 const prStore = require('./pr-store');
 const { verdictOf } = require('./schedule');
 const { parseLines } = require('./transcript');
+const codexReview = require('./codex/review');
+const codexReader = require('./runtimes/codex/transcript');
 const { broadcast } = require('./events');
 
 const STORE_FILE = path.join(CACHE_DIR, 'pr-reviews.json');
@@ -139,6 +147,43 @@ function splitItems(lines, severity, mode = null) {
     });
 }
 
+const CODEX_SEVERITY = { 0: 'critical', 1: 'critical', 2: 'warning', 3: 'note' };
+
+/**
+ * Codex's reviewer's findings, `- [P#] Title — path:2-2` and the indented body
+ * under each, with the prose before the first as the summary. Null when the text
+ * has no `[P#]` line, so another reviewer's text goes the usual way.
+ */
+function codexFindings(lines) {
+    const tag = /^[ \t]*(?:[-*][ \t]+)?\[P([0-3])\][ \t]*(.+)$/;
+    if (!lines.some(l => tag.test(l))) return null;
+    const findings = [];
+    const before = [];
+    let cur = null;
+    for (const line of lines) {
+        const m = tag.exec(line);
+        if (m) {
+            cur = { p: Number(m[1]), head: m[2].trim(), lines: [line] };
+            findings.push(cur);
+            continue;
+        }
+        if (verdictOf(line)) { cur = null; continue; }
+        if (cur) cur.lines.push(line);
+        else before.push(line);
+    }
+    const summary = before.filter(l => !/^\s*Review comments?:?\s*$/i.test(l)).join('\n').trim() || null;
+    return {
+        summary,
+        findings: findings.map((f) => {
+            const body = f.lines.join('\n').trim();
+            // `Title — /abs/path/file.js:2-2`: the location is the finding's file.
+            const title = f.head.replace(/[ \t]+[—–-][ \t]+\S*\.[A-Za-z0-9]{1,8}:\d+(?:[-–]\d+)?[ \t]*$/, '')
+                .replace(/`/g, '').trim();
+            return { severity: CODEX_SEVERITY[f.p], title, ...locationOf(f.head), body };
+        }),
+    };
+}
+
 /**
  * A review's text as `{verdict, title, scope, summary, findings[], raw}`.
  *
@@ -192,6 +237,14 @@ function parseReview(text) {
     // steps beside a bulleted list of findings), the bullets.
     // Last, `code-review`'s own restatement: one line per finding, starting
     // with its location — "src/a.ts:12 — summary".
+    // Codex's reviewer: tagged by priority, which is the severity.
+    const codex = !sections.some(sec => sec.kind !== 'summary') ? codexFindings(lines) : null;
+    if (codex) {
+        out.findings.push(...codex.findings);
+        if (!out.summary) out.summary = codex.summary;
+        if (!out.verdict) out.verdict = codexReview.reviewVerdict(raw);
+        return out;
+    }
     if (!sections.some(sec => sec.kind !== 'summary')) {
         const located = (mode) => splitItems(lines, 'warning', mode).filter(f => f.file);
         let found = located('strong');
@@ -234,8 +287,31 @@ function pickGateComment(json) {
     };
 }
 
+/**
+ * A Codex review as the gate posted it, from a rollout's bytes: the last
+ * assistant message, with the verdict line the adapter added at the time, now
+ * read from the structured `review_output` of the last `ExitedReviewMode`.
+ */
+function codexReviewText(buf) {
+    let text = '';
+    let output = null;
+    for (const e of codexReader.parseLines(buf).entries) {
+        const p = e && e.payload;
+        if (!p) continue;
+        if (e.type === 'event_msg' && p.type === 'item_completed' && p.item && p.item.type === 'ExitedReviewMode') {
+            output = p.item.review_output || null;
+        } else if (e.type === 'response_item' && p.type === 'message' && p.role === 'assistant') {
+            const t = (p.content || []).map(b => (b && (b.type === 'output_text' || b.type === 'text') ? b.text || '' : ''))
+                .join('').trim();
+            if (t) text = t;
+        }
+    }
+    return output ? codexReview.withVerdict(text, output) : text;
+}
+
 /** The last thing the main conversation said, from a transcript's bytes. */
-function lastAssistantText(buf) {
+function lastAssistantText(buf, file = null) {
+    if (file && codexReader.isRollout(file)) return codexReviewText(buf);
     let last = '';
     for (const e of parseLines(buf).entries) {
         if (!e || e.isSidechain || e.type !== 'assistant') continue;
@@ -407,7 +483,7 @@ function localReview(rec, key) {
     if (!reading.has(rec.sessionId)) {
         reading.add(rec.sessionId);
         fs.promises.readFile(file).then((buf) => {
-            const text = lastAssistantText(buf);
+            const text = lastAssistantText(buf, file);
             local.set(rec.sessionId, { size: buf.length, review: text ? parseReview(text) : null });
             broadcast('pr-reviews-changed', { keys: [key] });
         }).catch(() => {

@@ -23,7 +23,13 @@
 //                                (bridge/codex/plan.js: on 0.172.0 it is only the
 //                                code-mode script that called it)
 //   SubAgentActivity items       a spawned agent, drawn as Claude's `Agent` row
+//   EnteredReviewMode            a review's instructions, as the turn's `user`
+//                                message (`origin: "review"`); ExitedReviewMode is
+//                                not drawn, since the message after it repeats it
 //   compacted                    `compact`
+//   our own envelopes            `handoff`, `orchestrator-inbox` and
+//                                `orchestrator-message`, as the Claude reader
+//                                draws them (bridge/envelopes.js)
 //
 // Decided, all of it measured on 0.172.0 against test/fixtures/codex/:
 //
@@ -62,6 +68,12 @@
 //   finishes it. The agent's own rollout (a thread with `parent_thread_id`) is
 //   its transcript: it opens with a copy of the parent's history, which
 //   `ownLines` skips (`subagent_history_start_ordinal`).
+// - **What the bridge wrote is not what the person said.** A handoff, an
+//   orchestrator's nudge and its message to a worker all reach Codex as the text
+//   of a user turn, because that is the only way in. They are drawn as their own
+//   cards and kept out of `userMessages` and `lastUserTs` — which the rail sorts
+//   on — exactly as the Claude reader keeps them, with the same parsers. A Codex
+//   worker showed each instruction as raw `<orchestrator-message>` markup before.
 // - **`.jsonl.zst` is read when Node can.** `zlib.zstdDecompressSync` is Node
 //   22.15+. Older Node reads a compressed rollout as nothing, rather than throwing.
 
@@ -74,6 +86,7 @@ const { projectRootOf, worktreeNameOf, branchOf } = require('../../places');
 const items = require('../../codex/items');
 const plans = require('../../codex/plan');
 const { parseSuggestion } = require('../../mcp-calls');
+const { parseHandoff, parseOrchestratorInbox, parseOrchestratorMessage } = require('../../envelopes');
 
 // The rollout's file name: `rollout-<timestamp>-<uuid>.jsonl[.zst]`.
 const ROLLOUT_RE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(\.zst)?$/i;
@@ -202,6 +215,39 @@ function reasoningText(payload) {
         .join('\n\n');
 }
 
+/**
+ * One of the bridge's own envelopes, read off a user message's text:
+ * `{kind, fields}` with the event kind it is drawn as, or null for words a person
+ * wrote. The parsers are bridge/envelopes.js's, so both readers agree on what a
+ * handoff looks like; each is a real parse, since a person can quote a tag.
+ */
+function envelopeOf(text) {
+    const t = String(text || '');
+    if (!t.trimStart().startsWith('<')) return null;
+    const handoff = parseHandoff(t);
+    if (handoff) return { kind: 'handoff', fields: handoff };
+    const inbox = parseOrchestratorInbox(t);
+    if (inbox) return { kind: 'orchestrator-inbox', fields: inbox };
+    const msg = parseOrchestratorMessage(t);
+    if (msg) return { kind: 'orchestrator-message', fields: msg };
+    return null;
+}
+
+/**
+ * What a review was asked to do, from its `EnteredReviewMode` item: the wire's
+ * `review` text, or on disk its `target` — a `custom` target's instructions, or
+ * a sentence for the other three kinds. Null when it says nothing usable.
+ */
+function reviewAsked(item) {
+    if (typeof item.review === 'string' && item.review.trim()) return item.review;
+    const t = item.target || {};
+    if (t.type === 'custom' && typeof t.instructions === 'string' && t.instructions.trim()) return t.instructions;
+    if (t.type === 'baseBranch' && t.branch) return `Review the changes against the base branch ${t.branch}.`;
+    if (t.type === 'commit' && t.sha) return `Review commit ${String(t.sha).slice(0, 12)}${t.title ? ` (${t.title})` : ''}.`;
+    if (t.type === 'uncommittedChanges') return 'Review the uncommitted changes.';
+    return null;
+}
+
 /** A real person's message, by the rules above: `{text, images}` or null. */
 function personMessage(payload) {
     if (!payload || payload.type !== 'message' || payload.role !== 'user') return null;
@@ -321,6 +367,16 @@ function scanMeta(file) {
             if (p.role === 'assistant') { meta.assistantMessages++; continue; }
             const person = personMessage(p);
             if (!person) continue;
+            // Ours, not theirs: see the header. A handoff is still counted as one.
+            const env = envelopeOf(person.text);
+            if (env) {
+                if (env.kind === 'handoff') {
+                    meta.handoffs++;
+                    if (ts) meta.lastHandoffTs = ts;
+                    meta.lastHandoffFrom = env.fields.fromTitle || env.fields.from || meta.lastHandoffFrom;
+                }
+                continue;
+            }
             meta.userMessages++;
             if (ts) meta.lastUserTs = ts;
             const said = person.text.slice(0, 400);
@@ -331,6 +387,17 @@ function scanMeta(file) {
         if (o.type === 'event_msg' && p.type === 'item_completed') {
             if (ts) meta.lastTs = ts;
             const item = items.fromRollout(p.item);
+            // What a review was asked is its opening message, and its title.
+            const asked = item && item.type === 'enteredReviewMode' ? reviewAsked(item) : null;
+            if (asked) {
+                meta.userMessages++;
+                if (ts) meta.lastUserTs = ts;
+                const said = asked.slice(0, 400);
+                if (!meta.firstPrompt) meta.firstPrompt = said;
+                meta.lastPrompt = said;
+                continue;
+            }
+            if (item && (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode')) continue;
             if (item && items.toolEvent(item)) meta.toolCalls++;
             // A suggest_session call is a task on the board, as a Claude one is.
             const card = item && item.type === 'mcpToolCall'
@@ -573,6 +640,12 @@ function buildEvents(entries, ctx = {}) {
             if (p.type === 'message' && p.role === 'user') {
                 const person = personMessage(p);
                 if (!person) continue;
+                const env = envelopeOf(person.text);
+                if (env) {
+                    events.push({ id: messageId(p.id) || `${env.kind}:${e.ordinal != null ? e.ordinal : ts}`,
+                        kind: env.kind, ts, ...env.fields });
+                    continue;
+                }
                 const { text, command } = asCommand(person.text, skillsAfter(list, i));
                 events.push({
                     id: messageId(p.id) || `user:${e.ordinal != null ? e.ordinal : ts}`, kind: 'user', ts,
@@ -680,6 +753,17 @@ function buildEvents(entries, ctx = {}) {
                 }
                 continue;
             }
+            // A review (`review/start`, the PR gate's path on Codex) has no user
+            // message of its own on disk: what it was asked is this item's
+            // `review`, so that is the turn's opening message. Its findings are the
+            // assistant message that follows, so the exit item is not drawn twice.
+            const asked = item.type === 'enteredReviewMode' ? reviewAsked(item) : null;
+            if (asked) {
+                events.push({ id: `${item.id || `review:${e.ordinal}`}:review`, kind: 'user', ts,
+                    text: asked, images: [], files: [], command: null, origin: 'review', parent: null });
+                continue;
+            }
+            if (item.type === 'exitedReviewMode') continue;
             // A question asked without waiting exists only as an item.
             if (item.type === 'agentMessage' && item.delivery === 'async' && item.text) {
                 events.push({ id: `${item.id}:text`, kind: 'assistant', ts, text: item.text, model });
@@ -813,7 +897,7 @@ function todoProgress(file) {
 }
 
 module.exports = {
-    readFile, parseLines, scanMeta, buildEvents, inherited, isTurnStart, personMessage,
+    readFile, parseLines, scanMeta, buildEvents, inherited, isTurnStart, personMessage, envelopeOf,
     idFromName, isRollout, modeOf, ownLines, branchPoint, todoList, todoProgress, messageId,
     ROLLOUT_RE, CAN_ZSTD,
 };

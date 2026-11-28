@@ -56,7 +56,7 @@ import { holdPaneInsets, releasePaneInsets } from './transcript/layout.js';
 import { toolSummary } from './transcript/tools.js';
 import { toolDisplayName } from './tool-name.js';
 import { sendMessage } from './composer/send.js';
-import { onQuotaChange, quotaWindows } from './quota.js';
+import { codexQuotaWindows, onQuotaChange, quotaWindows } from './quota.js';
 import { clockAt, goTo, inboxList, paintOrchestrator, resume, settings } from './orchestrator.js';
 import {
     STAGES, blockedOn, lastReport, mergeOrder, needsYou, openDecisionFor, progress, shortAge,
@@ -269,7 +269,11 @@ function pageTree(p) {
 function head(p) {
     const g = progress(p, { prStatusOf: freshPr });
     const goal = p.summary && p.summary.goal;
-    const meters = usageMeters(p.settings.usageStop, quotaWindows());
+    // Each account's meters while something here spends it: Claude's for a Claude
+    // orchestrator or worker, Codex's for a Codex one — what the cutoff watches.
+    const rts = p.runtimes || ['claude'];
+    const meters = usageMeters(p.settings.usageStop, rts.includes('claude') ? quotaWindows() : null,
+        rts.includes('codex') ? codexQuotaWindows() : []);
     // The counts are written on one line, separators and all: htm drops
     // whitespace that holds a newline, which is how "finished" and its "·" once
     // ran together.

@@ -764,7 +764,7 @@ export function wireNewDialog() {
         n.addEventListener('click', closeNew);
     }
     closeOnClickOutside(dom.newScrim, closeNew);
-    dom.newRuntime.addEventListener('change', () => paintNewRuntime());
+    dom.newRuntime.addEventListener('change', () => { paintNewRuntime(); paintGateFields(); });
 
     dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
     dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));

@@ -14,9 +14,10 @@
 > started and driven through `bridge/runtimes/codex/process.js`. Phase 4's
 > conversation features (fork, branch, checklist, subagents, the skill palette) and
 > its quota and version are built, as are the MCP server, dev-server attribution,
-> drafts, schedules and workers. Search, spend, images and archived threads read Codex
-> too; see *Reading beside the transcript* under Phase 4, and the rest of Phase 4 for
-> what is left of it. Phase 5's config surfaces are built; see under Phase 5.
+> drafts, schedules, workers, orchestrators and the PR gate (*As built — orchestrators
+> on Codex*, *As built — the PR gate on Codex*). Search, spend, images and archived
+> threads read Codex too; see *Reading beside the transcript* under Phase 4, and the
+> rest of Phase 4 for what is left of it. Phase 5's config surfaces are built; see under Phase 5.
 
 ## Why
 
@@ -384,8 +385,9 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
 - Not done here, and Phase 4's: drafts and schedules carry no `runtime`, so the
   Start dialog offers the runtime picker to Start alone; an orchestrator cannot run
   on Codex (its role is keyed by an id the create route mints before Codex does).
-  Phase 4 has since given drafts and schedules a `runtime` and let workers run on
-  Codex; see its *Done in part*.
+  Phase 4 has since given drafts and schedules a `runtime`, let workers run on
+  Codex, and let orchestrators run on it too; see its *Done in part* and *As built —
+  orchestrators on Codex*.
 
 ### Phase 4 — The features around the conversation
 
@@ -531,37 +533,110 @@ workers, the PR gate measured) — what was built and what it found:
   create route's wait moved out of it). A scheduled Codex run's `VERDICT:` comes from
   the turn's last `agentMessage`, which is what the adapter already made the turn's
   result text.
-- **Workers can run on Codex; orchestrators cannot yet.** A task from a Codex draft
+- **Workers can run on Codex.** A task from a Codex draft
   spawns a Codex worker, re-keyed to the minted id on the pool's `minted` (in the same
   tick, so the status and the turn that follow find it); its model is the task's or
-  Codex's default, never a Claude one. `spawn_worker` itself has no `runtime` argument,
-  so an orchestrator cannot choose Codex for a worker of its own idea. What an
-  orchestrator *on* Codex still needs: its brief names its own session id, which for a
-  new thread is the placeholder, and its `tools/list` reads its settings by that id
-  before any call has said the real one; the store's orchestrator record would need
-  re-keying as a worker's now is.
+  Codex's default, never a Claude one. (Orchestrators on Codex, and `spawn_worker`'s
+  `runtime`, came after; see *As built — orchestrators on Codex*.)
 
-**The PR gate's `review/start` was tried, and it is not wired in.** Measured on
-0.172.0 against a scratch repo: `review/start {threadId, target: {type: "baseBranch",
-branch: "main"}}` answers at once with a turn, then `enteredReviewMode`, a userMessage
-Codex writes itself ("Review the code changes against the base branch 'main'. The merge
-base commit … Run `git diff <merge-base>`…"), the commands it ran, `exitedReviewMode
-{review}` and an `agentMessage` with the same text, ending `completed` in about 12 s.
-The review is prose with findings tagged by priority (`- [P1] Restore addition in
-`add` — <path>:2-2`) and **no verdict line**. Three things stand between that and the
-gate, none of them large but all of them the gate's design rather than this slice's:
+**As built — orchestrators on Codex.** Marking an *existing* Codex session an
+orchestrator already nearly worked: `PUT …/orchestrator` had no runtime check, the
+recycle resumed the thread with `--role orchestrator` and its real id, and `ensure` took
+the runtime from the index, so nudges reached it. What did not work was narrower than
+"orchestrators are Claude-only", and each part was fixed where it was:
 
-1. `baseBranch` reviews the *checkout's* HEAD against the merge base. The gate runs a
-   PR's review in the schedule's `cwd` and lets the prompt fetch the PR; the native
-   review would need the PR head checked out first, in a worktree as
-   `bridge/pr-reviews.js` already makes for its own button.
-2. It is a different request from `turn/start`, so the process contract would need a
-   queue entry that is a review rather than a message.
-3. Its verdict would have to be read from the priorities (`P0`/`P1` → BLOCK, `P2` →
-   CONCERNS, none → CLEAN) instead of `verdictOf`.
+- **A new one is re-keyed like a worker.** The create route marks it under the
+  placeholder, as its role decides its first start, and `Orchestrators#rekeyOrchestrator`
+  moves the record on `minted`. The placeholder goes in `_removed`, so another bridge's
+  merge cannot write it back. The route already waited on the mint, so it answers with
+  the real id. The brief names the session id only once it is real; nothing needed it
+  said, since mcp.js learns it per call.
+- **Its own model is the composer's.** `orchestratorModel` and `orchestratorEffort` are
+  Claude aliases, and `ownModel` forced them onto the Codex process. A Codex turn on a
+  model the account cannot use fails at its *end*. They now apply to a Claude
+  orchestrator only, and the page says so instead of drawing the Claude picker.
+- **`spawn_worker` takes `runtime`**, defaulting to the orchestrator's own; a task's is
+  the user's and wins. A Codex worker's model is checked against `model/list` (cached),
+  and Settings' worker-model policy, which names Claude's models, does not apply to it.
+  For a Codex orchestrator the tool's `model` has no Claude enum, or every Codex id would
+  be refused before the bridge could check it.
+- **The cutoff watches the account being spent.** `windowsFor(o)` gives Claude's windows
+  while the orchestrator or an open worker runs on Claude, and Codex's (`codex:primary`,
+  `codex:secondary`) while any runs on Codex. Neither account can pause what does not
+  spend it: a Free account at 95% of its 30-day window used to be able to pause nothing,
+  and must not start pausing all-Claude orchestrations. Codex's windows are the plan's
+  lengths, so they share one threshold, `usageStop.codexPercent` (default 90). The quota's
+  `changed` event checks the cutoff, and auto-resume waits for the Codex window's
+  `resetsAt` like a Claude one.
+- **`move_session` works** (measured; see the table below). `resumeFinds` asks for the
+  thread's rollout instead of a transcript under `~/.claude/projects`. The brief's line
+  about being stranded by a `cd` is Claude's alone: a Codex thread's cwd does not follow
+  a command's `workdir`.
+- **`tools/list` has no thread id**, so the spawn_worker description's policy line could
+  not be read by id on a brand-new thread. A new orchestrator's server gets
+  `--provisional <placeholder>`, and `GET …/orchestrator` answers for that placeholder for
+  ten minutes after the re-key. It is memory only, and for that one read: every call still
+  waits for its own `_meta.threadId`.
+- **The envelopes.** The Codex reader now reads a nudge, an orchestrator's message and a
+  handoff as their own events, not as the person's words. That was also wrong for every
+  Codex worker since #266.
 
-Until then a Codex gate is a `runtime: "codex"` schedule whose prompt is written out
-rather than a Claude skill's name, and it ends on a `VERDICT:` line like any other.
+`test/codex-orchestrator.test.js` pins each part, including the cutoff in both directions.
+
+**The PR gate's `review/start` was tried** on 0.172.0 against a scratch repo, then wired
+in; see *As built — the PR gate on Codex* below. The first measurement:
+`review/start {threadId, target: {type: "baseBranch", branch: "main"}}` answers at once
+with a turn, then `enteredReviewMode`, a userMessage Codex writes itself ("Review the
+code changes against the base branch 'main'. The merge base commit … Run `git diff
+<merge-base>`…"), the commands it ran, `exitedReviewMode {review}` and an `agentMessage`
+with the same text, ending `completed` in about 12 s. The review is prose with findings
+tagged by priority (`- [P1] Restore addition in `add` — <path>:2-2`) and **no verdict
+line**.
+
+**As built — the PR gate on Codex.** A `runtime: "codex"` schedule gated on `open-prs`
+reviews each pull request with **`review/start` and a `custom` target**, not with
+`baseBranch` and not as an ordinary turn. The three obstacles the first measurement
+listed went this way:
+
+1. **The range, without a checkout.** `baseBranch` reviews the checkout's HEAD against
+   a merge base. Every open PR's head would have had to be checked out into a worktree
+   under the user's repository: up to three at a time per sweep, fork heads included,
+   with cleanup and with dirty or in-use trees to handle. That is the cost
+   `bridge/pr-reviews.js`'s Fix button pays for one PR at a person's request, not for a
+   nightly sweep of every PR. The schema has a fourth target, `custom {instructions}`
+   ("equivalent to the old free-form prompt"). The gate already resolves exactly
+   `mergeBase..head` (`prRange`, which fetches a fork's head to `refs/tgxcode/pr/N`).
+   So `bridge/codex/review.js` writes instructions naming those two commits, `git diff
+   <mb> <head>`, and `git show <head>:<path>` for a file as the PR has it. That is the
+   same fidelity as a Claude gate, which also reviews from git objects in the
+   schedule's `cwd`. **Measured** (fixture `review`): a `custom` target enters review
+   mode exactly as `baseBranch` did, with `enteredReviewMode`, the reviewer's own
+   commands, `exitedReviewMode {review}` and `[P1]` findings. The schedule's prompt,
+   filled, is appended as further guidance, so it is not silently dropped.
+2. **A queue entry that is a review.** `Runner#send(text, files, {review})` and
+   `pool.create({review})`. The adapter sends it as `review/start` under its own `cx_`
+   id, and the reply names the turn as `turn/start`'s does. A review is never handed
+   over to a running turn, and neither is anything queued behind one. It is refused,
+   before it is queued, by a runtime without `reviews` (Claude).
+3. **The verdict from the priorities.** Any P0 or P1 is `BLOCK`, any P2 `CONCERNS`, and
+   otherwise `CLEAN`: Codex calls P3 a nit. The adapter appends `VERDICT: X — mapped by
+   TGXCode from Codex's priorities (counts…)` to the review turn's result, so
+   `verdictOf`, the card, the comment, the label and the test guard are untouched. On
+   the wire the review is text only. **The rollout keeps it structured**: the
+   `ExitedReviewMode` item has `review_output {findings[{title, body, priority,
+   confidence_score, code_location}], overall_correctness, overall_explanation}`. So a
+   review read back after its process is gone (`bridge/pr-reviews.js`) takes its verdict
+   from the integers, and parses findings by priority (P0/P1 critical, P2 warning, P3
+   note).
+
+Rejected: running the existing review prompt as an ordinary Codex turn. That works, and
+#266 left it as the way. But it depends on the model remembering to end on a `VERDICT:`
+line, it cannot use a Claude skill's name, and it throws away the one thing review mode
+gives that a turn does not, which is a priority on every finding. The transcript shows
+the review's instructions as its opening message (`origin: "review"`) and title, since a
+review has no user message of its own on disk. `test/codex-review.test.js` pins all of
+this, including a `test` row reaching `postReviewToPr` with a `pulls` that fails the test
+if it is touched.
 
 **Reading beside the transcript.** What Phase 2 left reading a rollout with
 Claude's parsers, closed later; `test/codex-gaps.test.js` pins it, with `images`
@@ -651,7 +726,8 @@ quota). Measured on 0.172.0 with a scratch `CODEX_HOME`:
 | Fork | ✅ | `thread/fork` |
 | tgxcode MCP tools, suggestion cards, handoff | ✅ | `config.mcp_servers` |
 | Quota | ✅ | `account/rateLimits/*`, which is simpler than Claude's |
-| Scheduling, PR gate | ✅ | `runtime` on rows; `review/start` as an option |
+| Scheduling, PR gate | ✅ | `runtime` on rows; a Codex PR gate reviews with `review/start {custom}` and maps its priorities to `VERDICT:` |
+| Orchestrators | ✅ | Re-keyed on mint like a worker; workers default to Codex; the cutoff watches Codex's windows; moved by `thread/resume {cwd}` |
 | Worktrees | ✅ | Ours are plain git. A Codex session started in one just has that `cwd`. |
 | Global search | ✅ | The rollout through the Codex reader. A fork is searched for its own lines |
 | Images pane | ✅ | `input_image` in messages and tool outputs. A fork lists its own |
@@ -738,6 +814,9 @@ they affect; this is the index.
 | Plan turn? | Unchanged: a `plan` item carrying markdown, and nothing to approve. `collaborationMode.settings.model` is required. |
 | Which question tool? | Both are in the tool list in both modes. Plan mode plus a request by name gave the blocking one (`isBlocking: true`). Default mode never did, even by name, until `features.default_mode_request_user_input` was set in the thread `config`, and then it came with `isBlocking: false`. Unprompted, the model asked in plain text. |
 | Titles? | `thread/name/set` appends `{id, thread_name, updated_at}` to `session_index.jsonl`, and creates the rollout if no turn has yet. |
+| Does `thread/resume {threadId, cwd}` move a thread? (2026-11-28) | Yes. A fresh app-server resumed a thread started in `D` with `cwd: D/moved`: the reply's `cwd` and `thread.cwd` were the new directory, `pwd` printed it, a file the turn wrote landed there and not in `D`, and the rollout's next `turn_context` named it. So a Codex orchestrator can be moved. |
+| Does `review/start` take a `custom` target in review mode? (2026-11-28) | Yes, fixture `review`. Instructions naming `<mb>..<head>` and `git show <head>:<path>`, with nothing checked out: `enteredReviewMode`, the reviewer's `git diff`, `exitedReviewMode {review}` with a `[P1]` finding, and the same text as the last `agentMessage`. The `turn/started` id differs from the reply's and `turn/completed`'s (`rootTurnId`). On disk, `EnteredReviewMode` carries `target` (not `review`) and `ExitedReviewMode` the structured `review_output`. The reviewer itself runs in a child thread with a rollout of its own (`source: {subagent: "review"}`, `parent_thread_id` the reviewed thread), which the index already files under its parent and never lists. |
+| Does Codex send the thread id on MCP `tools/list`? (2026-11-28) | No. A probe server got `tools/list` with `_meta: {progressToken: 0}` and nothing else, once per process start; `tools/call` carries `threadId` and `x-codex-turn-metadata.thread_id`. So anything read at listing time has to be keyed by what the bridge knew at spawn. |
 
 ## Still open
 

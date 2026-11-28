@@ -672,7 +672,14 @@ class Runner extends EventEmitter {
      * Returns the queue entry, so a caller can tell whether its message went
      * out immediately or is still waiting.
      */
-    send(text, attachments = []) {
+    send(text, attachments = [], { review = null } = {}) {
+        // A review is a turn the adapter starts with its own request rather than
+        // as a message (Codex's `review/start`, for the PR gate): `text` is only
+        // what its chip says. Refused before anything is queued by a runtime that
+        // has no such request, so a Claude session can never be handed one.
+        if (review && !this.adapter.reviews) {
+            throw new Error(`${this.adapter.product} cannot run a native review`);
+        }
         this.lastUsedAt = Date.now();
         // `text` stays a plain string and the files ride alongside it, rather than
         // the entry becoming a content-block array. Everything that already reads an
@@ -680,6 +687,7 @@ class Runner extends EventEmitter {
         // `dropped` a stop reports — reads `.text`, and all of it keeps working
         // untouched. Only _flushQueue knows these are here.
         const entry = { id: `q${++queueSeq}`, uuid: randomUUID(), text, at: Date.now(), attachments };
+        if (review) entry.review = review;
         // A card answered by the next turn (`followUp`) is answered by this one:
         // typing past a plan or a question is the reply to it.
         if (this.pendingPermission && this.pendingPermission.followUp) {
@@ -774,7 +782,14 @@ class Runner extends EventEmitter {
     _handOver() {
         if (!this._lifecycle || !this._pendingTools.size) return;
         if (!this.proc || !this.proc.stdin.writable || this._handshaking) return;
-        const waiting = this.queue.filter(q => !q.handed);
+        // A review is a turn of its own and cannot join a running one, so it waits
+        // for idle — and so does everything behind it, or the hand-over would put
+        // later messages ahead of it.
+        const waiting = [];
+        for (const q of this.queue) {
+            if (q.review) break;
+            if (!q.handed) waiting.push(q);
+        }
         if (!waiting.length) return;
         for (const entry of waiting) {
             // Before the write, for _flushQueue's reason: a bridge that dies
@@ -2739,7 +2754,7 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Create a brand-new session and deliver its first prompt. */
-    create({ cwd, model, effort, permissionMode, prompt, attachments = [], sessionId = randomUUID(), runtime }) {
+    create({ cwd, model, effort, permissionMode, prompt, attachments = [], sessionId = randomUUID(), runtime, review = null }) {
         // `sessionId` is for a caller that has to file the id somewhere before the
         // process starts — an orchestrator's worker, whose role decides the argv.
         const dir = resolveWorkdir(cwd);
@@ -2748,7 +2763,9 @@ class RunnerPool extends EventEmitter {
         // them and `userContent` has always known what to do with them; this was the
         // one caller that dropped them on the floor, so a session could not be
         // started with the screenshot that was the reason for starting it.
-        r.send(prompt, attachments);
+        // `review` makes the first turn a native review (Runner#send), which the
+        // PR gate asks of a Codex schedule; `prompt` is then its chip's text.
+        r.send(prompt, attachments, review ? { review } : undefined);
         return { sessionId, status: r.status() };
     }
 

@@ -494,6 +494,41 @@ const SCENARIOS = {
             + 'Run no commands yourself.');
     },
 
+    /**
+     * A native review of a range, through `review/start` with a `custom` target —
+     * what the PR gate sends for a `runtime: "codex"` schedule. The repo has a base
+     * commit and a branch with a planted bug on it; the instructions name the range
+     * the gate would have resolved, and nothing is checked out.
+     */
+    async review(r) {
+        const { execFileSync } = require('child_process');
+        const git = (...a) => execFileSync('git', ['-C', r.cwd, '-c', 'user.name=Fixture',
+            '-c', 'user.email=fixture@example.invalid', ...a], { encoding: 'utf8' }).trim();
+        git('init', '-q', '-b', 'main');
+        fs.writeFileSync(path.join(r.cwd, 'math.js'),
+            'function add(a, b) {\n    return a + b;\n}\n\nmodule.exports = { add };\n');
+        git('add', '.');
+        git('commit', '-qm', 'Add add()');
+        const base = git('rev-parse', 'HEAD');
+        git('checkout', '-qb', 'feature');
+        fs.writeFileSync(path.join(r.cwd, 'math.js'),
+            'function add(a, b) {\n    return a - b;\n}\n\nmodule.exports = { add };\n');
+        git('commit', '-qam', 'Tidy add()');
+        const head = git('rev-parse', 'HEAD');
+        git('checkout', '-q', 'main');
+        await r.init();
+        await r.account();
+        const free = { approvalPolicy: 'never', sandbox: 'read-only' };
+        const t = await r.startThread(free);
+        const done = r.waitFor('turn/completed', (p) => p.threadId === t.id, 300000);
+        await r.rpc.request('review/start', { threadId: t.id, target: { type: 'custom', instructions:
+            `Review pull request #7 ("Tidy add()", branch feature into main): the commits `
+            + `${base.slice(0, 12)}..${head.slice(0, 12)}. Run \`git diff ${base} ${head}\` to see `
+            + `them. The working tree is not the pull request's head; read a file as the pull `
+            + `request has it with \`git show ${head}:<path>\`.` } });
+        await done;
+    },
+
     async plan(r) {
         await r.init();
         await r.account();

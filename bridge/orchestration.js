@@ -58,6 +58,9 @@ const {
     spawnOptsFromTask, isOpenTask, resolveWorkerModel, CHOOSE,
 } = require('./orchestrators');
 const models = require('./models');
+const runtimes = require('./runtimes');
+const codexModels = require('./codex/models');
+const { CODEX_WINDOW_PREFIX } = require('./orchestrators');
 const workerRead = require('./worker-read');
 const { settled } = require('./minted');
 const { inTemp } = require('./sessions');
@@ -74,6 +77,9 @@ let index = null;
 let flags = null;
 let prefs = null;
 let usage = null;
+// Codex's quota (bridge/codex/quota.js), for the cutoff of an orchestration that
+// runs anything on Codex. Optional so the tests can leave it out.
+let codexQuota = null;
 let normalizeMode = null;
 let sessionCwd = null;
 let tooManyCreates = null;
@@ -96,17 +102,29 @@ function init(deps) {
     ({ store, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates } = deps);
     drafts = deps.drafts || null;
     draftsChanged = deps.draftsChanged || (() => {});
+    codexQuota = deps.codexQuota || null;
     if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
     pool.roleOf = roleOf;
     pool.delegateFor = (id) => store.roleOf(id) === 'worker';
     // A Codex worker is spawned under a placeholder id, which Codex replaces at
     // `thread/start`. Re-keyed here, as the pool re-keys its runner and in the
     // same tick, so the status, turn and report that follow find their worker.
+    //
+    // An orchestrator on Codex is the same case one level up: it is marked under
+    // the create route's placeholder, because its role decides its first start,
+    // and Codex names the thread in that start. Its record moves too, and the
+    // placeholder is remembered for a few minutes for the one reader that can still
+    // ask by it: mcp.js's `tools/list`, which Codex sends with no thread id
+    // (measured on 0.172.0) and which reads the settings spawn_worker describes.
     if (typeof pool.on === 'function') {
         pool.on('minted', ({ from, to }) => {
             if (store.rekeyWorker(from, to)) {
                 const o = store.orchestratorOf(to);
                 if (o) emit(o.id);
+            }
+            if (store.rekeyOrchestrator(from, to)) {
+                noteAlias(from, to);
+                emit(to);
             }
         });
     }
@@ -117,6 +135,46 @@ function init(deps) {
         const mv = store.pendingMove(id);
         return !!mv && (mv.force || !r.hasBackground);
     };
+}
+
+// Placeholder -> minted id, for a Codex orchestrator re-keyed a moment ago. Memory
+// only and short-lived: the one caller is a `tools/list` sent as the process starts,
+// so an alias older than this is one nobody will ask for. A bridge restart loses
+// them, and a process it adopts listed its tools long before.
+const ALIAS_MS = 10 * 60_000;
+const aliases = new Map();
+
+function noteAlias(from, to) {
+    const now = Date.now();
+    for (const [k, v] of aliases) if (now - v.at > ALIAS_MS) aliases.delete(k);
+    aliases.set(from, { to, at: now });
+}
+
+/** The id an orchestrator is known by now, given one it may have been started under. */
+function resolveId(id) {
+    if (store.get(id)) return id;
+    const a = aliases.get(id);
+    return a && Date.now() - a.at <= ALIAS_MS && store.get(a.to) ? a.to : id;
+}
+
+/**
+ * Which runtime a session runs on: its live runner's, the one the pool was asked
+ * to start it on (a placeholder the index has not seen yet), or the index's.
+ */
+function runtimeOfSession(id) {
+    const r = pool.get(id);
+    if (r && r.runtime) return r.runtime;
+    const asked = pool._runtimeOf && pool._runtimeOf.get(id);
+    if (asked) return asked;
+    const s = index.summary(id);
+    return (s && s.runtime) || runtimes.DEFAULT;
+}
+
+/** The runtimes an orchestration spends: its own and its open workers', deduplicated. */
+function runtimesInPlay(o) {
+    const out = new Set([runtimeOfSession(o.id)]);
+    for (const w of o.workers) if (!w.closedAt) out.add(w.runtime || runtimeOfSession(w.id));
+    return [...out];
 }
 
 function userPrefs() {
@@ -149,6 +207,10 @@ function defaultSettings() {
 function ownModel(id) {
     const o = store.get(id);
     if (!o) return null;
+    // Claude aliases, from bridge/models.js. A Codex orchestrator runs on whatever
+    // its composer's picker says — Codex's own `model/list` — and forcing a Claude
+    // name onto it would start a turn Codex refuses at the end of it.
+    if (runtimeOfSession(id) !== runtimes.DEFAULT) return null;
     const { orchestratorModel: model, orchestratorEffort: effort } = o.settings;
     return model || effort ? { model: model || null, effort: effort || null } : null;
 }
@@ -168,12 +230,15 @@ function applyOwnModel(id) {
 }
 
 /** The model lines of the brief: the list, how to choose, and what the policy is. */
-function modelBrief(settings) {
+function modelBrief(settings, ownRuntime = runtimes.DEFAULT) {
     const s = settings || DEFAULT_SETTINGS;
     const fixed = (v, word) => (v && v !== CHOOSE ? `fixed by the user to ${v} — every worker runs at it `
         + `whatever you pass, and spawn_worker says when it overrode you` : `yours to choose per worker${word}`);
     return [
-        '- spawn_worker takes model and effort. The models you may name:',
+        `- spawn_worker takes runtime: "claude" (Claude Code) or "codex" (Codex). Left out, a worker runs on`,
+        `  ${ownRuntime === 'codex' ? 'Codex' : 'Claude Code'}, as you do. A task the user handed you keeps the runtime they picked.`,
+        ...codexModelLines(),
+        '- spawn_worker takes model and effort. The Claude models you may name:',
         ...models.guideLines().map(l => `  ${l}`),
         `  Efforts: ${models.EFFORTS.join(', ')}. Match the model to the work: a cheaper,`,
         '  faster one for mechanical work, the strongest for design, security or hard',
@@ -181,6 +246,18 @@ function modelBrief(settings) {
         `  Model: ${fixed(s.workerModel, s.workerDefaultModel ? ` (left out: ${s.workerDefaultModel})` : ' (left out: the default)')}.`,
         `  Effort: ${fixed(s.workerEffort, s.workerDefaultEffort ? ` (left out: ${s.workerDefaultEffort})` : ' (left out: the default)')}.`,
         '  A task the user handed you keeps the model and effort they picked.',
+        '  These settings and names are Claude\'s; a Codex worker takes Codex\'s.',
+    ];
+}
+
+/** What the brief says about a Codex worker's model: Codex's own list, never ours. */
+function codexModelLines() {
+    const list = codexModels.cached();
+    const ids = list && list.models.length ? list.models.map(m => `${m.id}${m.default ? ' (default)' : ''}`) : null;
+    return [
+        '- A Codex worker\'s model is one of Codex\'s own: '
+            + (ids ? `${ids.join(', ')}.` : 'leave it out for Codex\'s default.')
+            + ' Its effort is low, medium or high (some models offer more).',
     ];
 }
 
@@ -191,10 +268,22 @@ function modelBrief(settings) {
 function orchestratorBrief(id) {
     const add = String(userPrefs().addendum || '').trim();
     const o = store.get(id);
+    const rt = runtimeOfSession(id);
+    // A runtime that names its own sessions starts this one under a placeholder,
+    // so the id is said only once it is the real one. Nothing needs it said: the
+    // tools learn it from each call (`--session-from-call`).
+    const known = !runtimes.mintsId(rt) || !!index.summary(id);
+    const move = rt === runtimes.DEFAULT
+        ? ['- move_session moves you to another working directory when this turn ends:',
+            '  when the user asks, or when you find you are stuck in a worker\'s worktree. A',
+            '  `cd` there is what strands you, so read a worker\'s files by absolute path.']
+        : ['- move_session moves you to another working directory when this turn ends,',
+            '  when the user asks. Read a worker\'s files by absolute path.'];
     return [
         '# You are an orchestrator',
         '',
-        `You are an orchestrator session in TGXCode (session id ${id}). You coordinate`,
+        `You are an orchestrator session in TGXCode (${known ? `session id ${id}`
+            : 'your session id is the thread id Codex gave you'}). You coordinate`,
         'worker sessions rather than doing the work yourself: break the task down, start',
         'workers with spawn_worker (each gets its own git worktree by default), and steer',
         'them to done.',
@@ -214,17 +303,16 @@ function orchestratorBrief(id) {
         '- read_worker shows a worker\'s transcript. Start with mode digest; use tail or',
         '  full only when you need detail, and ask to have the worker summarise itself.',
         '- At most a few workers run at once; extra spawns are queued, not refused.',
-        ...modelBrief(o && o.settings),
+        ...modelBrief(o && o.settings, rt),
         '- get_usage shows the account\'s quota. If it passes the configured cutoff,',
         '  TGXCode stops everything: you and your workers mid-turn. Depending on the',
         '  settings it waits for the user, or wakes you once the window resets with a',
         '  note listing the workers that were cut off — tell those to carry on.',
         '  set_auto_resume switches that for you alone, when the user asks you to carry',
-        '  on (or not) by yourself; they see that you did, and why.',
+        '  on (or not) by yourself; they see that you did, and why. Claude\'s windows count',
+        '  while anything here runs on Claude, Codex\'s while anything runs on Codex.',
         '- close_worker when a worker is finished with, so it stops counting.',
-        '- move_session moves you to another working directory when this turn ends:',
-        '  when the user asks, or when you find you are stuck in a worker\'s worktree. A',
-        '  `cd` there is what strands you, so read a worker\'s files by absolute path.',
+        ...move,
         '- Items of kind task are work the user handed you, from a draft or the Start',
         '  dialog: a prompt plus the settings they chose. Fit it into your plan, brief and',
         '  merge order. Start it with spawn_worker passing task: <itemId> — its directory,',
@@ -310,6 +398,7 @@ function workerRow(w) {
         modelSource: w.modelSource || null,
         pr: workerPr(s),
         origin: w.origin || null,
+        runtime: w.runtime || runtimeOfSession(w.id),
     };
 }
 
@@ -349,6 +438,10 @@ function payload(id) {
     return {
         orchestratorId: id,
         enabled: true,
+        // The agent it runs on, and every agent this orchestration spends — which
+        // decides whose usage windows its cutoff watches (`windowsFor`).
+        runtime: runtimeOfSession(id),
+        runtimes: runtimesInPlay(o),
         settings: o.settings,
         paused: o.paused,
         summary: o.summary,
@@ -662,34 +755,59 @@ async function spawn(orchId, opts) {
     // Checked before a task is claimed, so a typo does not use one up. Only
     // what the orchestrator named: a task's own model is the user's pick.
     const asked = { model: opts.model || null, effort: opts.effort || null };
-    // A task handed over from a Codex draft runs on Codex. Its models are Codex's
-    // own (`model/list`), so the orchestrator's Claude names and Settings' worker
-    // model do not apply to it: the task's pick or Codex's default, nothing else.
+    // Which agent the worker runs on. A task's is the user's pick and wins, as its
+    // model does; otherwise what spawn_worker said, otherwise the orchestrator's own.
     const taskItem = opts.task ? store.item(orchId, String(opts.task)) : null;
-    const codexTask = !!(taskItem && taskItem.task && taskItem.task.runtime && taskItem.task.runtime !== 'claude');
-    if (codexTask) { asked.model = null; asked.effort = null; }
-    if (asked.model && !models.isModel(asked.model)) {
+    const taskRuntime = taskItem && taskItem.task ? taskItem.task.runtime || runtimes.DEFAULT : null;
+    const runtime = taskRuntime || (opts.runtime ? String(opts.runtime) : runtimeOfSession(orchId));
+    if (!runtimes.known(runtime)) {
+        throw refuse(400, `unknown runtime "${runtime}" — use claude or codex, or leave it out`);
+    }
+    // A Codex worker's models are Codex's own (`model/list`), so Settings' worker
+    // model, which names Claude's, does not apply to it. A Codex task keeps the
+    // user's pick, as before; anything else is checked against Codex's list, and
+    // when that list cannot be had the name is passed on for Codex to judge.
+    const codex = runtime !== runtimes.DEFAULT;
+    if (codex && taskRuntime) { asked.model = null; asked.effort = null; }
+    if (codex && (asked.model || asked.effort)) {
+        const list = await codexModels.list();
+        const ids = (list.models || []).map(m => m.id);
+        if (asked.model && ids.length && !ids.includes(asked.model)) {
+            throw refuse(400, `unknown Codex model "${asked.model}" — use one of: ${ids.join(', ')}, `
+                + 'or leave it out for Codex\'s default');
+        }
+        const efforts = list.efforts && list.efforts.length ? list.efforts : null;
+        if (asked.effort && efforts && !efforts.includes(asked.effort)) {
+            throw refuse(400, `unknown Codex effort "${asked.effort}" — use one of: ${efforts.join(', ')}, `
+                + 'or leave it out');
+        }
+    }
+    if (!codex && asked.model && !models.isModel(asked.model)) {
         throw refuse(400, `unknown model "${asked.model}" — use one of: ${models.MODEL_IDS.join(', ')}, `
             + 'or leave it out');
     }
-    if (asked.effort && !models.isEffort(asked.effort)) {
+    if (!codex && asked.effort && !models.isEffort(asked.effort)) {
         throw refuse(400, `unknown effort "${asked.effort}" — use one of: ${models.EFFORTS.join(', ')}, `
             + 'or leave it out');
     }
+    // The await above is the last one before the claim, so two calls naming the
+    // same task still cannot both start it: whichever resumes first claims it.
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
     // A task: the user's settings, filled in from the item. Claimed before the
     // first await so two calls naming the same task cannot both start it, and
     // given back if the start fails, so a worktree that could not be made does
     // not lose what the user wrote.
     const item = opts.task ? openTask(orchId, opts.task) : null;
     if (item) opts = spawnOptsFromTask(item.task, opts);
+    opts = { ...opts, runtime };
     // Decided now rather than at start, so a queued spawn's reply can say it too.
-    const chosen = codexTask
+    const chosen = codex
         ? resolveWorkerModel({ ...o.settings, workerModel: CHOOSE, workerEffort: CHOOSE,
-            workerDefaultModel: null, workerDefaultEffort: null }, asked, item.task)
+            workerDefaultModel: null, workerDefaultEffort: null }, asked, item ? item.task : null)
         : resolveWorkerModel(o.settings, asked, item ? item.task : null);
     opts = { ...opts, model: chosen.model, effort: chosen.effort, modelSource: chosen.source };
     const said = { model: chosen.model, effort: chosen.effort, modelSource: chosen.source,
-        overridden: chosen.overridden };
+        overridden: chosen.overridden, ...(codex ? { runtime } : {}) };
     if (!opts.prompt || !String(opts.prompt).trim()) throw refuse(400, 'prompt is required');
     if (item) store.settle(orchId, item.id, { status: 'resolved', outcome: 'spawned', by: 'orchestrator' });
     if (running(orchId) >= o.settings.maxRunning) {
@@ -795,7 +913,8 @@ async function place(orchId, opts, free, { o, base, title, sessionId, wantTree }
     // Filed before the spawn: the role is read off the store as `claude` starts.
     const runtime = opts.runtime || 'claude';
     store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree, origin: opts.origin || null,
-        model: opts.model || null, effort: opts.effort || null, modelSource: opts.modelSource || null });
+        model: opts.model || null, effort: opts.effort || null, modelSource: opts.modelSource || null,
+        runtime });
     try {
         pool.create({
             sessionId, cwd: startIn, prompt: String(opts.prompt),
@@ -991,17 +1110,49 @@ async function closeWorker(orchId, workerId, { archive = true } = {}) {
 // Usage
 // ---------------------------------------------------------------------------
 
-function windows() {
+function claudeWindows() {
     try { return usage.snapshot().windows || []; } catch { return []; }
+}
+
+/**
+ * Codex's windows, typed `codex:primary` / `codex:secondary` so they are never
+ * read as Claude's, each with its label ("30-day"), `resetsAt` in unix seconds as
+ * Claude's are. Empty when there is no reading: not installed, or signed out.
+ */
+function codexWindows() {
+    let snap = null;
+    try { snap = codexQuota ? codexQuota.snapshot() : null; } catch { snap = null; }
+    if (!snap || !Array.isArray(snap.windows)) return [];
+    return snap.windows.map(w => ({ ...w, type: `${CODEX_WINDOW_PREFIX}${w.type}`,
+        label: `Codex ${w.label || 'usage'}`.trim() }));
+}
+
+/**
+ * The usage windows this orchestration's cutoff is judged against: Claude's while
+ * anything in it runs on Claude, Codex's while anything runs on Codex. Usage is
+ * per account and the two are different accounts, so a Codex window past its line
+ * says nothing about an orchestration that never touches Codex, and the other way
+ * round: neither may pause what does not spend it.
+ */
+function windowsFor(o) {
+    if (!o) return claudeWindows();
+    const rts = runtimesInPlay(o);
+    return [
+        ...(rts.includes(runtimes.DEFAULT) ? claudeWindows() : []),
+        ...(rts.some(r => r === 'codex') ? codexWindows() : []),
+    ];
 }
 
 function usageFor(orchId) {
     const o = store.get(orchId);
     return {
-        windows: windows().map(w => ({ type: w.type, usedPercent: w.usedPercent, usedPercentAt: w.usedPercentAt,
-            resetsAt: w.resetsAt, status: w.status })),
+        windows: windowsFor(o).map(w => ({ type: w.type, usedPercent: w.usedPercent, usedPercentAt: w.usedPercentAt,
+            resetsAt: w.resetsAt, status: w.status, ...(w.label ? { label: w.label } : {}) })),
         cutoff: o ? o.settings.usageStop : null,
         paused: o ? o.paused : null,
+        // Whose windows those are: the cutoff's Claude half only counts when
+        // `claude` is here, its Codex half when `codex` is.
+        runtimes: o ? runtimesInPlay(o) : [runtimes.DEFAULT],
     };
 }
 
@@ -1018,17 +1169,16 @@ function ours(o) {
  * just after a restart still takes effect before its next spawn.
  */
 function checkUsage(onlyId = null) {
-    const ws = windows();
     for (const o of store.byId.values()) {
         if (o.paused) continue;
         if (onlyId ? o.id !== onlyId : !ours(o)) continue;
-        const trips = usageTrips(o.settings, ws);
+        const trips = usageTrips(o.settings, windowsFor(o));
         if (trips.length) pause(o.id, trips);
     }
 }
 
 function tripReason(trip) {
-    return `${trip.window.replace(/_/g, '-')} usage at ${Math.round(trip.usedPercent)}%, `
+    return `${trip.label || trip.window.replace(/_/g, '-')} usage at ${Math.round(trip.usedPercent)}%, `
         + `past the ${trip.percent}% cutoff`;
 }
 
@@ -1118,7 +1268,7 @@ function wake(orchId) {
     const p = o && o.paused;
     if (!p || !p.resumeAt || p.by !== cfg.PORT) return false;
     if (!o.settings.usageStop.autoResume) return false;
-    const trips = usageTrips(o.settings, windows());
+    const trips = usageTrips(o.settings, windowsFor(o));
     if (trips.length) {
         const resumeAt = wakeAt(o, trips);
         store.setPaused(orchId, { ...p, reason: trips.map(tripReason).join('; '), resumeAt });
@@ -1180,7 +1330,7 @@ function lift(orchId, how) {
 function rearmPause(orchId) {
     const o = store.get(orchId);
     if (!o || !o.paused) return;
-    const trips = usageTrips(o.settings, windows());
+    const trips = usageTrips(o.settings, windowsFor(o));
     const resumeAt = trips.length ? wakeAt(o, trips) : (o.settings.usageStop.autoResume ? Date.now() : null);
     store.setPaused(orchId, { ...o.paused, resumeAt, by: o.paused.by || cfg.PORT });
     armWake(orchId);
@@ -1192,7 +1342,7 @@ function resume(orchId) {
     // Resuming while still over the line would start the queued workers and
     // nudge the orchestrator, only for the next reading to stop them again a
     // minute later — turns spent on work that is cut off before it gets anywhere.
-    const trips = usageTrips(o.settings, windows());
+    const trips = usageTrips(o.settings, windowsFor(o));
     if (trips.length) {
         throw refuse(409, `still over the cutoff (${trips.map(tripReason).join('; ')}). Raise or turn `
             + 'off the cutoff in this orchestrator\u2019s settings, or wait for the window to reset.');
@@ -1233,6 +1383,15 @@ function backgroundRefusal(r) {
  * fails on its next message.
  */
 function resumeFinds(id) {
+    // A Codex thread is resumed by id, wherever it is going: `thread/resume
+    // {threadId, cwd}` moved the thread to the directory it was given — its
+    // commands ran there, its writes landed there and the rollout's next
+    // `turn_context` names it (measured on 0.172.0, docs/plans/23-codex.md). What it
+    // needs is the rollout, which is the record `thread/resume` reads.
+    if (runtimeOfSession(id) !== runtimes.DEFAULT) {
+        const rec = index.get(id);
+        return !!(rec && rec.file && fs.existsSync(rec.file));
+    }
     const name = `${id}.jsonl`;
     let dirs;
     try { dirs = fs.readdirSync(cfg.PROJECTS_DIR, { withFileTypes: true }); } catch { return false; }
@@ -1286,8 +1445,10 @@ function moveTo(orchId, { cwd = null, force = false } = {}) {
     if (!s) throw refuse(404, 'session not found');
     const target = moveTarget(s, cwd);
     if (!resumeFinds(orchId)) {
-        throw refuse(409, `its transcript is not under ${cfg.PROJECTS_DIR}, where claude --resume looks, `
-            + 'so it could not be started again anywhere. Nothing was changed.');
+        throw refuse(409, runtimeOfSession(orchId) !== runtimes.DEFAULT
+            ? 'its Codex rollout is not on disk, so it could not be resumed anywhere. Nothing was changed.'
+            : `its transcript is not under ${cfg.PROJECTS_DIR}, where claude --resume looks, `
+                + 'so it could not be started again anywhere. Nothing was changed.');
     }
     const r = pool.get(orchId);
     const here = location(orchId);
@@ -1612,7 +1773,7 @@ function onPrsChanged() {
 }
 
 module.exports = {
-    init, payload, roleOf, ownModel, applyOwnModel, modelBrief, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
+    init, payload, roleOf, resolveId, runtimeOfSession, runtimesInPlay, windowsFor, resumeFinds, ownModel, applyOwnModel, modelBrief, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
     fileTask, withdrawTask, list,
     report, noteAutoResume, resume, drainSpawns, moveTo, moveToCheckout, cancelMove, settleMove, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,

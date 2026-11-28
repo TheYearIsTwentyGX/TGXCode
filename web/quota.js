@@ -716,6 +716,8 @@ const quotaListeners = new Set();
 
 /** The usage windows from the latest reading, or none before the first. */
 export const quotaWindows = () => (quota.snap && quota.snap.windows) || [];
+/** Codex's windows from the same snapshot (`runtimes.codex.windows`), or none. */
+export const codexQuotaWindows = () => { const c = codexMeter(); return (c && c.windows) || []; };
 
 /** Be called whenever a new reading lands. */
 export function onQuotaChange(fn) { quotaListeners.add(fn); }

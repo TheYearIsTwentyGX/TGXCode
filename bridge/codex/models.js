@@ -87,4 +87,13 @@ async function list({ refresh = false } = {}) {
     return inflight;
 }
 
-module.exports = { list, shape };
+/**
+ * The list as last fetched, or null when it never has been or the last ask
+ * failed. Synchronous, for a caller that cannot wait — an orchestrator's brief is
+ * written as its process starts — and that says something else when it is null.
+ */
+function cached() {
+    return cache && cache.ok ? cache.value : null;
+}
+
+module.exports = { list, shape, cached };
