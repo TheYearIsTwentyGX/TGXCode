@@ -23,7 +23,7 @@ import { get } from '../api.js';
 import { state } from '../state.js';
 import { dom } from '../dom.js';
 import { agentOf } from '../capabilities.js';
-import { ago, clip } from '../format.js';
+import { agoWords, clip } from '../format.js';
 import { showAnalytics } from '../app.js';
 import { openSession, renderHeader } from '../transcript/conversation.js';
 import { paint } from './parts.js';
@@ -153,22 +153,21 @@ export function renderAnalytics() {
     const a = state.analytics;
     const d = a.data;
 
-    render(RANGES.map(n => html`<button key=${n} type="button" class="an-range-btn"
+    render(RANGES.map(n => html`<button key=${n} type="button" class="seg-btn"
         aria-pressed=${String(a.days === n)} onClick=${() => setRange(n)}>${`${n} days`}</button>`),
     dom.anRange);
 
-    const when = d ? ago(d.generatedAt) : null;
-    dom.anSub.textContent = 'API-equivalent: the tokens in your transcripts at API list prices'
-        + `${d ? ` as of ${d.pricingAsOf}` : ''}. A subscription does not bill this.`
-        + (d && d.codex ? ' Codex sessions are counted at the foot, in tokens only.' : '')
-        + (a.loading ? ' Reading…' : when ? ` Updated ${when === 'now' ? 'just now' : `${when} ago`}.` : '');
+    // What the money means goes on the KPI's tooltip; the head keeps the facts.
+    dom.anSub.textContent = [d ? `API list prices as of ${d.pricingAsOf}` : '',
+        a.loading ? 'loading…' : d ? `updated ${agoWords(d.generatedAt)}` : ''].filter(Boolean).join(' · ');
 
     if (a.error && !d) {
-        paint(dom.anBody, html`<div class="dash-note">${`Could not load analytics: ${a.error}`}</div>`);
+        paint(dom.anBody, html`<div class="dash-note error">${`Could not load analytics: ${a.error}`}
+            <button class="btn small" type="button" onClick=${loadAnalytics}>Try again</button></div>`);
         return;
     }
     if (!d) {
-        paint(dom.anBody, html`<div class="dash-note">Reading transcripts…</div>`);
+        paint(dom.anBody, html`<div class="dash-note">Loading…</div>`);
         return;
     }
     paint(dom.anBody, html`<${Board} d=${d} />`);
@@ -179,7 +178,7 @@ function Board({ d }) {
     return html`
         <div class="an-kpis">
             <div class="an-kpi an-kpi-hero">
-                <div class="an-kpi-label">${`API-equivalent cost, last ${d.days} days`}</div>
+                <div class="an-kpi-label" title="These tokens at API list prices. A subscription does not bill this.">API-equivalent cost</div>
                 <div class="an-kpi-value">${money(t.costUsd)}</div>
                 <div class="an-kpi-note">${`${money(d.allTime.costUsd)} all time`}</div>
             </div>
@@ -220,16 +219,15 @@ function Codex({ c, days }) {
     const open = (id) => { showAnalytics(false); openSession(id); };
     return html`
         <section class="an-card an-codex">
-            <header class="an-card-head"><h2 class="an-card-title">${`Codex tokens, last ${days} days`}</h2></header>
+            <header class="an-card-head"><h2 class="an-card-title">Codex tokens</h2></header>
             <p class="an-note">${`${tokens(t.tokens)} tokens over ${t.messages.toLocaleString('en-US')} responses `
-                + `(${tokens(c.allTime.tokens)} all time): ${breakdown(t)}. Not priced, and not in the figures above. `
-                + 'A ChatGPT plan is not billed per token.'}</p>
+                + `(${tokens(c.allTime.tokens)} all time): ${breakdown(t)}. Not priced or counted above.`}</p>
             ${c.sessions.length ? html`<table class="an-table">
                 <thead><tr><th>Session</th><th>Project</th><th>Last active</th>
                     <th class="num">Output</th><th class="num">Tokens</th></tr></thead>
                 <tbody>${c.sessions.slice(0, 10).map(s => html`<tr key=${s.sessionId} class="an-row-link"
                     title=${breakdown(s)} onClick=${() => open(s.sessionId)}>
-                    <td class="an-name">${clip(s.title || s.sessionId, 70)}</td>
+                    <td class="an-name"><button type="button" class="an-open">${clip(s.title || s.sessionId, 70)}</button></td>
                     <td>${s.projectName}</td><td>${s.lastDay ? dayLabel(s.lastDay) : ''}</td>
                     <td class="num">${tokens(s.output)}</td><td class="num">${tokens(s.tokens)}</td></tr>`)}</tbody>
             </table>` : html`<p class="an-empty">Nothing in this range.</p>`}
@@ -362,7 +360,7 @@ function Sessions({ d }) {
                     <th class="num">Tokens</th></tr></thead>
                 <tbody>${rows.map(s => html`<tr key=${s.sessionId} class="an-row-link"
                     title=${breakdown(s)} onClick=${() => open(s.sessionId)}>
-                    <td class="an-name">${clip(s.title || s.sessionId, 70)}</td>
+                    <td class="an-name"><button type="button" class="an-open">${clip(s.title || s.sessionId, 70)}</button></td>
                     <td>${s.projectName}</td><td>${s.lastDay ? dayLabel(s.lastDay) : ''}</td>
                     <td class="num">${money(s.costUsd)}</td><td class="num">${tokens(s.tokens)}</td></tr>`)}</tbody>
             </table>` : html`<p class="an-empty">Nothing in this range.</p>`}

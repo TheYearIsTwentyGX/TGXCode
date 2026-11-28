@@ -129,9 +129,9 @@
     border-radius: 50%;
     background: currentColor;
     vertical-align: 1px;
-    animation: crv-pulse var(--dur-loop) var(--ease-standard) infinite;
+    --pulse-dim: 0.3;
+    animation: pulse var(--dur-loop) var(--ease-standard) infinite;
 }
-@keyframes crv-pulse { 50% { opacity: 0.3; } }
 
 .crv-count {
     --sev: var(--text-3);

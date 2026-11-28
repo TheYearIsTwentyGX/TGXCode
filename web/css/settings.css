@@ -41,7 +41,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    --set-aside: 172px;
+    --set-aside: 196px;
     /* So a contents jump lands a group under the pinned head rather than behind
        it. --set-top-h is measured by a ResizeObserver in app.js, because the
        head's height moves with the project picker and the file line's tags. */
@@ -67,7 +67,6 @@
 }
 .settings-head { padding: var(--sp-8) 0 var(--sp-6); }
 .settings-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
-.settings-sub { margin: var(--sp-2) 0 0; max-width: 560px; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-3); }
 
 /* Contents beside the groups, and deliberately out of flow: `right: 100%` puts
    it entirely to the left of the centred column, so its width cannot shift what
@@ -89,8 +88,8 @@
     margin-right: var(--sp-8);
 }
 .settings-toc-list { position: sticky; top: calc(var(--set-top-h, 0px) + var(--sp-6)); display: flex; flex-direction: column; gap: 1px; }
-/* Wide enough for the longest entry on one line — "Connect a phone" wrapping
-   into two was the whole reason `--set-aside` is 172px rather than 152px. */
+/* Wide enough for the longest entry on one line, indent included: "While you
+   were away" and "Conversation toolbar" wrapped at 172px, hence 196px. */
 .settings-toc-link {
     position: relative;
     background: none;
@@ -128,8 +127,6 @@
     margin-top: var(--sp-6);
     padding: var(--sp-2) var(--sp-6) var(--sp-2);
     font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
     color: var(--text-4);
     text-align: left;
     cursor: pointer;
@@ -252,8 +249,6 @@
 .settings-cat {
     margin: var(--sp-7) 0 calc(-1 * var(--sp-2)) var(--sp-1);
     font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
     color: var(--text-4);
 }
 .settings-cat:first-child { margin-top: 0; }
@@ -594,8 +589,6 @@
 .settings-keys-group-name {
     padding: var(--sp-3) 0 var(--sp-1);
     font-size: var(--fs-xs);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
     color: var(--text-4);
 }
 
@@ -696,8 +689,6 @@
 .cfg-tab.on { background: var(--blue-cont); color: var(--text); }
 .cfg-tab-tag {
     font: 400 var(--fs-2xs) var(--mono);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
     color: var(--text-4);
 }
 .cfg-tab.on .cfg-tab-tag { color: var(--text-3); }
@@ -790,7 +781,7 @@
     color: var(--text-4);
     border: 0;
     border-radius: var(--r-xs);
-    font: 400 15px/var(--lh-none) var(--sans);
+    font: 400 var(--fs-base)/var(--lh-none) var(--sans);
     cursor: pointer;
     transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
@@ -1193,8 +1184,6 @@
 .snip-set-loose {
     flex: 1;
     font: 600 var(--fs-sm)/var(--lh-tight) var(--sans);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--text-4);
 }
 

@@ -137,8 +137,6 @@ export const SETTINGS = [
     },
     {
         title: 'Reading', section: 'transcript', category: 'workspace',
-        note: 'How a transcript folds the work between one message and the next, '
-            + 'whether its thinking shows, and how its clocks read.',
         rows: [
             { key: 'clock', type: 'choice',
                 label: 'Clock',
@@ -152,11 +150,10 @@ export const SETTINGS = [
                 note: 'Once a message closes a run, it becomes one row you can open.' },
             { key: 'groupMinCalls', type: 'int', min: 2, max: 1000,
                 label: 'Shortest run worth folding',
-                note: 'One or two rows collapsed into a summary loses more than it saves.' },
+                note: 'At least 2.' },
             { key: 'groupIncludesThinking', type: 'bool',
                 label: 'A thinking block is part of the run',
-                note: 'Off breaks the run there instead, which fragments a turn that '
-                    + 'thinks between every call.' },
+                note: 'Off, a thinking block ends the run.' },
             { key: 'thinkingExpanded', type: 'bool',
                 label: 'Show thinking expanded',
                 note: 'Thought blocks open as they arrive. One you close stays closed '
@@ -165,8 +162,7 @@ export const SETTINGS = [
     },
     {
         title: 'While you were away', section: 'digest', category: 'workspace', userOnly: true,
-        note: 'A card in the corner when you come back, with what finished, failed or '
-            + 'is waiting on you since you left.',
+        note: 'A card in the corner when you come back: what finished, failed or is waiting on you.',
         rows: [
             { key: 'enabled', type: 'bool',
                 label: 'Show what happened while you were away' },
@@ -179,8 +175,7 @@ export const SETTINGS = [
     },
     {
         title: 'Power', section: 'power', category: 'workspace', userOnly: true,
-        note: 'Whether this computer may sleep while agents are working. A sleeping '
-            + 'PC freezes WSL, and every running turn with it.',
+        note: 'A sleeping PC freezes WSL, and every running turn with it.',
         rows: [
             { key: 'keepAwake', type: 'bool',
                 label: 'Keep this computer awake while an agent is working',
@@ -192,17 +187,13 @@ export const SETTINGS = [
     },
     {
         title: 'Sudo', section: 'sudo', category: 'workspace', userOnly: true,
-        note: 'Let agents run sudo with your approval. An agent types sudo -A; a card shows '
-            + 'the exact command, where and as whom it runs, and you approve it with your '
-            + 'password or deny it. The password goes to that one sudo and is never stored.',
+        note: 'Agents run sudo -A, and a card shows the exact command for you to approve with your '
+            + 'password or deny. The password goes to that one sudo and is never stored.',
         rows: [
             { key: 'enabled', type: 'bool',
                 label: 'Approve sudo commands from TGXCode',
-                note: 'Reaches sessions as they start: restart a running session to give it '
-                    + 'this. sudo remembers a password for the rest of the Bash command it was '
-                    + 'typed for — usually 15 minutes, per your sudoers timestamp_timeout — so '
-                    + 'a later sudo in that same command runs without asking. The next Bash '
-                    + 'command asks again.' },
+                note: 'Restart a running session to give it this. Within one Bash command, sudo '
+                    + 'reuses the password for your sudoers timestamp_timeout (usually 15 minutes).' },
             { key: 'allowRemote', type: 'bool',
                 when: (p) => p.sudo && p.sudo.enabled === true,
                 label: 'Let the phone answer them too',
@@ -212,13 +203,11 @@ export const SETTINGS = [
     },
     {
         title: 'Live board', section: 'live', category: 'workspace',
-        note: 'The board behind Live — every session running right now.',
         rows: [
             { key: 'compact', type: 'bool',
                 label: 'Compact cards',
-                note: 'Stop every card at its tool-count line: no preview, no message '
-                    + 'box, no Open or Stop, no approval row. Many sessions at a glance '
-                    + 'rather than any one of them actionable in place.' },
+                note: 'Cards stop at their tool-count line: no preview, message box, buttons or '
+                    + 'approval row.' },
             { key: 'hideElsewhere', type: 'bool',
                 label: 'Leave out sessions running elsewhere',
                 note: 'Sessions under a terminal or another window — the cards this '
@@ -226,9 +215,8 @@ export const SETTINGS = [
             { key: 'order', type: 'radio',
                 label: 'Order of the Live group',
                 options: [['needs-you', 'Needs you first'], ['arrival', 'Order of arrival']],
-                note: 'Order of arrival puts new work at the bottom and moves it up only '
-                    + 'as the sessions above it finish, so nothing reorders while you read. '
-                    + 'Pinned and Recent activity are unaffected.' },
+                note: 'Order of arrival puts new work at the bottom, so nothing reorders while you '
+                    + 'read. Pinned and Recent activity are unaffected.' },
             { key: 'stalledAfterMinutes', type: 'int', min: 0, max: 120,
                 label: 'Call a silent turn stalled after, in minutes',
                 note: 'A working session with no output, no tool running and nothing '
@@ -236,10 +224,8 @@ export const SETTINGS = [
                     + 'notification. An open tool call — a long build — never counts. '
                     + '0 turns it off.' },
             { type: 'heading', label: 'Live board visibility',
-                note: 'Whether the board stays up while one of these screens is open, '
-                    + 'and how it sits there. Side-by-Side docks it beside the screen '
-                    + 'and Stacked under it; Always keeps it the way the board’s dock '
-                    + 'toggle says; Hidden covers it, as before.' },
+                note: 'Whether the board stays up over each screen. Always follows the board’s '
+                    + 'own dock toggle.' },
             { type: 'all', label: 'All views', keys: LIVE_OVER_ROWS.map(r => r.key),
                 options: LIVE_OVER_OPTIONS,
                 note: 'Sets every screen below at once.' },
@@ -258,19 +244,14 @@ export const SETTINGS = [
                 note: '0 pins one for the whole turn. Otherwise 1000 to 600000.' },
             { key: 'groups', type: 'groups', wide: true,
                 label: 'Verb groups in play',
-                note: 'From ~/.tgxcode/verbs/, and a project’s own. Enabling all of '
-                    + 'them is a soup; the point of the groups is to choose a voice. '
-                    + 'Hover a group to read what is in it. The number on a group '
-                    + 'chosen is how often it gets to speak against the others — '
-                    + 'leave it at 1 for an even split, or 0 to mute it without '
-                    + 'giving it up.' },
+                note: 'From ~/.tgxcode/verbs/, and a project’s own. Hover a group to see its '
+                    + 'verbs. The number is its weight against the others; 0 mutes it.' },
         ],
     },
     {
         title: 'Quota', section: 'quota', category: 'workspace', userOnly: true,
-        note: 'Keeping the percentages current with no terminal open, by starting a '
-            + '`claude` for a few seconds and killing it — and what happens when a session hits '
-            + 'the limit.',
+        note: 'Keeps the quota percentages current with no terminal open, by running claude '
+            + 'briefly in the background, and what a session does at the limit.',
         rows: [
             { key: 'beacon', type: 'bool',
                 label: 'Refresh quota in the background',
@@ -282,7 +263,7 @@ export const SETTINGS = [
                     + 'makes every run time out.' },
             { key: 'beaconEveryMinutes', type: 'int', min: 1, max: 1440,
                 label: 'How often, in minutes',
-                note: 'Each run is a CLI start and one tiny API call. Floor of one.' },
+                note: 'Each run is one short API call.' },
             { key: 'resumeAfterLimit', type: 'bool',
                 label: 'Resume sessions after the usage limit resets',
                 note: 'A session whose turn ended on the usage limit carries on by itself a '
@@ -292,9 +273,7 @@ export const SETTINGS = [
     },
     {
         title: 'Orchestrators', section: 'orchestrator', category: 'workspace', userOnly: true,
-        note: 'Sessions marked as orchestrators start worker sessions and read what they report '
-            + 'from an inbox. These are what a new orchestrator starts with; each keeps its own '
-            + 'copy afterwards, changed from its own conversation.',
+        note: 'What a new orchestrator starts with. Each keeps its own copy afterwards.',
         rows: [
             { key: 'maxRunning', type: 'int', min: 1, max: 10,
                 label: 'Workers running at once',
@@ -362,9 +341,7 @@ export const SETTINGS = [
     },
     {
         title: 'Toolbar', section: 'toolbar', category: 'workspace', userOnly: true, toolbar: true,
-        note: 'The buttons along the top: their order, which of them fold into the '
-            + 'More menu, and which show their name beside the icon. A hidden view '
-            + 'still opens from its shortcut.',
+        note: 'The buttons along the top. A hidden view still opens from its shortcut.',
         rows: [],
     },
     {
@@ -372,15 +349,12 @@ export const SETTINGS = [
         // card, contents entry and palette row — the key itself is in `toolbar`.
         title: 'Conversation toolbar', section: 'conversationToolbar', category: 'workspace',
         userOnly: true, convToolbar: true,
-        note: 'The buttons at the top right of an open conversation: which show, and their '
-            + 'order within each group. A button still shows only where it applies, and a '
-            + 'hidden one is still in the command palette.',
+        note: 'The buttons at the top right of a conversation. A hidden one is still in the '
+            + 'command palette.',
         rows: [],
     },
     {
         title: 'Keyboard', section: 'keyboard', category: 'input', userOnly: true, keymap: true,
-        note: 'How a few keys behave, and then every shortcut this window '
-            + 'answers to.',
         rows: [
             { key: 'contextualTerminalCopy', type: 'bool',
                 label: 'Contextual Ctrl+C in the terminal',
@@ -432,8 +406,6 @@ export const SETTINGS = [
     },
     {
         title: 'Browser preview', section: 'preview', category: 'browsers', userOnly: true,
-        note: 'The page behind a port or a running task, shown in this window with '
-            + 'DevBrowser’s toolbar.',
         rows: [
             { key: 'keepAliveMinutes', type: 'int', min: 0, max: 240,
                 label: 'Minutes to keep a page you left',
@@ -491,9 +463,8 @@ export const SETTINGS = [
     },
     {
         title: 'Session status line', section: 'standing', category: 'workspace', userOnly: true,
-        note: 'One line under each session in the rail saying where its last turn left '
-            + 'things — “PR #150 opened, waiting on review”. Written when a turn this app '
-            + 'ran ends; sessions in a terminal do not get one.',
+        note: 'A line under each session in the rail saying where its last turn left things. '
+            + 'Sessions in a terminal do not get one.',
         rows: [
             { key: 'mode', type: 'choice',
                 label: 'Write it by',
@@ -859,7 +830,6 @@ function KeepAwakeStatus() {
     else if (ka.error && ka.enabled) text = `Could not hold the lock: ${ka.error}.`;
     else if (ka.holding && ka.lingerUntil) text = 'Keeping the PC awake for a couple of minutes after the last turn.';
     else if (ka.holding) text = `Keeping the PC awake — ${ka.reason || 'an agent is working'}.`;
-    else if (ka.enabled) text = 'Nothing is working, so the PC may sleep as usual.';
     return text ? html`<p class="settings-group-note">${text}</p>` : null;
 }
 
@@ -887,14 +857,14 @@ function settingControl(row, value, disabled, save, saveKey) {
         // its last render, so the redraw after a refused save puts it back.
         return html`<label class="settings-check">
             <input type="checkbox" checked=${value === true} disabled=${disabled}
-                onChange=${(e) => save(e.target.checked)} />
+                aria-label=${row.label} onChange=${(e) => save(e.target.checked)} />
             <span class="settings-box"></span>
         </label>`;
     }
     if (row.type === 'int') {
         return html`<input key=${`int:${rev}:${value ?? ''}`} class="settings-num" type="number"
             defaultValue=${value ?? ''} min=${row.min} max=${row.max} step=${row.step || 1}
-            disabled=${disabled}
+            disabled=${disabled} aria-label=${row.label}
             onChange=${(e) => {
                 const n = Number(e.target.value);
                 if (!Number.isInteger(n)) { settingsRevert(); return; }
@@ -906,7 +876,7 @@ function settingControl(row, value, disabled, save, saveKey) {
         // commits on blur or Enter instead of per keystroke.
         return html`<input key=${`path:${rev}:${value || ''}`} class="settings-text" type="text"
             spellcheck=${false} defaultValue=${value || ''} disabled=${disabled}
-            placeholder="not set"
+            aria-label=${row.label}
             onChange=${(e) => save(e.target.value.trim() || null)} />`;
     }
     if (row.type === 'choice') {
@@ -915,7 +885,7 @@ function settingControl(row, value, disabled, save, saveKey) {
         // only with its last render, which would leave a refused choice showing.
         // A value no option has falls to the first, as the browser would.
         const known = row.options.some(([v]) => v === value);
-        return html`<select class="settings-select" disabled=${disabled}
+        return html`<select class="settings-select" disabled=${disabled} aria-label=${row.label}
             value=${known ? value : row.options[0][0]}
             onChange=${(e) => save(e.target.value)}>
             ${row.options.map(([v, text]) => html`<option key=${v} value=${v}>${text}</option>`)}
@@ -941,7 +911,7 @@ function settingControl(row, value, disabled, save, saveKey) {
         const text = Array.isArray(value) ? value.join('\n') : '';
         return html`<textarea key=${`list:${rev}:${text}`} class="settings-text settings-list"
             spellcheck=${false} rows=${Math.min(12, Math.max(4, text.split('\n').length + 1))}
-            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''}
+            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''} aria-label=${row.label}
             onChange=${(e) => {
                 const lines = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
                 save(lines.length ? lines : null);
@@ -969,7 +939,7 @@ function settingControl(row, value, disabled, save, saveKey) {
         const text = typeof value === 'string' ? value : '';
         return html`<textarea key=${`text:${rev}:${text}`} class="settings-text settings-list"
             rows=${Math.min(14, Math.max(4, text.split('\n').length + 1))}
-            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''}
+            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''} aria-label=${row.label}
             onChange=${(e) => save(e.target.value.trim() ? e.target.value : null)}></textarea>`;
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);

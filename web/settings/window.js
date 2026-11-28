@@ -27,9 +27,7 @@ export function windowCard() {
     return html`<${WindowGroup} key="window" />`;
 }
 
-const NOTE = 'The top bar is the window’s titlebar: drag it by any blank part, or '
-    + 'press a button and move. On, the window gets the system’s own titlebar back '
-    + 'above the bar.';
+const NOTE = 'Puts the system’s own titlebar back above the top bar.';
 
 function WindowGroup() {
     const [st, setSt] = useState(null);

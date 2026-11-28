@@ -91,9 +91,6 @@ function UpdatesGroup() {
 
     return html`<section class="settings-group" id="set-g-updates">
         <h2 class="settings-group-title">Updates</h2>
-        <p class="settings-group-note">The desktop shell — the window around this page — is the only
-            part of TGXCode that is installed; the rest is read live from the checkout. This is how
-            it gets a new build without a reinstall.</p>
 
         <div class="settings-row upd-status">
             <div class="settings-row-text">

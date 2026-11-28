@@ -47,7 +47,7 @@ import { html, render } from './vendor/preact.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
 import { post } from './api.js';
-import { ago, clip, clockOf } from './format.js';
+import { ago, clip, clockOf, modelWord, modeWord } from './format.js';
 import { inline, renderMarkdown } from './markdown.js';
 import { ICON } from './icons.js';
 import { enter, isUp, present, settle } from './motion.js';
@@ -488,7 +488,7 @@ function taskCard(p, t, now) {
     const age = now - t.at;
     const title = t.title || (t.origin && t.origin.title) || clip(t.text, 80);
     const seen = t.status === 'new' ? 'not read yet' : 'read, not started';
-    const settings = [t.model || 'inherit', t.effort ? `${t.effort} effort` : null, t.permissionMode,
+    const settings = [modelWord(t.model), t.effort ? `${t.effort} effort` : null, modeWord(t.permissionMode),
         t.worktree ? `worktree ${t.worktree.name}` : null].filter(Boolean).join(' · ');
     const busy = ui.taking.has(t.id);
     return html`<div key=${t.id} class="op-need op-task" data-tone=${age > TASK_STALE_MS ? null : 'task'}

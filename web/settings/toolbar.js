@@ -610,14 +610,15 @@ function convToolbarRow(o, i, layout, locked, commit) {
     };
     const set = (where) => commit(layout.map((x, j) => (j === i ? { ...x, place: where } : x)));
     const combo = def.shortcut && keys.label(def.shortcut);
-    const reach = combo ? `Hidden, it is still in the palette and on ${combo}.`
-        : 'Hidden, it is still in the palette.';
+    // The group's note says once that a hidden button stays in the palette; a
+    // row adds only what is its own: where it applies, and a shortcut.
+    const note = [def.note, combo ? `Also on ${combo}.` : null].filter(Boolean).join(' ');
     const start = i > 0 && layout[i - 1].def.group !== def.group;
 
     return html`<div key=${def.id} class=${start ? 'settings-bar-row group-start' : 'settings-bar-row'}
         data-id=${def.id} data-place=${o.place}>
-        <span class="settings-bar-name">${barGlyph(def)}<span>${def.name}<span class="settings-bar-note">${
-            def.note ? `${def.note} ` : ''}${reach}</span></span></span>
+        <span class="settings-bar-name">${barGlyph(def)}<span>${def.name}${note
+            ? html`<span class="settings-bar-note">${note}</span>` : null}</span></span>
         <select class="settings-select settings-bar-place" disabled=${locked}
             aria-label=${`Whether ${def.name} shows`} value=${o.place}
             onChange=${(e) => set(e.target.value)}>

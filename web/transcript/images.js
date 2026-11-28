@@ -16,7 +16,7 @@
 import { get } from '../api.js';
 import { dom, toast } from '../dom.js';
 import { html, render } from '../vendor/preact.js';
-import { ago } from '../format.js';
+import { agoWords } from '../format.js';
 import { state } from '../state.js';
 import { renderHeaderActions } from './conversation.js';
 import { loadEarlier } from './earlier.js';
@@ -133,14 +133,11 @@ export function renderImages() {
 
 function imagesGrid(list) {
     if (state.images.error && !list) {
-        return html`<p class="img-empty">Could not read the images: ${state.images.error}</p>`;
+        return html`<p class="img-empty">Could not load the images: ${state.images.error}</p>`;
     }
-    if (!list) return html`<p class="img-empty">Reading the transcript…</p>`;
+    if (!list) return html`<p class="img-empty">Loading…</p>`;
     if (!list.length) {
-        return html`<div class="img-empty">
-            <p>No images in this chat yet.</p>
-            <p class="img-empty-sub">Pictures you attach, and screenshots or images a tool hands back, collect here.</p>
-        </div>`;
+        return html`<p class="img-empty">No images yet.</p>`;
     }
     // Newest first, as the bridge sends them: the one that just arrived is the
     // one you came for.
@@ -156,8 +153,8 @@ function describe(img) {
     if (img.width && img.height) bits.push(`${img.width}×${img.height}`);
     bits.push(kb(img.bytes));
     if (img.count > 1) bits.push(`appears ${img.count} times`);
-    const when = ago(img.at);
-    if (when) bits.push(when === 'now' ? 'just now' : /\d[mhd]$/.test(when) ? `${when} ago` : `on ${when}`);
+    const when = agoWords(img.at);
+    if (when) bits.push(when);
     return bits.join(' · ');
 }
 

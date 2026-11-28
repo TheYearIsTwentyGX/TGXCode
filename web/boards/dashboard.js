@@ -23,7 +23,7 @@ import { html } from '../vendor/preact.js';
 import { get } from '../api.js';
 import { state } from '../state.js';
 import { dom } from '../dom.js';
-import { ago, clip } from '../format.js';
+import { ago, agoWords, clip } from '../format.js';
 import { PR_ICON } from '../icons.js';
 import { projectColor, prWords, showDash } from '../app.js';
 import { openSession } from '../transcript/conversation.js';
@@ -31,11 +31,14 @@ import { openWorktrees } from '../worktrees.js';
 import { icon, paint } from './parts.js';
 import { reviewChip, reviewKey, reviewPanel } from '../pr-review.js';
 
-export async function loadDash({ refresh = false } = {}) {
+export async function loadDash({ refresh = false, silent = false } = {}) {
     if (state.dash.loading) return;
     state.dash.loading = true;
+    // A push from the bridge reloads quietly: Refresh says "Checking…" only
+    // when somebody pressed it.
+    state.dash.quiet = silent;
     state.dash.error = null;
-    renderDash();
+    if (!silent) renderDash();
     try {
         const data = await get('/api/dashboard' + (refresh ? '?refresh=1' : ''));
         state.dash.data = data;
@@ -66,20 +69,15 @@ export function paintDashBadge() {
 
 export function renderDash() {
     const d = state.dash.data;
-    dom.dashRefresh.disabled = state.dash.loading;
-    dom.dashRefresh.textContent = state.dash.loading ? 'Checking…' : 'Refresh';
+    const busy = state.dash.loading && !state.dash.quiet;
+    dom.dashRefresh.disabled = busy;
+    dom.dashRefresh.textContent = busy ? 'Refreshing…' : 'Refresh';
 
-    if (d) {
-        const when = ago(d.checkedAt);
-        dom.dashSub.textContent = [
-            `${d.dirty} ${d.dirty === 1 ? 'directory' : 'directories'} with uncommitted changes`,
-            `${d.open} pull ${d.open === 1 ? 'request' : 'requests'} still open`,
-            when === 'now' ? 'checked just now' : `checked ${when} ago`,
-        ].join(' · ');
-    } else {
-        dom.dashSub.textContent = 'Uncommitted changes, and pull requests that are '
-            + 'open but not merged.';
-    }
+    dom.dashSub.textContent = d ? [
+        `${d.dirty} ${d.dirty === 1 ? 'directory' : 'directories'} with uncommitted changes`,
+        `${d.open} open pull ${d.open === 1 ? 'request' : 'requests'}`,
+        `checked ${agoWords(d.checkedAt)}`,
+    ].join(' · ') : '';
 
     paint(dom.dashBody, dashTree(d));
 }
@@ -87,12 +85,12 @@ export function renderDash() {
 function dashTree(d) {
     if (state.dash.error) {
         return html`<div key="error" class="dash-note error">
-            <p>${`Could not read the working trees: ${state.dash.error}`}</p>
-            <button class="more-btn" type="button" onClick=${() => loadDash()}>Try again</button>
+            <p>${`Could not load the working trees: ${state.dash.error}`}</p>
+            <button class="btn small" type="button" onClick=${() => loadDash()}>Try again</button>
         </div>`;
     }
     if (!d) {
-        return html`<div key="wait" class="dash-note"><p>Reading working trees and asking GitHub…</p></div>`;
+        return html`<div key="wait" class="dash-note"><p>Loading…</p></div>`;
     }
 
     const nodes = [];
@@ -100,13 +98,11 @@ function dashTree(d) {
     // an empty board would otherwise read as "nothing open".
     if (!d.gh.ok) {
         nodes.push(html`<div key="gh" class="dash-note warn"><p>${
-            `Pull requests could not be listed — ${d.gh.error}. `
-            + 'Uncommitted changes below are unaffected.'}</p></div>`);
+            `Could not list pull requests: ${d.gh.error}`}</p></div>`);
     }
     if (!d.projects.length) {
         nodes.push(html`<div key="clean" class="dash-note"><p>${
-            'Nothing uncommitted, and no pull request left open. '
-            + 'Every worktree on this machine is clean.'}</p></div>`);
+            'Everything is committed and merged.'}</p></div>`);
     }
     for (const p of d.projects) nodes.push(dashProject(p));
     return nodes;
@@ -114,7 +110,7 @@ function dashTree(d) {
 
 function dashProject(p) {
     const counts = [];
-    if (p.dirty) counts.push(`${p.dirty} dirty`);
+    if (p.dirty) counts.push(`${p.dirty} uncommitted`);
     if (p.open) counts.push(`${p.open} open PR${p.open === 1 ? '' : 's'}`);
 
     const accent = projectColor(p.cwd);
@@ -167,7 +163,7 @@ function dashRow(project, w) {
                 pr.label || prWords(status),
                 pr.title,
                 `${pr.url}\nopened by ${pr.author || 'someone'}, `
-                    + `updated ${ago(pr.updatedAt)} ago`,
+                    + `updated ${agoWords(pr.updatedAt)}`,
             ].filter(Boolean).join('\n')}
             >${icon(PR_ICON[status] || 'pr', 12)}<span class="pr-num">${`#${pr.number}`}</span><span
                 class="pr-title">${clip(pr.title, 46)}</span></a>`);
@@ -218,7 +214,7 @@ function dashSession(s) {
     const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
     return html`<button key=${s.sessionId} class="schip" type="button"
         data-state=${running ? 'running' : (s.active ? 'active' : 'idle')}
-        title=${`${s.title}\n${s.userMessages} turns · last message ${ago(s.lastTs)} ago`}
+        title=${`${s.title}\n${s.userMessages} turns · last message ${agoWords(s.lastTs)}`}
         onClick=${() => { showDash(false); openSession(s.sessionId); }}
         ><span class="schip-dot"></span><span class="schip-title">${clip(s.title, 40)}</span><span
             class="schip-ago">${ago(s.lastTs)}</span></button>`;
@@ -230,7 +226,7 @@ function dirtyTitle(g) {
     if (g.unstaged) bits.push(`${g.unstaged} modified`);
     if (g.untracked) bits.push(`${g.untracked} untracked`);
     if (g.conflicts) bits.push(`${g.conflicts} conflicted`);
-    return bits.join(' · ') + ' — click to list them';
+    return bits.join(' · ');
 }
 
 export function statusWord(xy) {

@@ -1205,8 +1205,7 @@
       <header class="dash-head">
         <div>
           <h1 class="dash-title">Work in flight</h1>
-          <p id="dash-sub" class="dash-sub">Uncommitted changes, and pull requests
-            that are open but not merged.</p>
+          <p id="dash-sub" class="dash-sub"></p>
         </div>
         <button id="dash-refresh" class="dash-btn" type="button">Refresh</button>
       </header>
@@ -1218,10 +1217,9 @@
       <header class="dash-head">
         <div>
           <h1 class="dash-title">Analytics</h1>
-          <p id="an-sub" class="dash-sub">Tokens, and what they would have cost at
-            API list prices.</p>
+          <p id="an-sub" class="dash-sub"></p>
         </div>
-        <div id="an-range" class="an-range" role="group" aria-label="Range"></div>
+        <div id="an-range" class="dash-tools seg" role="group" aria-label="Range"></div>
       </header>
       <div id="an-body" class="dash-body an-body"></div>
     </section>
@@ -1231,7 +1229,7 @@
       <header class="dash-head">
         <div>
           <h1 class="dash-title">Skills</h1>
-          <p id="skp-sub" class="dash-sub">Every skill Claude Code and Codex can load, as files.</p>
+          <p id="skp-sub" class="dash-sub"></p>
         </div>
       </header>
       <div id="skp-body" class="dash-body skp-body"></div>
@@ -1242,7 +1240,7 @@
       <header class="dash-head">
         <div>
           <h1 class="dash-title">Hooks</h1>
-          <p id="hkp-sub" class="dash-sub">What runs when Claude Code does something.</p>
+          <p id="hkp-sub" class="dash-sub"></p>
         </div>
       </header>
       <div id="hkp-body" class="dash-body hkp-body"></div>
@@ -1293,13 +1291,12 @@
          cleared the bar for interrupting somebody; `Everything` also has the
          quiet rows, which nothing ever notified about. -->
     <section id="notes" class="notes" hidden aria-label="Notification history">
-      <header class="notes-head">
+      <header class="dash-head">
         <div>
-          <h1 class="notes-title">History</h1>
-          <p id="notes-sub" class="notes-sub">Everything that has reached out to
-            you, newest first.</p>
+          <h1 class="dash-title">History</h1>
+          <p id="notes-sub" class="dash-sub"></p>
         </div>
-        <div class="notes-tools">
+        <div class="dash-tools">
           <div class="seg" role="group" aria-label="How much to show">
             <button id="notes-notable" class="seg-btn" type="button" aria-pressed="true"
                     title="Only what cleared the bar for interrupting you">Notable</button>
@@ -1317,18 +1314,17 @@
          follow-up used to be visible only while the conversation that raised it
          was open. This is the view that answers "what is left". -->
     <section id="taskboard" class="taskboard" hidden aria-label="Task board">
-      <header class="tb-head">
+      <header class="dash-head">
         <div>
-          <h1 class="tb-title">Task board</h1>
-          <p id="tb-sub" class="tb-sub">Everything outstanding: suggested tasks,
-            and every session that is not archived.</p>
+          <h1 class="dash-title">Task board</h1>
+          <p id="tb-sub" class="dash-sub"></p>
         </div>
         <!-- Both of these belong to the focused view and are hidden until it is
              on. The search box lives here rather than being built by the
              renderer on purpose: `#tb-body` is rebuilt every three seconds off
              the SSE tick, and an input inside it would need the caret-saving
              dance the Suggested column's composer already forced. -->
-        <div class="tb-tools">
+        <div class="dash-tools tb-tools">
           <input id="tb-search" class="tb-search" type="search"
                  placeholder="Search tasks" aria-label="Search suggested tasks" hidden>
           <button id="tb-unfocus" class="dash-btn" type="button" hidden>Status view</button>
@@ -1343,10 +1339,10 @@
          about work that has not begun, which is why it is a panel of its own
          rather than a fifth column on the task board. -->
     <section id="drafts" class="drafts" hidden aria-label="Drafts">
-      <header class="dr-head">
+      <header class="dash-head">
         <div>
-          <h1 class="dr-title">Drafts</h1>
-          <p id="dr-sub" class="dr-sub">Sessions you have set up but not started.</p>
+          <h1 class="dash-title">Drafts</h1>
+          <p id="dr-sub" class="dash-sub"></p>
         </div>
         <button id="dr-new" class="dash-btn" type="button">New draft</button>
       </header>
@@ -1359,10 +1355,10 @@
          filter in the bar answers "which session is called that"; this answers
          "where did somebody say that". -->
     <section id="sx" class="sx" hidden aria-label="Search transcripts">
-      <header class="sx-head">
-        <div class="sx-head-text">
-          <h1 class="sx-title">Search transcripts</h1>
-          <p id="sx-sub" class="sx-sub">Everything said in every session, by you and your agents.</p>
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Search transcripts</h1>
+          <p id="sx-sub" class="dash-sub" aria-live="polite"></p>
         </div>
       </header>
       <div class="sx-bar">
@@ -1377,7 +1373,7 @@
         <button id="sx-tools" class="sx-toggle" type="button" aria-pressed="false"
                 title="Also search tool calls and their output">Include tools</button>
       </div>
-      <div id="sx-body" class="sx-body" aria-live="polite"></div>
+      <div id="sx-body" class="sx-body"></div>
     </section>
 
     <!-- Sessions that start on a clock. Beside Drafts rather than inside it: a
@@ -1386,10 +1382,10 @@
          different — when it next runs, what the last run found, and whether it
          has quietly stopped firing. -->
     <section id="sched" class="sched" hidden aria-label="Schedules">
-      <header class="sched-head">
+      <header class="dash-head">
         <div>
-          <h1 class="sched-title">Schedules</h1>
-          <p id="sched-sub" class="sched-sub">Sessions that start on a clock.</p>
+          <h1 class="dash-title">Schedules</h1>
+          <p id="sched-sub" class="dash-sub"></p>
         </div>
         <button id="sched-new" class="dash-btn" type="button">New schedule</button>
       </header>
@@ -1417,11 +1413,6 @@
           <div id="set-top" class="settings-top">
           <header class="settings-head">
             <h1 class="settings-title">Settings</h1>
-            <!-- "Most" rather than "every": the last two groups are not in that
-                 file, and each says so where it sits. -->
-            <p class="settings-sub">How you want this app to behave. Most of
-               these are a key in a JSON file, and hand-editing it still
-               works.</p>
             <!-- Under the title rather than opposite it. These say *what you
                  are editing*, so they belong with the sentence that says what
                  this screen is — across the far corner of a wide bar they read
@@ -1484,13 +1475,9 @@
                    the bridge's projects rather than from the SETTINGS table. -->
               <section id="set-g-projects" class="settings-group">
                 <h2 class="settings-group-title">Projects</h2>
-                <p class="settings-group-note">The order of the project cards in the
-                   rail, and a colour per project, so a session scoped to the wrong
-                   checkout is something you see rather than something you read.
-                   <strong>Always your own settings file</strong> — whatever the
-                   picker above says. Both name other projects’ paths, so a
-                   repository setting them would be a repository arranging and
-                   colouring its neighbours.</p>
+                <p class="settings-group-note">The order and colour of projects in the
+                   rail. Always saved to your own settings file, whatever the scope
+                   above says.</p>
                 <div id="pcolor-order"></div>
                 <div id="pcolor-backdrop"></div>
                 <div id="pcolor-list"></div>
@@ -1504,11 +1491,9 @@
                    at the top of this panel does not apply to them. -->
               <section id="set-g-snippets" class="settings-group">
                 <h2 class="settings-group-title">Snippets</h2>
-                <p class="settings-group-note">Messages you send often, and the
-                   buttons that send them. <strong>Not in the settings file</strong>
-                   — unlike everything above, these live in their own store on this
-                   machine, so the scope picker does not apply to them and a
-                   checked-in file cannot set them.</p>
+                <p class="settings-group-note">Messages you send often. Stored on this
+                   machine, not in the settings file, so the scope above does not
+                   apply.</p>
                 <div class="snip-settings-acts">
                   <button id="snip-new" class="btn small" type="button">New snippet</button>
                   <button id="snip-group-new" class="btn small" type="button">New group</button>
@@ -1522,14 +1507,9 @@
                    button. -->
               <section id="set-g-wispr" class="settings-group" hidden>
                 <h2 class="settings-group-title">Wispr Flow</h2>
-                <p class="settings-group-note">The transforms the Wispr button beside
-                   each message box offers. Give each the title you want to see and
-                   the shortcut you gave it in Wispr Flow, written like
-                   <kbd>Win+Alt+2</kbd>. Picking one selects everything in the box
-                   (or keeps your selection, if you made one) and presses that
-                   shortcut for you. <strong>Always your own settings file</strong>
-                   — a repository does not get to choose which keys are pressed
-                   on your desktop.</p>
+                <p class="settings-group-note">The transforms the Wispr button offers.
+                   Give each the shortcut you set in Wispr Flow, like
+                   <kbd>Win+Alt+2</kbd>. Always saved to your own settings file.</p>
                 <div id="wispr-list"></div>
                 <div class="snip-settings-acts">
                   <button id="wispr-add" class="btn small" type="button">Add a transform</button>
@@ -1540,20 +1520,17 @@
                    device, which is why it stopped being a button in the bar. -->
               <section id="set-g-pair" class="settings-group">
                 <h2 class="settings-group-title">Connect a phone</h2>
-                <p class="settings-group-note">Paste the link into the Android app,
-                   which keeps the token and sends it as a header. Opening it in a
-                   phone browser also works and signs that browser in for a year;
-                   either way the token is not in a URL after that.</p>
+                <p class="settings-group-note">Paste the link into the Android app, or
+                   open it in a phone browser, which stays signed in for a year.</p>
 
                 <div class="settings-row is-wide">
                   <div class="settings-row-head">
                     <div class="settings-row-text">
                       <div class="settings-row-label">Reachable at<button class="set-tip"
-                        type="button" aria-label="This page is served on 127.0.0.1, which is the one address useless to a phone, and the bridge cannot know what name a proxy in front of it answers to. So this is a guess you can edit." data-tip="This page is served on 127.0.0.1, which is the one address useless to a phone, and the bridge cannot know what name a proxy in front of it answers to. So this is a guess you can edit."></button></div>
-                      <div class="settings-row-note settings-desc">This page is served on
-                        127.0.0.1, which is the one address useless to a phone, and
-                        the bridge cannot know what name a proxy in front of it
-                        answers to. So this is a guess you can edit.</div>
+                        type="button" aria-label="The address your phone uses to reach this computer. A guess; edit it if your phone goes another way." data-tip="The address your phone uses to reach this computer. A guess; edit it if your phone goes another way."></button></div>
+                      <div class="settings-row-note settings-desc">The address your phone uses
+                        to reach this computer. A guess; edit it if your phone goes
+                        another way.</div>
                     </div>
                   </div>
                   <div class="settings-row-wide">
@@ -1569,10 +1546,9 @@
                   <div class="settings-row-head">
                     <div class="settings-row-text">
                       <div class="settings-row-label">Pairing link<button class="set-tip"
-                        type="button" aria-label="43 characters of token, so the useful thing to do with it is copy it rather than read it out." data-tip="43 characters of token, so the useful thing to do with it is copy it rather than read it out."></button></div>
-                      <div class="settings-row-note settings-desc">43 characters of token, so the
-                        useful thing to do with it is copy it rather than read it
-                        out.</div>
+                        type="button" aria-label="Anyone with this link can use your sessions. Treat it like a password." data-tip="Anyone with this link can use your sessions. Treat it like a password."></button></div>
+                      <div class="settings-row-note settings-desc">Anyone with this link can
+                        use your sessions. Treat it like a password.</div>
                     </div>
                     <div class="settings-row-side">
                       <button id="pair-copy" class="linkish" type="button">Copy link</button>
@@ -2371,7 +2347,7 @@
       <div id="memo-note" class="cfg-json-note"></div>
       <span id="memo-count" class="cfg-md-count"></span>
       <button id="memo-close" class="btn" type="button">Close</button>
-      <button id="memo-save" class="dash-btn" type="button">Save the file</button>
+      <button id="memo-save" class="btn primary" type="button">Save</button>
     </div>
   </div>
 </div>

@@ -62,31 +62,26 @@ const NOTE_OUTCOME = {
 export function renderNotes() {
     const rows = state.notes.rows;
     dom.notesClear.disabled = state.notes.loading || !rows.length;
+    // Before the early returns, so the count follows a Clear down to nothing.
+    dom.notesSub.textContent = rows.length ? `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}` : '';
 
     if (state.notes.error) {
         paint(dom.notesBody, html`<div key="error" class="dash-note error">
-            <p>${`Could not read the notification log: ${state.notes.error}`}</p>
-            <button class="more-btn" type="button" onClick=${() => loadNotes()}>Try again</button>
+            <p>${`Could not load the history: ${state.notes.error}`}</p>
+            <button class="btn small" type="button" onClick=${() => loadNotes()}>Try again</button>
         </div>`);
         return;
     }
     if (state.notes.loading && !rows.length) {
-        paint(dom.notesBody, html`<div key="wait" class="dash-note"><p>Reading the log…</p></div>`);
+        paint(dom.notesBody, html`<div key="wait" class="dash-note"><p>Loading…</p></div>`);
         return;
     }
     if (!rows.length) {
-        paint(dom.notesBody, html`<div key="empty" class="dash-note"><p>${
-            state.notes.scope === 'notable'
-                ? 'Nothing has wanted you. Everything switches to the quiet rows too — '
-                    + 'short turns, subagents finishing.'
-                : 'Nothing yet. Anything that wants you from now on is written down here, '
-                    + 'whether or not a window was open to hear it.'}</p></div>`);
+        paint(dom.notesBody, html`<div key="empty" class="dash-note"><p>Nothing yet.</p></div>`);
         return;
     }
 
-    dom.notesSub.textContent = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`
-        + (state.notes.scope === 'notable' ? ' worth interrupting you for.' : ', including the quiet ones.');
-    paint(dom.notesBody, rows.map(noteRow));
+    paint(dom.notesBody, rows.map(noteRow), { flip: false });
 }
 
 function noteRow(n) {

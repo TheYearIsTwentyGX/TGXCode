@@ -47,9 +47,7 @@
 .skp-rail-empty { padding: var(--sp-4); color: var(--text-3); font-size: var(--fs-md); }
 .skp-rail-lede {
     margin: var(--sp-6) 0 var(--sp-2) var(--sp-4);
-    font: 400 var(--fs-2xs) var(--sans);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font: 400 var(--fs-xs) var(--sans);
     color: var(--text-4);
 }
 .skp-group:first-child .skp-rail-lede { margin-top: 0; }
@@ -215,6 +213,7 @@
 .skp-safety-head { display: flex; align-items: baseline; gap: var(--sp-4); }
 .skp-safety-h { font: 500 var(--fs-sm) var(--sans); color: var(--text); }
 .skp-safety-level { margin-left: auto; font: 500 var(--fs-xs) var(--sans); white-space: nowrap; }
+.skp-safety-score { margin-left: var(--sp-2); font-family: var(--mono); font-weight: 400; opacity: 0.8; }
 
 .skp-meter { position: relative; height: 18px; margin: 0 6px; }
 .skp-meter-bar {
@@ -247,15 +246,12 @@
     align-items: baseline;
     gap: var(--sp-4);
     padding: var(--sp-2) var(--sp-3);
-    border-radius: var(--r-sm);
-    background: color-mix(in oklab, var(--c) 9%, transparent);
     font-size: var(--fs-xs);
 }
 .skp-factor-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); align-self: center; }
 .skp-factor-label { color: var(--text); }
 .skp-factor-note { color: var(--text-2); overflow-wrap: anywhere; }
 .skp-factor-pts { color: var(--c); font: 500 var(--fs-xs) var(--mono); }
-.skp-factors-quiet { font-size: var(--fs-2xs); color: var(--text-4); }
 
 .skp-hook {
     display: flex;
@@ -300,16 +296,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-6);
-}
-.skp-risk-badge {
-    align-self: flex-start;
-    padding: 0 var(--sp-5);
-    border-radius: var(--pill);
-    background: var(--red);
-    color: var(--on-red);
-    font: 600 var(--fs-xs)/24px var(--sans);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
 }
 .skp-risk-h { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 .skp-risk-lede { margin: 0; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-2); }

@@ -154,10 +154,9 @@ export function renderHooks() {
     if (!s.open) return;
     const codex = s.agent === 'codex' && codexInstalled();
     const file = hkTargetRow() || (s.data && s.data.files.find(f => f.scope === s.scope));
-    dom.hkpSub.textContent = codex ? 'What Codex would run in a project, and whether it trusts it.'
-        : file
-            ? `${CLAUDE_SCOPES[s.scope] || s.scope} — ${shortPath(file.file)}${file.exists ? '' : ' (not created yet)'}`
-            : 'What runs when Claude Code does something, from every file and plugin that can add one.';
+    dom.hkpSub.textContent = codex ? ''
+        : file ? `${CLAUDE_SCOPES[s.scope] || s.scope} · ${shortPath(file.file)}${file.exists ? '' : ' · not created yet'}`
+            : '';
     render(html`<div class="hkp-sides">
         ${codexInstalled() ? agentTabs() : null}
         ${codex ? html`<div key="codex" class="hkp-bar">${projectPick()}</div>
@@ -196,9 +195,8 @@ function projectPick() {
             s.data = null;
             loadHooks();
         }}>
-            ${dirs.length
-                ? dirs.map(d => html`<option key=${d} value=${d}>${shortPath(d)}</option>`)
-                : html`<option value="">No projects yet</option>`}
+            <option value="">No project</option>
+            ${dirs.map(d => html`<option key=${d} value=${d}>${shortPath(d)}</option>`)}
         </select>
     </label>`;
 }
@@ -244,7 +242,6 @@ function hkBar() {
                     hkClearDraft(s);
                     renderHooks();
                 }}>${CLAUDE_SCOPES[f.scope]}${
-                    !f.exists ? html`<span class="cfg-tab-tag">none</span>` : null}${
                     f.readonly ? html`<span class="cfg-tab-tag">read-only</span>` : null}</button>`)}
         </div>
         <div class="cmd-card-spacer"></div>
@@ -349,8 +346,7 @@ function hkEventHead(event) {
     if (!event) {
         return html`<div class="hkp-head">
             <h2 class="hkp-h">All events</h2>
-            <p class="cmd-field-note">${'Each event holds groups; a group’s matcher picks what it fires for, and its '
-                + 'hooks run together. Hooks from every file below run too — they add up, nothing overrides.'}</p>
+            <p class="cmd-field-note">Hooks from every file below run too.</p>
         </div>`;
     }
     const info = (s.data.hookEvents || []).find(e => e.name === event);

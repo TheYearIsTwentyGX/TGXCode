@@ -128,13 +128,6 @@ export function docsRow() {
     return kindRows().find(d => d.scope === s.scope) || null;
 }
 
-/** The other one — the file that also applies, whichever tab you are on. */
-function docsOtherRow() {
-    const s = docsState();
-    if (!s.data) return null;
-    return kindRows().find(d => d.scope !== s.scope) || null;
-}
-
 /** Bytes, not characters. A 23KB CLAUDE.md is a hundred characters short of it. */
 const docsBytes = (text) => new TextEncoder().encode(text || '').length;
 
@@ -218,14 +211,11 @@ function DocsGroup() {
     const k = kindOf();
     const head = html`<section key="head" class="settings-group" id="set-g-memory">
         <h2 class="settings-group-title">${codexInstalled() ? 'Memory' : 'Claude Code · Memory'}</h2>
-        <p class="settings-group-note">${'The instructions '}<code>${k.command}</code>${' is given before your '
-            + 'first message — '}<code>${k.name}</code>${', yours and this '
-            + 'project’s. Both apply at once; neither overrides the other.'}</p>
+        <p class="settings-group-note"><code>${k.name}</code>${`, yours and this project’s: both are given to `
+            + `${k.who} before your first message. Read when a session starts, so a running one keeps the old text.`}</p>
         ${codexInstalled() ? docsKindTabs() : null}
         ${docsScopeTabs()}
         ${docsFileLine()}
-        ${docsBothNote()}
-        ${docsReachNote()}
         ${docsCodexNotes()}
         ${tail}
     </section>`;
@@ -284,7 +274,6 @@ function docsScopeTabs() {
                     docsClearDraft(s);
                     renderSettings();
                 }}>${MEMORY_SCOPES[scope]}${
-                    row && !row.exists ? html`<span class="cfg-tab-tag">none</span>` : null}${
                     row && row.symlink ? html`<span class="cfg-tab-tag">symlink</span>` : null}</button>`;
         })}
         <div class="cfg-tabs-spacer"></div>
@@ -389,32 +378,6 @@ function docsFileLine() {
     </div>`;
 }
 
-/**
- * The other file, which also applies.
- *
- * This is the sentence that stops the scope tabs reading as a precedence
- * chain — which is the shape every other scope selector on this page really
- * is. The group above answers the same question with inherited permission rules
- * listed read-only beside the editable ones; there is no per-entry equivalent
- * for prose, so it is one line with a size on it.
- */
-function docsBothNote() {
-    const other = docsOtherRow();
-    if (!other) return null;
-    const name = MEMORY_SCOPES[other.scope].toLowerCase();
-    return html`<p class="settings-group-note cfg-md-both">${other.exists
-        ? `The ${name} file applies as well — ${formatBytes(other.size)} at `
-        : `The ${name} file would apply as well, but is not there yet: `}<code
-        >${shortPath(other.file)}</code>${other.exists ? '. Neither replaces the other.' : '.'}</p>`;
-}
-
-/** The sentence that stops "I changed it and nothing happened". */
-function docsReachNote() {
-    return html`<p class="cfg-reach"><strong>${`${kindOf().who} reads these when a session starts.`}</strong>${
-        ' A session already running has them in its context and will never pick up '
-        + 'an edit — not "not yet". Start a new one, or say the change in a message.'}</p>`;
-}
-
 /** A conflict, kept on screen rather than thrown at a toast. */
 function docsStaleBanner() {
     const s = docsState();
@@ -488,9 +451,6 @@ function DocsEditor() {
 
     if (s.view === 'preview') {
         return card(
-            html`<p key="note" class="settings-group-note">${s.dirty
-                ? 'Rendering what is in the box, not what is on disk.'
-                : 'Rendering the file as it is on disk.'}</p>`,
             html`<${MdPreview} key="preview" text=${s.draft} />`,
             docsFoot(row, editable));
     }
@@ -506,10 +466,7 @@ function DocsEditor() {
         ></textarea>`;
 
     return card(
-        html`<p key="note" class="settings-group-note">${editable
-            ? 'Saved exactly as typed — no reformatting, and the trailing newline is '
-            + 'yours to get right.'
-            : 'Read-only.'}</p>`,
+        editable ? null : html`<p key="note" class="settings-group-note">Read-only.</p>`,
         split
             ? html`<div key="split" class="cfg-md-split">${textarea}<${MdPreview} key="preview"
                 text=${s.draft} nodeRef=${preview} /></div>`
@@ -529,21 +486,21 @@ function docsFoot(row, editable) {
     return html`<div key="foot" class="cfg-json-foot">
         <div class=${`cfg-json-note${over ? ' bad' : ''}`}>${over
             ? `That is ${formatBytes(bytes)}, past the ${formatBytes(cap)} limit — saving is refused.`
-            : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</div>
+            : (s.dirty ? 'Unsaved changes' : '')}</div>
         <div class="cfg-json-acts">
             <span class="cfg-md-count">${docsCount(bytes, cap)}</span>
-            <button class="linkish cfg-md-discard" type="button" hidden=${!s.dirty}
+            <button class="btn small quiet cfg-md-expand" type="button"
+                title="Edit this in a full-height window"
+                onClick=${() => openMemoDialog()}>Expand</button>
+            <button class="btn small quiet cfg-md-discard" type="button" disabled=${!s.dirty}
                 onClick=${() => {
                     if (!docsMayLeave(s)) return;
                     docsClearDraft(s);
                     renderSettings();
-                }}>Discard changes</button>
-            <button class="linkish cfg-md-expand" type="button"
-                title="Edit this in a full-height window"
-                onClick=${() => openMemoDialog()}>Expand</button>
-            <button class="dash-btn cfg-md-save" type="button"
+                }}>Revert</button>
+            <button class="btn small primary cfg-md-save" type="button"
                 disabled=${!editable || !s.dirty || over}
-                onClick=${() => saveClaudeDocs()}>${row && !row.exists ? 'Create the file' : 'Save the file'}</button>
+                onClick=${() => saveClaudeDocs()}>${row && !row.exists ? 'Create' : 'Save'}</button>
         </div>
     </div>`;
 }
@@ -670,7 +627,7 @@ export function paintMemoDialog() {
     dom.memoNote.className = `cfg-json-note${over ? ' bad' : ''}`;
     dom.memoNote.textContent = over
         ? `That is ${formatBytes(bytes)}, past the ${formatBytes(cap)} limit — saving is refused.`
-        : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.');
+        : (s.dirty ? 'Unsaved changes' : '');
     dom.memoSave.disabled = !editable || !s.dirty || over;
-    dom.memoSave.textContent = row.exists ? 'Save the file' : 'Create the file';
+    dom.memoSave.textContent = row.exists ? 'Save' : 'Create';
 }

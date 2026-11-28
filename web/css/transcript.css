@@ -785,8 +785,6 @@
 }
 .tasks-title {
     font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--text-4);
 }
 .tasks-count {
@@ -848,8 +846,6 @@
 .tasks-strip-label {
     writing-mode: vertical-rl;
     font: 500 var(--fs-xs)/var(--lh-none) var(--sans);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
 }
 
 /* One task. A `details`, like a tool call in the log, so the caret and the

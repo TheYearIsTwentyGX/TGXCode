@@ -26,7 +26,7 @@
     /* Two rows of two rather than four thin strips. Every column survives —
        losing one would lose a state — and the board scrolls as a whole instead
        of each column scrolling in a slot too short to be worth it. */
-    .tb-head { padding: 16px 16px 12px; }
+    .dash-head { padding: 16px 16px 12px; }
     .tb-body {
         padding: 0 16px 20px;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -46,7 +46,6 @@
     .tb-body.cols .tb-col { max-height: none; }
     .tb-search { width: 180px; }
 
-    .dr-head { padding: 16px 16px 12px; }
     .dr-body { padding: 0 16px 20px; }
     /* The board opposite folds to two rows of two because it always has exactly
        four columns. This one cannot: the count is however many projects you are
@@ -59,7 +58,6 @@
     .dr-col { max-height: none; }
 
     /* The schedules panel, for the same reasons and with the same numbers. */
-    .sched-head { padding: 16px 16px 12px; }
     .sched-body { padding: 0 16px 20px; }
     .sched-body.cols { grid-auto-columns: minmax(260px, 1fr); }
     .sched-col { max-height: none; }

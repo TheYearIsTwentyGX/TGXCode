@@ -860,7 +860,7 @@ function hkFoot() {
     return html`<div key="foot" class="cmd-foot hk-foot">
         <span class=${`cmd-foot-note${problems ? ' bad' : ''}`}>${problems
             ? `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} — fix ${problems.length === 1 ? 'it' : 'them'} to save.`
-            : (s.hooksDirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</span>
+            : (s.hooksDirty ? 'Unsaved changes' : '')}</span>
         <div class="cmd-card-spacer"></div>
         <button class="btn quiet small" type="button" disabled=${!s.hooksDirty}
             onClick=${() => { hkClearDraft(s); renderHooks(); }}>Revert</button>

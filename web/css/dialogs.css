@@ -310,30 +310,6 @@
    is there to be read at arm's length; the quiet rows give theirs up, which is
    how Everything stays readable once it fills with short turns. */
 
-.notes-head {
-    flex: none;
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-7);
-    padding: var(--sp-8) var(--pane-x, 28px) var(--sp-7);
-}
-.notes-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
-.notes-sub {
-    margin: var(--sp-2) 0 0;
-    max-width: 640px;
-    font-size: var(--fs-md);
-    line-height: var(--lh-prose);
-    color: var(--text-3);
-}
-
-.notes-tools {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-5);
-}
-.notes-tools .dash-btn { margin-left: 0; }
 
 /* Two states of one control, so they share a track rather than sitting apart
    as a pair of buttons that happen to be next to each other. */
