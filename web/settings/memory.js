@@ -1,5 +1,6 @@
-// The Memory group — the user's and the project's CLAUDE.md in a text box — and
-// the full-height dialog that edits the same file. Moved out of app.js as it was.
+// The Memory group — the user's and the project's CLAUDE.md in a text box, and
+// with Codex installed their AGENTS.md beside them — and the full-height dialog
+// that edits the same file. Moved out of app.js as it was.
 //
 // The group is Preact, drawn as part of the Settings tree rather than hung in
 // it as foreign DOM — see web/rail.js for the pattern. What that settled here:
@@ -26,6 +27,7 @@ import { formatBytes } from '../composer/attachments.js';
 import { grow } from '../composer/send.js';
 import { paint } from '../boards/parts.js';
 import { copyPath } from './claude-config.js';
+import { codexInstalled } from './codex-config.js';
 import { renderSettings, settingsProject } from './index.js';
 
 // ── Claude Code's memory files ───────────────────────────────────────────
@@ -61,6 +63,20 @@ import { renderSettings, settingsProject } from './index.js';
 /** The two scopes, named for a person. */
 const MEMORY_SCOPES = { user: 'User', project: 'Project' };
 
+/** The two files, and whose each is. */
+const MEMORY_KINDS = {
+    'claude-md': { name: 'CLAUDE.md', who: 'Claude Code', command: 'claude' },
+    'agents-md': { name: 'AGENTS.md', who: 'Codex', command: 'codex' },
+};
+// Codex stops reading project instructions here (`project_doc_max_bytes`).
+const CODEX_DOC_BYTES = 32 * 1024;
+
+const kindOf = () => MEMORY_KINDS[docsState().kind] || MEMORY_KINDS['claude-md'];
+
+/** The rows of the file being looked at. */
+const kindRows = () => ((docsState().data && docsState().data.docs) || [])
+    .filter(d => d.kind === docsState().kind);
+
 function docsState() {
     return state.claudeDocs;
 }
@@ -95,6 +111,8 @@ export async function loadClaudeDocs() {
         // would leave the group with nothing to draw and no way back to
         // something that works.
         if (!docsRow()) s.scope = 'user';
+        // A bridge from before AGENTS.md has no rows for it.
+        if (!docsRow()) s.kind = 'claude-md';
     } catch (err) {
         s.data = null;
         s.error = err.message;
@@ -107,14 +125,14 @@ export async function loadClaudeDocs() {
 export function docsRow() {
     const s = docsState();
     if (!s.data) return null;
-    return s.data.docs.find(d => d.scope === s.scope) || null;
+    return kindRows().find(d => d.scope === s.scope) || null;
 }
 
 /** The other one — the file that also applies, whichever tab you are on. */
 function docsOtherRow() {
     const s = docsState();
     if (!s.data) return null;
-    return s.data.docs.find(d => d.scope !== s.scope) || null;
+    return kindRows().find(d => d.scope !== s.scope) || null;
 }
 
 /** Bytes, not characters. A 23KB CLAUDE.md is a hundred characters short of it. */
@@ -191,34 +209,68 @@ function DocsGroup() {
     let tail = null;
     if (s.error) {
         tail = html`<div class="settings-error">${
-            `Could not read Claude Code’s memory files: ${s.error}`}</div>`;
+            `Could not read the memory files: ${s.error}`}</div>`;
     } else if (!s.data) {
         tail = html`<div class="settings-empty">Reading…</div>`;
     } else if (s.stale) {
         tail = docsStaleBanner();
     }
+    const k = kindOf();
     const head = html`<section key="head" class="settings-group" id="set-g-memory">
-        <h2 class="settings-group-title">Claude Code · Memory</h2>
-        <p class="settings-group-note">${'The instructions '}<code>claude</code>${' is given before your '
-            + 'first message — '}<code>CLAUDE.md</code>${', yours and this '
+        <h2 class="settings-group-title">${codexInstalled() ? 'Memory' : 'Claude Code · Memory'}</h2>
+        <p class="settings-group-note">${'The instructions '}<code>${k.command}</code>${' is given before your '
+            + 'first message — '}<code>${k.name}</code>${', yours and this '
             + 'project’s. Both apply at once; neither overrides the other.'}</p>
+        ${codexInstalled() ? docsKindTabs() : null}
         ${docsScopeTabs()}
         ${docsFileLine()}
         ${docsBothNote()}
         ${docsReachNote()}
+        ${docsCodexNotes()}
         ${tail}
     </section>`;
     if (s.error || !s.data) return [head];
     return [head, html`<${DocsEditor} key="file" />`];
 }
 
-/** Which file, and which of the two ways of looking at it. */
+/** Whose file: CLAUDE.md or AGENTS.md. */
+function docsKindTabs() {
+    const s = docsState();
+    return html`<div class="cfg-tabs cfg-md-kinds" role="tablist">
+        ${Object.entries(MEMORY_KINDS).map(([kind, k]) => html`<button key=${kind} type="button" role="tab"
+            class=${`cfg-tab${kind === s.kind ? ' on' : ''}`} aria-selected=${kind === s.kind ? 'true' : 'false'}
+            title=${`${k.who} reads these`}
+            onClick=${() => {
+                if (kind === s.kind || !docsMayLeave(s)) return;
+                s.kind = kind;
+                docsClearDraft(s);
+                // The other file may have no project row to be on.
+                if (s.data && !docsRow()) s.scope = 'user';
+                renderSettings();
+            }}>${k.name}</button>`)}
+    </div>`;
+}
+
+/** What is particular to AGENTS.md: a file read instead of it, and its limit. */
+function docsCodexNotes() {
+    const row = docsRow();
+    if (!row || row.kind !== 'agents-md') return null;
+    return [
+        row.overriddenBy ? html`<p key="over" class="settings-row-warn">${'Codex is not reading this file: '}
+            <code>${shortPath(row.overriddenBy)}</code>${' is read instead of it.'}</p>` : null,
+        row.scope === 'project' && row.size > CODEX_DOC_BYTES
+            ? html`<p key="long" class="settings-row-warn">${`This is ${formatBytes(row.size)}. By default Codex `
+                + `reads only the first ${formatBytes(CODEX_DOC_BYTES)} of a project’s instructions.`}</p>` : null,
+    ];
+}
+
+/** Which scope, and which of the two ways of looking at it. */
 function docsScopeTabs() {
     const s = docsState();
-    const rows = s.data ? s.data.docs : [];
+    const rows = kindRows();
     // Both tabs are drawn even when the bridge sent no row for one, disabled
     // with a reason. Absent, the project tab would make it look as though this
-    // app only knows about one CLAUDE.md.
+    // app only knows about one file.
     return html`<div class="cfg-tabs" role="tablist">
         ${['user', 'project'].map((scope) => {
             const row = rows.find(d => d.scope === scope);
@@ -321,7 +373,7 @@ function docsFileLine() {
     const row = docsRow();
     if (!row) {
         return html`<div class="settings-file"><span class="settings-file-none"
-            >No project selected — pick one above to edit its CLAUDE.md.</span></div>`;
+            >${`No project selected — pick one above to edit its ${kindOf().name}.`}</span></div>`;
     }
     const tag = (text, bad) => html`<span class=${bad ? 'settings-file-tag bad' : 'settings-file-tag'}
         >${text}</span>`;
@@ -358,7 +410,7 @@ function docsBothNote() {
 
 /** The sentence that stops "I changed it and nothing happened". */
 function docsReachNote() {
-    return html`<p class="cfg-reach"><strong>Claude Code reads these when a session starts.</strong>${
+    return html`<p class="cfg-reach"><strong>${`${kindOf().who} reads these when a session starts.`}</strong>${
         ' A session already running has them in its context and will never pick up '
         + 'an edit — not "not yet". Start a new one, or say the change in a message.'}</p>`;
 }
@@ -512,6 +564,7 @@ export async function saveClaudeDocs() {
     renderSettings();
     try {
         const answer = await put('/api/claude-docs', {
+            kind: s.kind,
             scope: s.scope,
             cwd: docsDir(),
             stamp: row.exists ? row.stamp : null,

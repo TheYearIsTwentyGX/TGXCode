@@ -37,6 +37,8 @@ import {
 import { paintComposerHint } from '../composer/send.js';
 import { openSession } from '../transcript/conversation.js';
 import { loadClaudeConfig } from './claude-config.js';
+import { loadCodexConfig } from './codex-config.js';
+import { loadCodexVersion } from '../quota.js';
 import { settingsCard, SETTINGS, SETTINGS_CATEGORIES } from './general.js';
 import { loadClaudeDocs } from './memory.js';
 import { loadCmdConfig } from './project-commands.js';
@@ -168,6 +170,10 @@ export async function loadSettings() {
         loadClaudeConfig();
         loadClaudeDocs();
         loadCmdConfig();
+        // The Codex group and the AGENTS.md tab wait on knowing there is a
+        // Codex, which the page may not have asked yet.
+        (state.codexVersion ? Promise.resolve() : loadCodexVersion())
+            .then(() => { renderSettings(); return loadCodexConfig(); });
         // The weakest file in the chain is always the user's own, which is what
         // tells shortPath where home is.
         if (s.data.files && s.data.files.length) noteHome(s.data.files[0].file);

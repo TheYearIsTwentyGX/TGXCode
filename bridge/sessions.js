@@ -30,6 +30,7 @@ const { PROJECTS_DIR, CACHE_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX,
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity, toolResultImage, placeOf } = require('./transcript');
 const codex = require('./runtimes/codex/transcript');
+const hookLog = require('./codex/hook-log');
 const codexItems = require('./codex/items');
 const runtimes = require('./runtimes');
 const { TurnIndex } = require('./turn-index');
@@ -822,7 +823,11 @@ class SessionIndex extends EventEmitter {
         const before = from === 0
             ? codex.inherited(entries, { locate: (id) => this._codexFile(id) }) : [];
         const { events } = codex.buildEvents([...before, ...entries], this._codexCtx());
-        return { summary: this._summary(rec), events, offset: from + consumed };
+        // Hook failures, which the rollout does not hold — bridge/codex/hook-log.js.
+        // A window that runs to the end takes the ones noted at its end too.
+        return { summary: this._summary(rec),
+            events: hookLog.merge(events, rec.meta.sessionId, from, to === null ? null : end),
+            offset: from + consumed };
     }
 
     /** The rollout of the Codex thread with this id, if the index has it. */
@@ -976,7 +981,8 @@ class SessionIndex extends EventEmitter {
             if (buf.length === offset) return { reset: false, offset, events: [] };
             const { entries, consumed } = parseLines(buf.subarray(offset));
             const { events } = codex.buildEvents(entries, this._codexCtx());
-            return { reset: false, offset: offset + consumed, events };
+            return { reset: false, offset: offset + consumed,
+                events: hookLog.merge(events, sessionId, offset) };
         }
 
         let st;

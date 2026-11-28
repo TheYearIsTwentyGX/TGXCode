@@ -551,6 +551,9 @@ export const state = {
         hooksDraft: null, hooksDirty: false, hooksReview: false,
         hooksProblems: null, hooksSeed: null,
         script: null, recipes: false, sources: null, sourcesError: null,
+        // Whose hooks the page is showing, and Codex's as last read
+        // (web/hooks/codex.js).
+        agent: 'claude', codex: { dir: null, data: null, loading: false, error: null },
     },
     // And Claude Code's memory files, which are two rather than four and are
     // additive rather than a chain — see the Memory section below. All of it is
@@ -563,11 +566,15 @@ export const state = {
     // is the one somebody may want to keep narrow. Per-browser, in
     // localStorage, like the folds: how this page is laid out, not a setting.
     claudeDocs: {
-        scope: 'user', data: null, loading: false, error: null, saving: false,
+        kind: 'claude-md', scope: 'user', data: null, loading: false, error: null, saving: false,
         draft: null, dirty: false, stale: null, caret: 0,
         view: storedMemoView('memoView'), dialogView: storedMemoView('memoDialogView'),
         expanded: false,
     },
+    // The Codex group: what the bridge last read of Codex's config, the models
+    // its model rows offer, and the key a save is in flight for. See
+    // web/settings/codex-config.js.
+    codexCfg: { data: null, models: null, loading: false, error: null, saving: null },
     // And the commands a project declares, which are two files again but ours
     // rather than Claude Code's — see the Project commands section below. Its
     // own `scope` for the same reason the two above have one: the page's picker

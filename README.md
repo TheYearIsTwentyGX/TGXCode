@@ -405,7 +405,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/http.js` | The plumbing every route shares: a JSON reply, a JSON or binary body, and the `NEXT` a route module returns for a request that is not its own |
 | `bridge/routes/events.js` | `/api/events` and `/api/subscribe`, and the polled `/api/peers`, `/api/overview`, `/api/taskboard` |
 | `bridge/routes/bridge.js` | The process itself: health, shutdown, restart, the installed Claude Code and updating it, `/api/pairing` |
-| `bridge/routes/settings.js` | `/api/prefs`, `/api/keymap`, `/api/spinner/groups`, and Claude Code's own settings and memory files |
+| `bridge/routes/settings.js` | `/api/prefs`, `/api/keymap`, `/api/spinner/groups`, Claude Code's own settings, both CLIs' memory files, and Codex's settings and hooks |
 | `bridge/routes/notifications.js` | The notification history, marking it read, clearing it |
 | `bridge/routes/digest.js` | `GET /api/digest` — gathers the inputs for bridge/digest.js |
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`, `/api/file-search`. Asked before `session.js`, which is load-bearing |
@@ -504,7 +504,10 @@ Two rules worth knowing before you send a patch:
 | `bridge/codex/version.js` | The same for Codex (`GET /api/codex-version`), plus whether it is inside the tested range. No updater: it says how |
 | `bridge/codex/quota.js` | The Codex meter (`runtimes.codex` on `GET /api/quota`) and whether Codex is signed in: `account/read` and `account/rateLimits/read` from a short-lived app-server, with live conversations' pushes merged over them |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
-| `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
+| `bridge/codex-schema.js` | The same for Codex's `config.toml`: the few keys and `[features]` flags worth a control, and the closed set of what may be written |
+| `bridge/codex-config.js` | `GET`/`PUT /api/codex-config` and its `hooks`: Codex's settings and hooks, read and written through a short-lived app-server so no TOML is parsed here |
+| `bridge/codex/hook-log.js` | Codex hooks that failed or blocked, which Codex records nowhere: kept per thread and laid back into the transcript as `system` rows |
+| `bridge/claude-docs.js` | The memory files, `CLAUDE.md` and `AGENTS.md` — which one a kind and scope mean, and reading and writing it whole |
 | `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |
 | `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
@@ -605,11 +608,13 @@ Two rules worth knowing before you send a patch:
 | `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control (Preact vnodes; typed-into boxes are uncontrolled and keyed on the stored value) |
 | `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON; its Hooks row links to the Hooks page |
 | `web/hooks/page.js` | The Hooks page — project and scope, the rail of events, and the hooks from plugins, skills and agents |
+| `web/hooks/codex.js` | The page's Codex side: what `hooks/list` says would run and whether it is trusted, read-only |
 | `web/hooks/editor.js` | The hooks editor on that page — a draft of one file's `hooks` block, its review and the save |
 | `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
 | `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
 | `web/settings/updates.js` | The Updates group — where the shell looks for a build, what it found, Restart to update, and Build update |
-| `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
+| `web/settings/memory.js` | The Memory group — the CLAUDE.md and AGENTS.md files — and the full-height dialog on the same file |
+| `web/settings/codex-config.js` | The Codex group, shown where Codex is installed: one key saved per change |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
 | `web/settings/secrets.js` | The Secrets group — a project's secrets by name, with Reveal (30 seconds), Update, Delete and Add; values are never kept in state |
 | `web/settings/brief.js` | The Agent brief group — the switches, each text as a draft with Reset to default, and a preview with what is left out struck through |

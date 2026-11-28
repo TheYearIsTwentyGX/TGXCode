@@ -160,6 +160,9 @@
 //                     rate-limit state, account-wide. `rejected` is the one
 //                     that can end a turn; `info` is kept for `usageLimit`
 //   {type:'notice', notice:{level, kind, text}}
+//   {type:'hook-run', run, turnId}
+//                     a hook went wrong and the transcript will not say so
+//                     (Codex). The runner emits it; the bridge keeps it
 //
 // An unrecognised message is an empty list. Nothing here throws on a shape it
 // does not know: that is the CLI being newer than us, not broken.

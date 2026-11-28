@@ -3,7 +3,8 @@
 // Settings, three kinds of them: this app's (`/api/prefs`, and the two catalogues
 // its page is drawn from, `/api/keymap` and `/api/spinner/groups`, plus the agent
 // brief those settings compose into, `/api/brief`), Claude Code's
-// own (`/api/claude-config`), and Claude Code's memory files (`/api/claude-docs`).
+// own (`/api/claude-config`), the two CLIs' memory files (`/api/claude-docs`),
+// and Codex's own settings and hooks (`/api/codex-config`).
 //
 // **Local and remote differ per route, and each says so beside it.** Reading
 // prefs is open; saving them is refused to a remote caller. Both claude-config
@@ -34,6 +35,8 @@ const { norm: spinnerNorm } = require('../spinner');
 let briefFor = null;
 let claudeConfig = null;
 let claudeDocs = null;
+let codexConfig = null;
+let codexVersion = null;
 let evaluateKeepAwake = null;
 let hookScripts = null;
 let hookSources = null;
@@ -42,8 +45,8 @@ let registry = null;
 let spinner = null;
 
 function init(deps) {
-    ({ briefFor, claudeConfig, claudeDocs, evaluateKeepAwake, hookScripts, hookSources, prefs, registry,
-        spinner } = deps);
+    ({ briefFor, claudeConfig, claudeDocs, codexConfig, codexVersion, evaluateKeepAwake, hookScripts,
+        hookSources, prefs, registry, spinner } = deps);
 }
 
 /**
@@ -103,10 +106,45 @@ function claudeConfigStatus(code) {
  * carried across for symmetry.
  */
 function claudeDocsStatus(code) {
-    if (['scope', 'dir', 'body', 'stamp'].includes(code)) return 400;
+    if (['kind', 'scope', 'dir', 'body', 'stamp'].includes(code)) return 400;
     if (['stale', 'exists'].includes(code)) return 409;
     if (code === 'size') return 413;
     return 403;   // readonly, write
+}
+
+/**
+ * Which status a codex-config failure is. `codex` is Codex itself not doing as
+ * asked — it did not start, or did not answer — which is not the caller's fault.
+ */
+function codexConfigStatus(code) {
+    if (code === 'key' || code === 'value') return 400;
+    if (code === 'stale') return 409;
+    if (code === 'readonly' || code === 'write') return 403;
+    return 502;
+}
+
+/**
+ * Run one codex-config call, or say why not. With no `codex` on this machine
+ * the reads answer `{installed: false}` and a write is refused, without spawning
+ * anything.
+ */
+async function codexAnswer(res, { write = false } = {}, call) {
+    if (!(await codexVersion.installed())) {
+        return write
+            ? send(res, 409, { error: 'Codex is not installed on this machine', code: 'missing' })
+            : send(res, 200, { installed: false });
+    }
+    try {
+        return send(res, 200, { installed: true, ...(await call()) });
+    } catch (err) {
+        // Anything that is not a refusal of ours — a spawn that failed, a
+        // timeout, a JSON-RPC error number — is Codex not answering.
+        const ours = ['key', 'value', 'stale', 'readonly', 'write'].includes(err.code);
+        return send(res, codexConfigStatus(ours ? err.code : 'codex'), {
+            error: ours ? err.message : `Codex could not be asked: ${err.message}`,
+            code: ours ? err.code : 'codex',
+        });
+    }
 }
 
 async function handle(req, res, url, pathname, seg, who) {
@@ -363,6 +401,7 @@ async function handle(req, res, url, pathname, seg, who) {
         let saved;
         try {
             saved = claudeDocs.save({
+                kind: body.kind || 'claude-md',
                 scope: body.scope || 'user',
                 dir: body.cwd || '',
                 // Absent and null mean different things — "I forgot the
@@ -386,9 +425,32 @@ async function handle(req, res, url, pathname, seg, who) {
         // contents of a file this route classifies as local-only down every open
         // channel would be a poor way to save a fetch.
         broadcast('claude-docs', {
-            at: Date.now(), scope: body.scope || 'user', file: saved.file,
+            at: Date.now(), kind: body.kind || 'claude-md', scope: body.scope || 'user', file: saved.file,
         });
         return send(res, 200, { ...saved, maxBytes: MAX_DOC_BYTES });
+    }
+
+    // ── Codex's own settings and hooks ─────────────────────────────────
+    //
+    // Asked of Codex itself, never parsed here — see bridge/codex-config.js.
+    // Local callers only, every method, as claude-config is. Each call spawns a
+    // short-lived app-server, so it takes about a second.
+    if (pathname === '/api/codex-config' && req.method === 'GET') {
+        return codexAnswer(res, {}, () => codexConfig.read(url.searchParams.get('cwd') || ''));
+    }
+
+    // One key at a time; `value: null` removes it.
+    if (pathname === '/api/codex-config' && req.method === 'PUT') {
+        const body = await readJson(req);
+        return codexAnswer(res, { write: true }, async () => {
+            const saved = await codexConfig.save({ key: body.key, value: body.value, dir: body.cwd || '' });
+            broadcast('codex-config', { at: Date.now(), key: body.key, file: saved.written });
+            return saved;
+        });
+    }
+
+    if (pathname === '/api/codex-config/hooks' && req.method === 'GET') {
+        return codexAnswer(res, {}, () => codexConfig.hooks(url.searchParams.get('cwd') || ''));
     }
 
     // What may be rebound, and the closed set of key names a combo may end in.

@@ -28,6 +28,8 @@ const { ClaudeVersion } = require('./claude-version');
 const { CodexVersion } = require('./codex/version');
 const { CodexQuota } = require('./codex/quota');
 const { ClaudeDocs } = require('./claude-docs');
+const { CodexConfig } = require('./codex-config');
+const hookLog = require('./codex/hook-log');
 const { HookScripts } = require('./hook-scripts');
 const { HookSources } = require('./hook-sources');
 const keymap = require('./keymap');
@@ -99,8 +101,10 @@ const claudeConfig = new ClaudeConfig({
 
 // Claude Code's memory files, as opposed to its settings — see the header of
 // bridge/claude-docs.js for why a whole text file is a different module from a
-// key inside a JSON one.
-const claudeDocs = new ClaudeDocs();
+// key inside a JSON one. Codex's AGENTS.md is the same kind of thing.
+const claudeDocs = new ClaudeDocs({ kinds: ['claude-md', 'agents-md'] });
+// Codex's own settings and hooks, asked of Codex — see bridge/codex-config.js.
+const codexConfig = new CodexConfig();
 
 // The Hooks page's two reaches past the settings files: the scripts hooks run,
 // and the hooks plugins, skills and agents bring. See the headers of
@@ -566,6 +570,12 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/claude-docs' || pathname.startsWith('/api/claude-docs/')) {
         return 'Claude Code’s memory files can only be read and written on the machine they live on';
     }
+    // Codex's config.toml and hooks, on claude-config's terms exactly: hook
+    // commands, and a file that holds MCP environments and provider headers. A
+    // prefix with no method test.
+    if (pathname === '/api/codex-config' || pathname.startsWith('/api/codex-config/')) {
+        return 'Codex’s own settings can only be read and written on the machine they live on';
+    }
     // A handoff starts a turn in a session the caller is not looking at, and can
     // wake one that has no process at all. That is a reasonable thing for an
     // agent on this machine to do and not a reasonable thing to reach in for from
@@ -786,7 +796,8 @@ const searchWarmer = new Warmer(index.searchIndex,
     () => index.searchCandidates({ includeTest: true }));
 
 const ROUTE_DEPS = {
-    index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, hookScripts, hookSources,
+    index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, codexConfig,
+    hookScripts, hookSources,
     spinner, suggestions,
     beacon, drafts, later, standing, snippetStore, templates, schedules, claudeVersion, terminals,
     codexVersion, codexQuota, slashCommands, runs, notifications, reads, orchestrators,
@@ -1061,6 +1072,17 @@ pool.on('permission-resolved', (p) => {
     tickBoard();
 });
 pool.on('notice', (n) => broadcast('notice', n));
+// A Codex hook that failed or blocked. Codex writes nothing about it to the
+// rollout, so it is kept here (bridge/codex/hook-log.js) and sent to whoever is
+// following the conversation as the transcript row it will be on a re-read.
+pool.on('hook-run', ({ sessionId, run, turnId }) => {
+    const rec = index.get(sessionId);
+    let offset = 0;
+    // No file yet on a session's first turn: the start of it, then.
+    try { if (rec) offset = fs.statSync(rec.file).size; } catch { /* not written yet */ }
+    const event = hookLog.record(sessionId, { run, turnId, offset });
+    if (event) events.pushTail(sessionId, [event]);
+});
 // A sudo ask goes everywhere a permission ask does — the session, Needs you, the
 // Live board, the notification log — but never to an orchestrator: it is a
 // model, and it has no password to give. The runner's status carries the ask

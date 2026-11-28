@@ -1449,3 +1449,6 @@
 .secret-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); }
 .secret-form .settings-text { width: 260px; }
 .secret-form .secret-name { width: 180px; }
+
+/* The CLAUDE.md | AGENTS.md tabs, above the scope tabs they belong to. */
+.cfg-md-kinds + .cfg-tabs { margin-top: var(--sp-3); }

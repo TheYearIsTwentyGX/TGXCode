@@ -1,5 +1,6 @@
 // The Hooks page: every hook that can run in a project, in one place, and the
-// editor for the ones in a settings file.
+// editor for the ones in a settings file. With Codex installed it has a second
+// side, Codex's own hooks (codex.js), chosen by the tabs at the top.
 //
 // A whole-screen panel like Analytics (see PANELS in app.js), opened from the
 // top bar, the palette, `?view=hooks`, and the link Settings › Claude Code
@@ -32,6 +33,8 @@ import { state } from '../state.js';
 import { showHooks } from '../app.js';
 import { CLAUDE_SCOPES } from '../settings/claude-config.js';
 import { openSettingsAt, renderSettings, settingsProject } from '../settings/index.js';
+import { codexInstalled } from '../settings/codex-config.js';
+import { CodexHooks, loadCodexHooks } from './codex.js';
 import { HooksEditor, hkClearDraft, hkDraft, hkEditable } from './editor.js';
 import { RecipePicker } from './recipes.js';
 import { scriptMayLeave } from './script.js';
@@ -96,6 +99,7 @@ export async function loadHooks() {
     }
     s.loading = false;
     renderHooks();
+    if (s.agent === 'codex' && codexInstalled()) loadCodexHooks();
 }
 
 /** Anything typed on this page that a change of file would lose, or the reader said to drop it. */
@@ -116,8 +120,9 @@ export function hooksMayLeave() {
  * opens on the project and scope Settings was showing. Asks first when that
  * means leaving a draft for another file.
  */
-export function openHooksAt({ dir, scope } = {}) {
+export function openHooksAt({ dir, scope, agent = 'claude' } = {}) {
     const s = hkState();
+    s.agent = agent;
     const moving = (dir !== undefined && dir !== s.dir) || (scope && scope !== s.scope);
     if (!moving || !s.data || hooksMayLeave()) {
         if (dir !== undefined && dir !== s.dir) { s.dir = dir; s.data = null; }
@@ -147,11 +152,55 @@ export function hkJsonLink(label) {
 export function renderHooks() {
     const s = hkState();
     if (!s.open) return;
+    const codex = s.agent === 'codex' && codexInstalled();
     const file = hkTargetRow() || (s.data && s.data.files.find(f => f.scope === s.scope));
-    dom.hkpSub.textContent = file
-        ? `${CLAUDE_SCOPES[s.scope] || s.scope} — ${shortPath(file.file)}${file.exists ? '' : ' (not created yet)'}`
-        : 'What runs when Claude Code does something, from every file and plugin that can add one.';
-    render(html`<${HooksPage} />`, dom.hkpBody);
+    dom.hkpSub.textContent = codex ? 'What Codex would run in a project, and whether it trusts it.'
+        : file
+            ? `${CLAUDE_SCOPES[s.scope] || s.scope} — ${shortPath(file.file)}${file.exists ? '' : ' (not created yet)'}`
+            : 'What runs when Claude Code does something, from every file and plugin that can add one.';
+    render(html`<div class="hkp-sides">
+        ${codexInstalled() ? agentTabs() : null}
+        ${codex ? html`<div key="codex" class="hkp-bar">${projectPick()}</div>
+            <${CodexHooks} key="codex-list" />` : html`<${HooksPage} key="claude" />`}
+    </div>`, dom.hkpBody);
+}
+
+/** Whose hooks: shown only where there are two sets to choose between. */
+function agentTabs() {
+    const s = hkState();
+    return html`<div key="agents" class="cfg-tabs hkp-agents" role="tablist">
+        ${[['claude', 'Claude Code'], ['codex', 'Codex']].map(([id, label]) => html`<button key=${id}
+            type="button" role="tab" class=${`cfg-tab${s.agent === id ? ' on' : ''}`}
+            aria-selected=${s.agent === id ? 'true' : 'false'}
+            onClick=${() => {
+                if (s.agent === id) return;
+                s.agent = id;
+                renderHooks();
+                if (id === 'codex') loadCodexHooks();
+            }}>${label}</button>`)}
+    </div>`;
+}
+
+/** The project picker, the same on both sides. */
+function projectPick() {
+    const s = hkState();
+    const here = hkDir();
+    const dirs = [...new Set([here, ...state.settings.projects.map(p => p.cwd)].filter(Boolean))];
+    return html`<label class="settings-pick hkp-project">
+        <span>Project</span>
+        <select class="settings-select" value=${here} onChange=${(e) => {
+            const next = e.target.value;
+            if (next === s.dir) return;
+            if (!hooksMayLeave()) { e.target.value = s.dir; return; }
+            s.dir = next;
+            s.data = null;
+            loadHooks();
+        }}>
+            ${dirs.length
+                ? dirs.map(d => html`<option key=${d} value=${d}>${shortPath(d)}</option>`)
+                : html`<option value="">No projects yet</option>`}
+        </select>
+    </label>`;
 }
 
 // ── the page ─────────────────────────────────────────────────────────────
@@ -179,26 +228,11 @@ function HooksPage() {
 /** Project, scope, and the page's two actions. */
 function hkBar() {
     const s = hkState();
-    const here = s.dir || '';
-    const dirs = [...new Set([here, ...state.settings.projects.map(p => p.cwd)].filter(Boolean))];
     const off = s.data.effective.disableAllHooks;
     const target = hkTargetRow();
     const ownOff = target && target.values && target.values.disableAllHooks === true;
     return html`<div class="hkp-bar">
-        <label class="settings-pick hkp-project">
-            <span>Project</span>
-            <select class="settings-select" value=${here} onChange=${(e) => {
-                const next = e.target.value;
-                if (next === s.dir) return;
-                if (!hooksMayLeave()) { e.target.value = s.dir; return; }
-                s.dir = next;
-                loadHooks();
-            }}>
-                ${dirs.length
-                    ? dirs.map(d => html`<option key=${d} value=${d}>${shortPath(d)}</option>`)
-                    : html`<option value="">No projects yet</option>`}
-            </select>
-        </label>
+        ${projectPick()}
         <div class="cfg-tabs hkp-scopes" role="tablist">
             ${s.data.files.map(f => html`<button key=${f.scope} class=${`cfg-tab${f.scope === s.scope ? ' on' : ''}`}
                 type="button" role="tab" aria-selected=${f.scope === s.scope ? 'true' : 'false'}

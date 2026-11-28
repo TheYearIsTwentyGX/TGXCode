@@ -83,4 +83,23 @@ async function initialize(rpc, {
     return result;
 }
 
-module.exports = { CODEX_BIN, spawnAppServer, initialize };
+/**
+ * One short-lived app-server outside any conversation: spawn, handshake, run
+ * `fn(rpc)`, and let it go. The process is killed after the timeout whatever
+ * `fn` is doing, so a Codex that stops answering cannot be left behind.
+ */
+async function withAppServer(fn, { timeoutMs = 20_000, cwd } = {}) {
+    const { child, rpc } = spawnAppServer({ timeoutMs, cwd });
+    const killer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, timeoutMs + 2000);
+    killer.unref();
+    try {
+        await initialize(rpc);
+        return await fn(rpc);
+    } finally {
+        clearTimeout(killer);
+        try { child.stdin.end(); } catch { /* closed */ }
+        setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } }, 500).unref();
+    }
+}
+
+module.exports = { CODEX_BIN, spawnAppServer, initialize, withAppServer };

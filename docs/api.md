@@ -288,6 +288,7 @@ so does `POST /api/sessions/:id/restart`, for any session);
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included** — which covers the Hooks page's `/api/claude-config/hook-script` and `/api/claude-config/hook-sources`;
 **every method of `/api/claude-docs` likewise**;
+**every method of `/api/codex-config` and `/api/codex-config/hooks`** likewise;
 `POST /api/sessions/:id/attachments/open`;
 `POST /api/phone-installs` and `POST /api/phone-installs/:id/cancel` (the list, the
 APK download, the status report and `…/retry` stay open — the phone is who they are
@@ -345,7 +346,12 @@ stronger: a project's `CLAUDE.md` is repository source, and a user's describes
 the machine — what is installed, which ports are in use, which instance not to
 touch. Being able to *write* one is the ability to change what every session on
 this machine is told before its first message, which is a larger capability
-than any single setting on the route above.
+than any single setting on the route above. `/api/claude-docs` also serves
+Codex's `AGENTS.md`, on the same terms.
+
+`/api/codex-config` and everything under it is refused as `/api/claude-config` is,
+for the same reasons: hook commands, and a file that holds MCP server
+environments and provider headers.
 
 `/api/commands-config` — the editor for those same files — is refused on the
 prefix instead, **both methods**. The merged read stays open because what a
@@ -1017,6 +1023,16 @@ own:
   `view_image`'s `input.path` is a plain path (it was a `file://` URL). Its `result`
   has no `images`; the picture is in `GET …/images`, and `GET …/tool-image` serves it
   by the row's `id`.
+- **A hook that went wrong is a `system` event**, `isError: true`, with `subtype`
+  `"hook_failed"` (exited non-zero or errored), `"hook_blocked"` (refused the prompt or
+  tool) or `"hook_stopped"`, `id: "hook:<16 hex>"`, and `text` markdown naming the event,
+  what the hook said and its `hooks.json` or `config.toml`. A hook that ran cleanly is no
+  event. **Codex writes nothing about hooks to the rollout**, so these come from what the
+  bridge heard live and kept: they are on a full read, a window and `since`, and are sent
+  on the follow stream as a `tail` of their own whose `offset` has not moved. A thread
+  run in a terminal, or while no bridge was listening, has none. A `since` poll can
+  repeat one it already gave you, or (if the rollout does not grow after it) not carry it
+  until the next full read: key rows by `id`.
 - **An interrupted turn is a `system` event**, `subtype: "interrupted"`,
   `isError: false`, `text: "Interrupted."` — Codex records a stop as a line of its own,
   and it can land just before the row of the command it killed.
@@ -4251,6 +4267,107 @@ Open to remote callers. **There is no update route:** Codex is installed by npm,
 a release tarball, so a client says how (`howToUpdate`) and runs nothing. Each change is
 a `codex-version` event.
 
+### `GET /api/codex-config?cwd=<path>`
+
+**Local callers only — the read as well as the write.** The keys of Codex's
+`config.toml` this app has a control for, **read through Codex** (`config/read` and
+`experimentalFeature/list` on a short-lived `codex app-server`; the bridge never parses
+the TOML). It starts a process, so allow a few seconds.
+
+With no `codex` on this machine: `200 {installed: false}` and nothing else.
+
+```
+200 {
+  installed: true,
+  file: string,                 // the user's config.toml, the only file written
+  groups: [{
+    title: string,              // "Model", "Permissions", "Tools", "Features"
+    keys: [{
+      key: string,              // dotted key path, e.g. "model", "features.goals"
+      kind: 'model' | 'effort' | 'enum' | 'bool',
+      label: string,
+      note: string | null,
+      options?: [{ value: string, label: string }],   // 'enum' only
+      user: any | null,         // what the user's file says; null when unset. Usually a
+                                //   string or boolean; `approval_policy` may be an object
+                                //   ({granular: …}) — show it, do not coerce it
+      effective: any | null,    // what is in force (for `cwd`, if given); null = Codex's default
+      origin: { type: string, file: string | null } | null,  // which layer set it:
+                                //   'user', 'project', 'system', 'mdm', 'sessionFlags', …
+      default?: boolean,        // features only
+      stage?: string            // features only: 'stable', 'beta', 'underDevelopment', …
+    }]
+  }],
+  otherKeys: string[],          // keys in the user's file with no control. Names only:
+                                //   their values are never sent
+  projectLayers: [{ file: string, disabled: string | null }],  // project config.toml files
+                                //   for `cwd`; `disabled` says why Codex ignores one
+                                //   (an untrusted project)
+  againstVersion: string        // the Codex the catalogue was written against
+}
+```
+
+`model` and `effort` rows have no `options`: offer `GET /api/models?runtime=codex`.
+`cwd` outside `TGXCODE_ROOTS` is ignored. `approval_policy` and `sandbox_mode` do
+**not** govern sessions TGXCode runs, which send their own on every turn from
+`permissionMode`; they apply to Codex run elsewhere. The `note` says so.
+
+`502 {code: "codex", error}` when Codex could not be asked.
+
+### `PUT /api/codex-config`
+
+`{key: string, value: string | boolean | null, cwd?: string}`. Sets one key in the
+**user's** `config.toml` through Codex's `config/value/write`, or removes it
+(`value: null`). Codex keeps the file's comments and layout. No stamp: one key at a time.
+Project files are never written.
+
+`200` is the `GET` payload as it now stands, plus `written: string` (the file) and
+`overridden: string | null` (Codex's sentence when a stronger layer still decides the
+key). Raises `codex-config`.
+
+| Status | `code` | |
+|---|---|---|
+| 400 | `key` | not a key in the catalogue (including a `features.*` name Codex would accept) |
+| 400 | `value` | not a value that key takes, or one Codex rejected |
+| 403 | `readonly`, `write` | Codex would not write the file |
+| 409 | `stale` | the file moved under Codex's write; try again |
+| 409 | `missing` | Codex is not installed |
+| 502 | `codex` | Codex could not be asked |
+
+A running session keeps the settings it started with.
+
+### `GET /api/codex-config/hooks?cwd=<path>`
+
+**Local callers only.** What Codex would run in a directory (`hooks/list`). **Read-only**:
+there is no write route, and no way to trust a hook from here (that is `/hooks` in
+`codex`). With no `cwd`, or one outside the roots, the home directory is asked about.
+`200 {installed: false}` with no Codex; `502 {code: "codex"}` when it could not be asked.
+
+```
+200 {
+  installed: true,
+  cwd: string,                  // the directory asked about
+  hooks: [{
+    key: string,
+    event: string,              // 'preToolUse', 'sessionStart', 'userPromptSubmit', 'stop', …
+    handler: string,            // 'command', 'mcpTool', 'prompt', 'agent'
+    command: string | null,     // the command; "server.tool" for mcpTool; null otherwise
+    matcher: string | null,
+    timeoutSec: number | null,
+    statusMessage: string | null,
+    source: string,             // 'user', 'project', 'plugin', 'system', 'managed' kinds…
+    file: string | null,        // the hooks.json or config.toml
+    pluginId: string | null,
+    enabled: boolean,
+    trust: 'managed' | 'trusted' | 'untrusted' | 'modified' | null,
+                                // 'untrusted' and 'modified' hooks do NOT run
+    managed: boolean
+  }],                           // in the order Codex runs them
+  warnings: string[],
+  errors: [{ file: string | null, message: string }]
+}
+```
+
 ### `POST /api/claude-version/update`
 
 Runs `claude update` on the machine. Body is ignored; needs `X-TGXCode-Client: 1`.
@@ -4390,7 +4507,8 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `session-deleted` | `{sessionId, title}` |
 | `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest, reviews, power, sudo, brief}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed'\|'script', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own, and on every successful `PUT /api/claude-config/hook-script` — with `scope: 'script'` and `file` the script's absolute path, a fifth value no settings write produces — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
-| `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
+| `codex-config` | `{at: number, key: string, file: string}` — a key of Codex's `config.toml` was set or removed through `PUT /api/codex-config`, including by you; `key` is the key path. The fact only, never the value; re-read `GET /api/codex-config`. A change made any other way (an editor, `codex` itself) is **not** announced |
+| `claude-docs` | `{at, kind, scope, file}` — the same trade for a memory file: the fact one was written, never its contents. `kind` is `"claude-md"` or `"agents-md"`, `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
@@ -5816,8 +5934,9 @@ Results are cached for five seconds per `cwd`.
 **Local callers only — the read as well as the write.** See §*Refused for remote
 callers*.
 
-Claude Code's `CLAUDE.md` files: the instructions a session is given before your
-first message, as opposed to the settings that decide what it may do. This is
+The agents' memory files — Claude Code's `CLAUDE.md` and Codex's `AGENTS.md`: the
+instructions a session is given before your first message, as opposed to the settings
+that decide what it may do. This is
 the only route in the bridge that reads or writes a whole file's *contents* —
 `/api/fs` lists directories and `/api/fs/mkdir` creates one, and that is the
 rest of the filesystem surface.
@@ -5825,8 +5944,8 @@ rest of the filesystem surface.
 ```
 {
   docs: [{
-    id,         string   "claude-md:<scope>" — stable, for a client's own keys
-    kind,       string   "claude-md" — the only kind so far
+    id,         string   "<kind>:<scope>" — stable, for a client's own keys
+    kind,       string   "claude-md" | "agents-md"
     scope,      string   "user" | "project"
     file,       string   absolute
     exists,     bool
@@ -5836,10 +5955,22 @@ rest of the filesystem surface.
     stamp,      string or null   opaque; echo it on a write, never parse it
     text,       string or null   the file verbatim, or null when absent or over the cap
     truncated   bool     true → the file is past the cap and `text` is null
+    overriddenBy string or null   "agents-md" only: the path of a non-empty
+                         `AGENTS.override.md` beside the file, which Codex reads
+                         instead of it. Always null for "claude-md"
   }],
   maxBytes:     int      the cap, in bytes, on both the read and the write
 }
 ```
+
+**Two kinds, and two rows of each: key on `kind` and `scope` together.** Before Codex
+support there was one kind, so a client that found its row by `scope` alone now gets
+the `claude-md` one only by the order of the array. `agents-md` rows are
+`$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) and `<cwd>/AGENTS.md`, and are
+there whether or not Codex is installed — ask `GET /api/codex-version` before offering
+them. Codex reads at most 32 KiB of a project's instructions by default
+(`project_doc_max_bytes`), so a longer file is written whole and read in part. What
+follows about `CLAUDE.md` holds for `AGENTS.md` unless it says otherwise.
 
 **Two scopes, and they are not a chain.** `user` is `~/.claude/CLAUDE.md` and
 `project` is `<cwd>/CLAUDE.md`. Claude Code reads **both** and concatenates
@@ -5861,7 +5992,7 @@ own file is the one in force.
 **A row is absent rather than empty when there is nothing to name.** With no
 `cwd`, or a `cwd` outside `TGXCODE_ROOTS`, the answer is the `user` row
 alone — not a `project` row pointing at a path no write would accept. So the
-array is one or two entries and a client should find its scope in it rather than
+array is two or four entries and a client should find its row in it rather than
 index into it. This is deliberately *not* a `403`: a directory the bridge will
 not read is no reason to refuse a perfectly good user file.
 
@@ -5877,16 +6008,17 @@ that later drifts.
 
 ### `PUT /api/claude-docs`
 
-`{scope, cwd?, stamp, text}` → `200 {file, stamp, docs, maxBytes}`. **Local
+`{kind?, scope, cwd?, stamp, text}` → `200 {file, stamp, docs, maxBytes}`. `kind` is
+`"claude-md"` (the default when absent) or `"agents-md"`. **Local
 callers only**, and the client header like every other write. `docs` and
 `maxBytes` are the `GET` payload as it now stands, so a client can take the
 answer wholesale rather than patching its own copy, and `stamp` is the written
 file's new one — which the *next* write has to send.
 
-| `scope` | file |
-|---|---|
-| `user` | `~/.claude/CLAUDE.md` — `cwd` ignored |
-| `project` | `<cwd>/CLAUDE.md`, which git tracks |
+| `scope` | `claude-md` | `agents-md` |
+|---|---|---|
+| `user` | `~/.claude/CLAUDE.md` — `cwd` ignored | `$CODEX_HOME/AGENTS.md` — `cwd` ignored |
+| `project` | `<cwd>/CLAUDE.md`, which git tracks | `<cwd>/AGENTS.md` |
 
 `"project-local"` and `"managed"` are `400 {code: "scope"}`: those are scopes of
 `/api/claude-config`, and there is no `CLAUDE.local.md` or administrator's
@@ -5928,6 +6060,7 @@ is refused and a person looks at it.
 
 | Status | `code` | |
 |---|---|---|
+| 400 | `kind` | not `"claude-md"` or `"agents-md"` |
 | 400 | `scope` | not `"user"` or `"project"` |
 | 400 | `dir` | a project scope with no `cwd`, or one outside the allowed roots |
 | 400 | `body` | `text` is absent, not a string, or contains a **NUL byte** |
@@ -8287,6 +8420,9 @@ the project file and concatenates them, so the reflex — draw the tabs, label t
 weaker one "overridden" — reports that a file has no effect when every line in
 it is in force. There is no `effective` field on that route for the same reason:
 there is nothing to compute. See §`GET /api/claude-docs`.
+
+**`AGENTS.md` rows are in the same array.** Find a row by `kind` *and* `scope`.
+See §`GET /api/claude-docs`.
 
 **A `CLAUDE.md` edit does not reach a session that is already running — ever.**
 This is worse than the settings case above, not merely the same. Claude Code

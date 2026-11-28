@@ -64,6 +64,7 @@ import {
     applyCodexVersion, loadCodexVersion, showCodexVersion,
 } from './quota.js';
 import { claudeMayLeave, claudeTargetRow, loadClaudeConfig } from './settings/claude-config.js';
+import { loadCodexConfig } from './settings/codex-config.js';
 import { RAIL_SORTS, settingRow, SETTINGS } from './settings/general.js';
 import {
     loadSettings, markSettingsToc, openSettingsAt, renderSettings, saveSetting, setSettingsNotes,
@@ -2940,6 +2941,12 @@ function connect() {
         loadClaudeConfig({ flash: true });
     });
 
+    // Codex's config was set from another window. Read it again if it is on
+    // screen; the window that saved already has the answer.
+    es.addEventListener('codex-config', () => {
+        if (state.settings.open && !state.codexCfg.saving) loadCodexConfig();
+    });
+
     // The same, for a CLAUDE.md written elsewhere — another window, or `claude`
     // itself through a memory edit. The dirty guard matters more here than it
     // does above: the draft is not one key but a whole document somebody has
@@ -4464,7 +4471,7 @@ dom.setProject.addEventListener('change', () => {
     // same reason and gets its own sentence — "the JSON you have edited" is not
     // what somebody who has been writing prose has been doing.
     const docs = state.claudeDocs;
-    if (docs.dirty && !window.confirm('Discard the changes you have made to CLAUDE.md?')) {
+    if (docs.dirty && !window.confirm('Discard the changes you have made to the memory file?')) {
         dom.setProject.value = settingsProject();
         return;
     }

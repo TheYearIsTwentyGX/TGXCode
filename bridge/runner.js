@@ -1845,6 +1845,12 @@ class Runner extends EventEmitter {
                 this.emit('notice', ev.notice);
                 break;
 
+            // A hook that failed, from a runtime whose transcript does not record
+            // it. Kept by the bridge, not here.
+            case 'hook-run':
+                this.emit('hook-run', { sessionId: this.sessionId, run: ev.run, turnId: ev.turnId });
+                break;
+
             case 'task':
                 this._noteTask(ev);
                 break;
@@ -2629,6 +2635,7 @@ class RunnerPool extends EventEmitter {
         // sessionId: which session happened to observe it says nothing.
         r.on('quota', (info) => this.emit('quota', info));
         r.on('limits', (limits) => this.emit('limits', limits));
+        r.on('hook-run', (h) => this.emit('hook-run', h));
         r.on('permission-request', (p) => this.emit('permission-request', p));
         r.on('permission-resolved', (p) => this.emit('permission-resolved', p));
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));

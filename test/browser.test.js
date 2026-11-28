@@ -155,10 +155,11 @@ function check(name, got, want) {
         check('GET /api/claude-docs', r.status, 200);
         const body = JSON.parse(r.body || '{}');
         check('  …carries a row per file', Array.isArray(body.docs), true);
-        // With no `cwd` there is exactly one row, the user's, and a client that
-        // drew two would be drawing a file for a project nobody named.
-        check('  …just the user one with no cwd',
-            (body.docs || []).map(d => d.scope).join(','), 'user');
+        // With no `cwd` there is one row per kind of file, the user's, and a
+        // client that drew a project one would be drawing a file for a project
+        // nobody named.
+        check('  …just the user ones with no cwd',
+            (body.docs || []).map(d => d.id).join(','), 'claude-md:user,agents-md:user');
         // The cap, so a page can label its byte counter with the real number
         // instead of hardcoding one that later drifts.
         check('  …and the size cap', typeof body.maxBytes, 'number');

@@ -132,6 +132,10 @@ const CLAUDE_POLICY_LIMITS = path.join(USER_CLAUDE_DIR, 'policy-limits.json');
 // directory for each scope.
 const CLAUDE_MEMORY_FILE = 'CLAUDE.md';
 const USER_CLAUDE_MEMORY = path.join(USER_CLAUDE_DIR, CLAUDE_MEMORY_FILE);
+// Codex's equivalent, in CODEX_HOME and at the root of a workspace. An
+// `AGENTS.override.md` beside either one is read *instead* of it.
+const CODEX_MEMORY_FILE = 'AGENTS.md';
+const CODEX_MEMORY_OVERRIDE = 'AGENTS.override.md';
 
 // The words the spinner uses while a turn runs — see bridge/spinner.js. A
 // directory rather than a key in the settings file: there are thousands of them
@@ -389,7 +393,7 @@ module.exports = {
     CLAUDE_DIR, CLAUDE_SETTINGS_FILE, CLAUDE_SETTINGS_LOCAL_FILE,
     USER_CLAUDE_DIR, USER_CLAUDE_SETTINGS, MANAGED_CLAUDE_SETTINGS,
     CLAUDE_REMOTE_SETTINGS, CLAUDE_POLICY_LIMITS,
-    CLAUDE_MEMORY_FILE, USER_CLAUDE_MEMORY,
+    CLAUDE_MEMORY_FILE, USER_CLAUDE_MEMORY, CODEX_MEMORY_FILE, CODEX_MEMORY_OVERRIDE,
     VERBS_DIR, USER_VERBS_DIR,
     ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     sessionFilePath, realResolve,
