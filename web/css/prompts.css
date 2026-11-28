@@ -72,7 +72,7 @@
 .perm-btns[hidden] { display: none; }
 
 .perm-btn {
-    height: 30px;
+    height: var(--ctl-sm);
     padding: 0 var(--sp-6);
     border-radius: var(--pill);
     background: var(--s3);
@@ -94,10 +94,8 @@
    allow; see decisionButtons in web/transcript/approvals.js. */
 .perm-btn.persistent { box-shadow: inset 0 0 0 1px var(--yellow); }
 .perm-persist {
-    font: 500 var(--fs-xs, 11px)/var(--lh-none) var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--sans);
     color: var(--yellow);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
 }
 /* A file change's diff on its card. Short, scrolling, and the log's mono. */
 .perm-diff {
@@ -106,7 +104,7 @@
     max-height: 180px;
     overflow: auto;
     background: var(--s1);
-    border-radius: 6px;
+    border-radius: var(--r-xs);
     font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
     color: var(--text-2);
     white-space: pre;
@@ -303,7 +301,11 @@
    column down the middle of the pane. */
 .ask-dock {
     flex: none;
-    margin: 0 calc(var(--pane-x, 28px) + var(--pane-right)) var(--sp-3) calc(var(--pane-x, 28px) + var(--pane-left));
+    /* The composer's column exactly: its padding, then the share of whatever is
+       past .composer-inner's 1000px on each side. Without the second term the
+       dock ran 50px wider than the box under it in any window wide enough. */
+    --dock-extra: max(0px, (100% - 2 * var(--pane-x, 28px) - var(--pane-left) - var(--pane-right) - 1000px) / 2);
+    margin: 0 calc(var(--pane-x, 28px) + var(--pane-right) + var(--dock-extra)) var(--sp-3) calc(var(--pane-x, 28px) + var(--pane-left) + var(--dock-extra));
     /* The approval card's ground and edge: the same "the turn is waiting on you"
        as that card, so the three surfaces that ask read as one family. */
     background: var(--yellow-tint);

@@ -20,7 +20,7 @@ import { exit, isLeaving } from '../motion.js';
 import { secretsChanged } from '../settings/secrets.js';
 
 const OUTCOME_WORD = {
-    saved: 'Saved. The agent can use it now.',
+    saved: 'Saved.',
     denied: 'Denied.',
     cancelled: 'Withdrawn',
 };
@@ -56,15 +56,15 @@ export function resolveSecret(p) {
     state.secretAsk = null;
     renderSecret();
     let word = OUTCOME_WORD[p.outcome] || 'Answered.';
-    if (p.outcome === 'cancelled') word += p.reason ? ` — ${p.reason}.` : '.';
-    dom.log.append(el('div', { class: 'perm-done' }, `${p.name || 'Secret'} — ${word}`));
+    if (p.outcome === 'cancelled') word += p.reason ? `: ${p.reason}.` : '.';
+    dom.log.append(el('div', { class: 'perm-done' }, `${p.name || 'Secret'}: ${word}`));
     if (state.pinned) scrollToEnd(false);
 }
 
 /** Why this client may not type the value here, or null. The route's conditions, said before you type. */
 function remoteBlock(ask) {
     if (!state.remote) return null;
-    if (!ask.remoteAnswer) return 'Turn on in Settings › Secrets at your desk to enter it here. Until then it can only be typed there.';
+    if (!ask.remoteAnswer) return 'Type it at your desk, or allow it in Settings › Secrets there.';
     if (ask.exists) return `${ask.name} is already set. Change it at your desk.`;
     if (location.protocol !== 'https:') return 'This connection is not encrypted, so a secret cannot be sent over it.';
     return null;
@@ -79,8 +79,8 @@ function secretCard(ask) {
     card.append(el('div', { class: 'perm-arg' }, ask.name));
     if (ask.why) card.append(el('div', { class: 'perm-why' }, clip(ask.why, 500)));
     card.append(el('div', { class: 'perm-why' },
-        `Saved for ${ask.project ? shortPath(ask.project) : 'this project'}. The agent uses it as $${ask.name} `
-        + 'in Bash and never sees it; it is not written to the conversation.'));
+        `Saved for ${ask.project ? shortPath(ask.project) : 'this project'} as $${ask.name} in Bash. `
+        + 'The agent never sees the value.'));
 
     const deny = el('button', { class: 'perm-btn deny', type: 'button' }, 'Deny');
     const blocked = remoteBlock(ask);
@@ -91,7 +91,6 @@ function secretCard(ask) {
         return card;
     }
 
-    if (state.remote) card.append(el('div', { class: 'perm-why' }, `Sent over HTTPS via ${location.hostname}.`));
     const input = el('input', { class: 'sudo-pw', type: 'password', autocomplete: 'off',
         spellcheck: 'false', 'aria-label': `The value of ${ask.name}`, placeholder: 'Value' });
     const save = el('button', { class: 'perm-btn allow', type: 'submit' }, 'Save ', el('kbd', {}, '⏎'));

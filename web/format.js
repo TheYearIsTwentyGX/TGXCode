@@ -92,6 +92,9 @@ export function dur(ms) {
 
 export const fileName = (p) => (p ? String(p).split('/').pop() : '');
 
+/** "1 turn", "2 turns". The count and the word, so "1 turns" has one place to go wrong. */
+export const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+
 // A path with the home directory folded back to `~`. The settings panel names
 // files, and every one of them starts with the same 18 characters — which is
 // the part a reader already knows and the part that pushes the rest out of a

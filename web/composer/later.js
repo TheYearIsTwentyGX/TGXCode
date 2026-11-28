@@ -185,7 +185,6 @@ async function sendLaterNow(m) {
     renderLater();
     try {
         await post(`/api/later/${m.id}/send`, {});
-        toast('Sent.', 'ok');
     } catch (err) {
         // 409 is the wait-for-idle refusal and is not a failure — the message is
         // untouched and pressing again in a minute is the right thing to do.

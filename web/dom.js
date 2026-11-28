@@ -174,7 +174,21 @@ export function toast(text, kind = 'info', opts = {}) {
 
     dom.toasts.append(t);
     enter(t, { as: 'toast' });
-    if (!action) setTimeout(gone, ms);
+    // Held while the pointer or the focus is on it: a toast that leaves while
+    // somebody is reading it, or reaching for its ✕, is a message lost. The
+    // clock starts over on the way out rather than resuming mid-count.
+    if (!action) {
+        let timer = setTimeout(gone, ms);
+        const hold = () => { clearTimeout(timer); timer = 0; };
+        const resume = () => {
+            if (timer || t.matches(':hover') || t.contains(document.activeElement)) return;
+            timer = setTimeout(gone, ms);
+        };
+        t.addEventListener('pointerenter', hold);
+        t.addEventListener('focusin', hold);
+        t.addEventListener('pointerleave', resume);
+        t.addEventListener('focusout', () => setTimeout(resume, 0));
+    }
     return t;
 }
 

@@ -16,7 +16,7 @@
 import { html, render } from '../vendor/preact.js';
 import { get } from '../api.js';
 import { dom, el, toast } from '../dom.js';
-import { ago, clip, dur, shortModel } from '../format.js';
+import { ago, clip, dur, plural, shortModel } from '../format.js';
 import { state } from '../state.js';
 import { applyRunner, rememberView, subscribe } from '../app.js';
 import { renderLater } from '../composer/later.js';
@@ -112,7 +112,7 @@ export function renderAgents() {
         const stalled = a.status === 'running' && !a.warm && a.bytes > 0;
         const trailing = a.status === 'running'
             ? (stalled ? `idle ${ago(a.activityTs || a.startedAt)}` : clip(a.activity || 'working', 34))
-            : [dur(a.durationMs), a.toolUses && `${a.toolUses} tools`].filter(Boolean).join(' · ');
+            : [dur(a.durationMs), a.toolUses && plural(a.toolUses, 'tool')].filter(Boolean).join(' · ');
 
         chips.push(el('button', {
             class: 'agent-chip',
@@ -237,7 +237,7 @@ function renderAgentHeader() {
     const stalled = a.status === 'running' && !a.warm && a.bytes > 0;
     const bits = [
         html`<span key="state" class=${`agent-state ${a.status}`}>${
-            stalled ? 'stopped' : STATUS_WORD[a.status]}</span>`,
+            stalled ? 'idle' : STATUS_WORD[a.status]}</span>`,
     ];
     const push = (key, node) => {
         bits.push(html`<span key=${`${key}-sep`} class="sep">·</span>`, node);
@@ -245,7 +245,7 @@ function renderAgentHeader() {
     if (a.agentType) push('type', html`<span key="type" class="branch">${a.agentType}</span>`);
     if (a.model) push('model', html`<span key="model">${shortModel(a.model)}</span>`);
     if (a.durationMs) push('dur', html`<span key="dur">${dur(a.durationMs)}</span>`);
-    if (a.toolUses) push('tools', html`<span key="tools">${`${a.toolUses} tools`}</span>`);
+    if (a.toolUses) push('tools', html`<span key="tools">${plural(a.toolUses, 'tool')}</span>`);
     if (a.tokens) {
         push('tokens', html`<span key="tokens">${`${a.tokens.toLocaleString()} tokens`}</span>`);
     }
@@ -263,8 +263,8 @@ function applyComposerScope() {
     const onAgent = Boolean(state.agent);
     dom.input.disabled = onAgent;
     dom.input.placeholder = onAgent
-        ? 'Subagents do not take messages — go back to the session to reply.'
-        : 'Send a message to this session…';
+        ? 'Read-only. Reply in the session.'
+        : 'Message…';
     dom.conv.dataset.scope = onAgent ? 'agent' : 'session';
     // The dock and the plan view sit outside the scroller that swaps for a
     // subagent, so unlike the transcript they do not go away on their own.

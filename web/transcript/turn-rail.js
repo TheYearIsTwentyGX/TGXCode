@@ -150,7 +150,7 @@ function showTurnPop(tick, m) {
     // headers, and it is what the collapsed transcript row says — so the rail
     // and the row cannot end up calling the same thing two different things.
     const head = turn ? `Turn ${m.no} of ${state.turns.length}`
-        : `${m.kind === 'plan' ? 'Plan' : 'Question'} · ${markOutcome(ev)}`;
+        : `${m.kind === 'plan' ? 'Plan' : 'Question'} ${markOutcome(ev)}`;
     const body = turn ? turnText(ev) : (toolSummary(ev) || '');
 
     pop.replaceChildren(

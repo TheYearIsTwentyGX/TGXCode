@@ -619,10 +619,9 @@
           <header class="plan-head">
             <span class="perm-tool">Plan</span>
             <span id="plan-title" class="perm-title">ready to start</span>
-            <span id="plan-agent" class="plan-agent" hidden>Asked by a subagent.</span>
+            <span id="plan-agent" class="plan-agent" hidden>from a subagent</span>
             <span class="spacer"></span>
-            <button id="plan-aside" class="plan-aside" type="button"
-                    title="Read the conversation underneath — the plan is still waiting">
+            <button id="plan-aside" class="plan-aside" type="button">
               Set aside <kbd>Esc</kbd>
             </button>
           </header>
@@ -944,7 +943,7 @@
                    composer needed the same rows to look the same. -->
               <div id="mention-menu" class="slash-menu mention" role="listbox" hidden
                    aria-label="Mentions"></div>
-              <textarea id="input" rows="1" placeholder="Send a message to this session…"
+              <textarea id="input" rows="1" placeholder="Message…"
                         aria-label="Message" role="combobox" aria-expanded="false"
                         aria-controls="slash-menu mention-menu" aria-autocomplete="list"></textarea>
               <!-- Paste and drag-drop are the gestures people actually use; this is
@@ -1034,33 +1033,41 @@
             </div>
 
             <div class="opts">
+              <!-- A label and its select in one box, so a narrow column wraps
+                   between pairs and never between a label and its control. -->
+              <span class="opt">
               <label for="model">Model</label>
               <!-- The models and levels after `inherit` are filled in by
                    web/dom.js from bridge/models.js — the one list every picker
                    and the orchestrator's spawn_worker read. -->
               <select id="model" aria-label="Model">
-                <option value="">inherit</option>
+                <option value="">Default</option>
               </select>
+              </span>
               <!-- `inherit` sends no `--effort`, so Claude's own effortLevel
                    decides. The levels are `claude --effort`'s. -->
+              <span class="opt">
               <label for="effort">Effort</label>
               <select id="effort" aria-label="Effort">
-                <option value="">inherit</option>
+                <option value="">Default</option>
               </select>
+              </span>
+              <span class="opt">
               <label for="perm">Permissions</label>
               <select id="perm" aria-label="Permission mode">
-                <option value="acceptEdits">acceptEdits</option>
+                <option value="acceptEdits">Accept edits</option>
                 <!-- The default: it is the mode these sessions run in when you
                      drive them from a terminal, so a conversation continued here
                      behaves the way the same conversation would there. -->
-                <option value="auto" selected>auto</option>
+                <option value="auto" selected>Auto</option>
                 <!-- Worth having now that a prompt is a real question rather than
                      a silent denial: manual asks about everything. -->
-                <option value="manual">manual</option>
-                <option value="plan">plan</option>
-                <option value="dontAsk">dontAsk</option>
-                <option value="bypassPermissions">bypassPermissions</option>
+                <option value="manual">Manual</option>
+                <option value="plan">Plan</option>
+                <option value="dontAsk">Don’t ask</option>
+                <option value="bypassPermissions">Bypass permissions</option>
               </select>
+              </span>
               <!-- Rendered from keyboard.composerSend, not written down here: the
                    two modes swap what Enter and Shift+Enter do, and a hint that
                    named one of them while the other was in force would be worse
@@ -1984,13 +1991,13 @@
           <label for="new-model">Model</label>
           <!-- Filled in by web/dom.js, as the composer's is. -->
           <select id="new-model">
-            <option value="">inherit</option>
+            <option value="">Default</option>
           </select>
         </span>
         <span class="opt">
           <label for="new-effort">Effort</label>
           <select id="new-effort">
-            <option value="">inherit</option>
+            <option value="">Default</option>
           </select>
         </span>
         <span class="opt">
@@ -1999,15 +2006,15 @@
                session starts in is a decision about that session, and the composer
                belongs to whichever conversation happens to be open behind this. -->
           <select id="new-perm">
-            <option value="acceptEdits">acceptEdits</option>
-            <option value="auto">auto</option>
-            <option value="manual">manual</option>
+            <option value="acceptEdits">Accept edits</option>
+            <option value="auto">Auto</option>
+            <option value="manual">Manual</option>
             <!-- Default here, unlike the composer: the first message of a session
                  is the one written with the least idea of what it will touch, so
                  it is worth reading a plan back before anything is changed. -->
-            <option value="plan" selected>plan</option>
-            <option value="dontAsk">dontAsk</option>
-            <option value="bypassPermissions">bypassPermissions</option>
+            <option value="plan" selected>Plan</option>
+            <option value="dontAsk">Don’t ask</option>
+            <option value="bypassPermissions">Bypass permissions</option>
           </select>
         </span>
       </div>

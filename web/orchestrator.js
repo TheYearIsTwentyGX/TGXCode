@@ -183,12 +183,17 @@ function originText(o) {
 
 function workerLine(s, p) {
     const self = p.workers.find(w => w.id === s.sessionId);
+    // "Worker of <its title>", the title being the way there. It said
+    // "orchestrator" three times — a tag, a sentence and a button — and never
+    // which one.
+    const host = state.sessions.find(x => x.sessionId === p.orchestratorId);
     return html`<div class="orch-worker-line">
-        <span class="tag-orch">worker</span>
-        <span>${'Started by an orchestrator'}${self && self.origin ? ` ${originText(self.origin)}` : ''}${
-            self && self.closedAt ? ' · closed' : ''}</span>
-        <button class="orch-link" type="button" onClick=${() => goTo(p.orchestratorId)}>
-            Open the orchestrator</button>
+        <span>Worker of</span>
+        <button class="orch-link" type="button" title="Open the orchestrator"
+            onClick=${() => goTo(p.orchestratorId)}>${host ? clip(host.title, 60) : 'its orchestrator'}</button>
+        ${self && (self.origin || self.closedAt) ? html`<span>${[
+            self.origin ? originText(self.origin) : '', self.closedAt ? 'closed' : '',
+        ].filter(Boolean).join(', ')}</span>` : null}
     </div>`;
 }
 

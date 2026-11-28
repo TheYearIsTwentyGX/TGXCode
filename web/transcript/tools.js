@@ -16,7 +16,7 @@
 
 import { get } from '../api.js';
 import { el, toast } from '../dom.js';
-import { clip, dur, shortModel } from '../format.js';
+import { clip, dur, plural, shortModel } from '../format.js';
 import { escapeHtml, highlight } from '../highlight.js';
 import { toolDisplayName } from '../tool-name.js';
 import { renderMarkdown } from '../markdown.js';
@@ -101,16 +101,20 @@ export function toolSummary(ev) {
 
     switch (ev.name) {
         case 'Bash': return i.command || i.description || '';
-        case 'Read': return i.file_path + (i.offset ? `  :${i.offset}` : '');
-        case 'Edit': return i.file_path;
-        case 'Write': return i.file_path;
-        case 'Glob': return i.pattern + (i.path ? `  in ${i.path}` : '');
-        case 'Grep': return i.pattern + (i.path ? `  in ${i.path}` : '');
+        // Relative to the session's directory, where the file is under it: the
+        // worktree prefix is the same on every row and pushed the file name off
+        // the end. A path outside it stays whole, which matters on a permission
+        // card. The full path is the row's tooltip (see renderTool).
+        case 'Read': return relPath(i.file_path) + (i.offset ? `  :${i.offset}` : '');
+        case 'Edit': return relPath(i.file_path);
+        case 'Write': return relPath(i.file_path);
+        case 'Glob': return i.pattern + (i.path ? `  in ${relPath(i.path) || '.'}` : '');
+        case 'Grep': return i.pattern + (i.path ? `  in ${relPath(i.path) || '.'}` : '');
         case 'Task':
         case 'Agent': return i.description || clip(i.prompt, 80);
         case 'WebFetch': return i.url;
         case 'WebSearch': return i.query;
-        case 'TodoWrite': return `${todoItemsOf(i).length} items`;
+        case 'TodoWrite': return plural(todoItemsOf(i).length, 'item');
         case 'Skill': return '/' + (i.skill || '');
         // `select:mcp__a__b,mcp__c__d` loads tools by name; name them the way
         // their own rows will.
@@ -144,7 +148,7 @@ export function toolSummary(ev) {
         case 'SendMessage': {
             const to = i.to || i.recipient || '?';
             const peer = peerByName(to);
-            const who = peer && peer.title && peer.title !== to ? `${to} — ${peer.title}` : to;
+            const who = peer && peer.title && peer.title !== to ? `${peer.title} (${to})` : to;
             const said = typeof i.message === 'string' ? i.message : (i.summary || '');
             return said ? `to ${who}: ${clip(said, 60)}` : `to ${who}`;
         }
@@ -162,10 +166,12 @@ export function renderTool(ev) {
     const det = el('details', { class: 'tool', 'data-status': status },
         el('summary', {},
             el('span', { class: 'tname', title: ev.name }, toolDisplayName(asMcpCall(ev).name)),
-            el('span', { class: 'targ' }, summary),
+            el('span', { class: 'targ', title: fullTarget(ev) }, summary),
             el('span', { class: 'tmeta' },
-                [status === 'pending' ? 'running' : '', dur(ev.durationMs)]
-                    .filter(Boolean).join('  ')),
+                status === 'pending'
+                    ? el('span', { class: 'tstate' }, pendingWord(ev.id)) : null,
+                status === 'pending' && ev.durationMs ? '  ' : null,
+                dur(ev.durationMs) || null),
         ),
     );
 
@@ -179,6 +185,33 @@ export function renderTool(ev) {
     det.addEventListener('click', () => fillTool(det, ev));
     det.addEventListener('toggle', () => fillTool(det, ev));
     return row(ev, 'tool', det);
+}
+
+/** The path a file tool's summary shortened, for its tooltip. */
+function fullTarget(ev) {
+    const i = ev.input || {};
+    const p = i.file_path || i.path;
+    return typeof p === 'string' && relPath(p) !== p ? p : null;
+}
+
+// A call the session is blocked on is not running: it is waiting for an answer
+// on the card under it. Said on the row as well, so the two do not disagree.
+let waitingId = null;
+const pendingWord = (id) => (id && id === waitingId ? 'waiting for you' : 'running');
+
+/**
+ * Mark the tool call a permission ask is about, and unmark the last one. Called
+ * by renderAsk whenever the ask changes; a row drawn later reads `waitingId`.
+ */
+export function markWaitingTool(id) {
+    if (id === waitingId) return;
+    const prev = waitingId;
+    waitingId = id || null;
+    for (const tid of [prev, waitingId]) {
+        const entry = tid && state.tools.get(tid);
+        const word = entry && entry.node && entry.node.querySelector('.tstate');
+        if (word) word.textContent = pendingWord(tid);
+    }
 }
 
 /** Build a tool's body the first time it is actually shown. */
@@ -200,7 +233,10 @@ function toolBody(ev) {
 
     // --- input ------------------------------------------------------------
     if (ev.name === 'Bash') {
-        out.push(section('Command', codePre(i.command || '', 'bash')));
+        // The summary line is the command already; repeat it only when that line
+        // cannot hold it — several lines, or more than fits beside the name.
+        const cmd = i.command || '';
+        if (cmd.includes('\n') || cmd.length > 80) out.push(section('Command', codePre(cmd, 'bash')));
         if (i.run_in_background) out.push(note('Runs in the background.'));
     } else if (ev.name === 'Write') {
         out.push(section('Contents', codePre(i.content || '', langOf(i.file_path))));
@@ -253,7 +289,7 @@ function toolBody(ev) {
         if (peer && peer.sessionId) {
             out.push(el('div', { class: 'subagent-btns' },
                 el('button', { class: 'more-btn', type: 'button',
-                    onclick: () => openSession(peer.sessionId) }, 'Open that session')));
+                    onclick: () => openSession(peer.sessionId) }, 'Open session')));
         }
     } else if (Object.keys(i).length) {
         out.push(section('Input', kvView(i)));
@@ -275,13 +311,13 @@ function toolBody(ev) {
     } else if (r.patch && ev.name !== 'Edit') {
         out.push(section('Changes', diffView(r.patch)));
     } else if (r.stdout || r.stderr) {
-        if (r.stdout) out.push(section('stdout', codePre(r.stdout, null)));
-        if (r.stderr) out.push(section('stderr', codePre(r.stderr, null, true)));
+        if (r.stdout) out.push(section('Output', codePre(r.stdout, null)));
+        if (r.stderr) out.push(section('Errors', codePre(r.stderr, null, true)));
     } else if (r.text) {
         out.push(section(ev.status === 'error' ? 'Error' : 'Result',
             codePre(r.text, null, ev.status === 'error')));
     } else if (ev.status === 'pending') {
-        out.push(note('Still running.'));
+        out.push(note(pendingWord(ev.id) === 'running' ? 'Still running.' : 'Waiting for you.'));
     }
 
     // --- images --------------------------------------------------------------
@@ -294,7 +330,6 @@ function toolBody(ev) {
     }
 
     if (r.interrupted) out.push(note('Interrupted before it finished.'));
-    if (r.backgroundTaskId) out.push(note(`Background task ${r.backgroundTaskId}.`));
 
     // --- spilled output ------------------------------------------------------
     if (ev.persistedPath) {
@@ -320,7 +355,7 @@ function toolBody(ev) {
         const a = ev.agent;
         const st = statusOfCall(ev);
         const meta = [STATUS_WORD[st], a.agentType, a.model && shortModel(a.model),
-            a.toolUses && `${a.toolUses} tools`, dur(a.durationMs)].filter(Boolean).join(' · ');
+            a.toolUses && plural(a.toolUses, 'tool'), dur(a.durationMs)].filter(Boolean).join(' · ');
         const wrap = el('div', { class: 'tool-section subagent', 'data-status': st },
             el('h4', {}, 'Subagent'),
             el('div', { class: 'subagent-meta' }, meta));
@@ -333,7 +368,7 @@ function toolBody(ev) {
             btns.append(el('button', {
                 class: 'more-btn primary', type: 'button',
                 onclick: () => openAgent(ev.id),
-            }, 'Open this subagent'));
+            }, 'Open subagent'));
 
             const btn = el('button', { class: 'more-btn', type: 'button' }, 'Peek inline');
             btn.addEventListener('click', async () => {

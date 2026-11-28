@@ -14,7 +14,11 @@
 
 .orch-dock {
     flex: none;
-    margin: 0 calc(var(--pane-x, 28px) + var(--pane-right)) var(--sp-3) calc(var(--pane-x, 28px) + var(--pane-left));
+    /* The composer's column exactly: its padding, then the share of whatever is
+       past .composer-inner's 1000px on each side. Without the second term the
+       dock ran 50px wider than the box under it in any window wide enough. */
+    --dock-extra: max(0px, (100% - 2 * var(--pane-x, 28px) - var(--pane-left) - var(--pane-right) - 1000px) / 2);
+    margin: 0 calc(var(--pane-x, 28px) + var(--pane-right) + var(--dock-extra)) var(--sp-3) calc(var(--pane-x, 28px) + var(--pane-left) + var(--dock-extra));
     max-height: min(34vh, 320px);
     overflow-y: auto;
     background: var(--s2);
@@ -220,7 +224,7 @@
 .orch-worker-line {
     display: flex;
     align-items: center;
-    gap: var(--sp-5);
+    gap: var(--sp-3);
     padding: var(--sp-4) var(--sp-6);
     color: var(--text-3);
     font: 400 var(--fs-md)/var(--lh-snug) var(--sans);

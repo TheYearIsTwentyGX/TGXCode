@@ -62,20 +62,46 @@ import { flipAll } from './motion.js';
  * @returns {number} how many sessions are finished, for the Hide finished button
  */
 export function drawRail() {
+    drawn.length = 0;
     const { tree, finished } = railTree();
     // A session that moves — new activity lifting it, a pin, a drop — slides to
     // its place, and one that appears fades in. Web Animations only, so nothing
     // Preact owns is written to. Not mid-drag: the order there follows the
     // pointer, and sliding behind it would lag.
-    if (state.railDrag) render(tree, dom.rail);
+    //
+    // Only when the rows drawn are not the rows drawn last time. Most renders are
+    // a meta line changing — an activity word, a badge, the ⋮ menu opening — and
+    // flipAll measures every row twice to find that nothing moved. While a
+    // filter is typed, the rows it lets back in are not news, so they appear
+    // rather than fade in on every keystroke.
+    const order = drawn.join('\n');
+    const moved = order !== lastOrder;
+    lastOrder = order;
+    if (state.railDrag || !moved) render(tree, dom.rail);
     else {
         flipAll(dom.rail, () => dom.rail.querySelectorAll('[data-id]'), (n) => n.dataset.id,
-            () => render(tree, dom.rail));
+            () => render(tree, dom.rail), { enterNew: !state.query });
     }
     return finished;
 }
 
+// The session ids strip() drew, in the order it drew them, and the same for the
+// render before. See drawRail.
+const drawn = [];
+let lastOrder = null;
+
+// Messages waiting on a clock, by session: `{n, next}`. Built once per render
+// rather than scanned for again on every row. See dueBadge.
+let dueBy = new Map();
+
 function railTree() {
+    dueBy = new Map();
+    for (const m of state.later) {
+        if (m.state !== 'pending') continue;
+        const d = dueBy.get(m.sessionId);
+        if (!d) dueBy.set(m.sessionId, { n: 1, next: m.at });
+        else { d.n++; if (m.at < d.next) d.next = m.at; }
+    }
     if (!state.sessions.length) {
         return {
             finished: 0,
@@ -378,7 +404,13 @@ function groupCard(key, label, list, opts = {}) {
 }
 
 function strip(s) {
+    drawn.push(s.sessionId);
     const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
+    // Blocked on a permission, a plan or a question — bridge/runner.js words the
+    // activity "Waiting for you: …". It was the activity text, the one part of
+    // the line that is cut first, so the most urgent state a row can be in read
+    // "Waitin…". A tag instead, among the ones that are never cut.
+    const asks = running && /^Waiting for you\b/.test(s.runner.activity || '');
     // Busy and silent past the threshold — bridge/runner.js's header has the rule.
     const stalled = running && !!s.runner.stalled;
     const current = state.current && state.current.sessionId === s.sessionId;
@@ -413,6 +445,7 @@ function strip(s) {
                     ${(s.live && s.live.kind === 'bg')
                         ? html`<span class="tag-bg" title="A background agent">bg</span>` : null}
                     ${stalled ? stalledBadge() : null}
+                    ${asks ? html`<span class="tag-ask" title=${s.runner.activity}>needs you</span>` : null}
                     ${prBadge(s)}
                     ${s.worktree ? html`<span class="wt">${s.worktree.name}</span>` : null}
                     ${s.worktree ? html`<span class="dot">·</span>` : null}
@@ -421,7 +454,7 @@ function strip(s) {
                     <span>${`${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`}</span>
                     ${queued ? queuedBadge(queued) : null}
                     ${dueBadge(s.sessionId)}
-                    ${stalled ? null : activityBits(running ? s.runner : null)}
+                    ${stalled || asks ? null : activityBits(running ? s.runner : null)}
                 </span>`;
 
     // Renaming swaps the button for a plain box around the input: an input inside
@@ -475,7 +508,7 @@ function orchestratorBadge(s) {
     if (o.paused) return html`<span class="tag-orch paused" title="Paused by the usage cutoff">paused</span>`;
     return html`<span class="tag-orch" title=${o.inbox
         ? `Orchestrator — ${o.inbox} inbox item${o.inbox === 1 ? '' : 's'} unread`
-        : 'Orchestrator'}>${o.inbox ? `orch · ${o.inbox}` : 'orch'}</span>`;
+        : 'Orchestrator'}>${o.inbox ? `orch ${o.inbox}` : 'orch'}</span>`;
 }
 
 /**
@@ -598,14 +631,10 @@ function queuedBadge(queued) {
  * opening the session, which is the one thing nobody is going to do at 02:00.
  */
 function dueBadge(sessionId) {
-    let pending = 0;
-    let nextAt = 0;
-    for (const m of state.later) {
-        if (m.sessionId !== sessionId || m.state !== 'pending') continue;
-        pending++;
-        if (!nextAt || m.at < nextAt) nextAt = m.at;
-    }
-    if (!pending) return null;
+    const d = dueBy.get(sessionId);
+    if (!d) return null;
+    const pending = d.n;
+    const nextAt = d.next;
     return html`<span class="due"
         title=${`${pending} message${pending === 1 ? '' : 's'} scheduled; the next at `
             + new Date(nextAt).toLocaleString(undefined, hourOpts())}

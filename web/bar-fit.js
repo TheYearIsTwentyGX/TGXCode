@@ -34,6 +34,9 @@
  * @param {number} o.avail     The bar's content width.
  * @param {number} o.fixed     Everything that is not a placeable item: the
  *                             wordmark, the search box at its smallest, gaps.
+ * @param {number} [o.fixedCompact]  The same, measured with the bar compact:
+ *                             the version pill drops its name there. Defaults
+ *                             to `fixed`.
  * @param {Array<{id: string, full: number, compact: number, spillable: boolean}>} o.items
  *                             On the bar, in bar order. Widths include the gap
  *                             after the item.
@@ -51,15 +54,15 @@
  * @param {number} [o.slack]
  * @returns {{compact: boolean, spill: string[]}}
  */
-export function planBar({ avail, fixed, items, more, moreShown = false, prev = null, prevAvail, slack = 0, reserve = 0 }) {
-    fixed += Math.max(0, reserve);
-    const best = plan(avail, fixed, items, more, moreShown);
+export function planBar({ avail, fixed, fixedCompact = fixed, items, more, moreShown = false, prev = null, prevAvail, slack = 0, reserve = 0 }) {
+    const fixes = { full: fixed + Math.max(0, reserve), compact: fixedCompact + Math.max(0, reserve) };
+    const best = plan(avail, fixes, items, more, moreShown);
     if (!prev || rank(best) >= rank(prev)) return best;
     if (prevAvail !== undefined && prevAvail !== avail) return best;
     // Giving something back, which takes room to spare. If there is not that
     // much, the bar stays as it is — provided what it is still describes the
     // bar: a button spilled earlier may since have been hidden or moved.
-    const loose = plan(avail - slack, fixed, items, more, moreShown);
+    const loose = plan(avail - slack, fixes, items, more, moreShown);
     if (rank(loose) < rank(prev)) return loose;
     const spillable = new Set(items.filter(i => i.spillable).map(i => i.id));
     return prev.spill.every(id => spillable.has(id))
@@ -73,7 +76,7 @@ function rank(p) {
 }
 
 function plan(avail, fixed, items, more, moreShown) {
-    const sum = (k) => items.reduce((n, i) => n + i[k], fixed + (moreShown ? more : 0));
+    const sum = (k) => items.reduce((n, i) => n + i[k], fixed[k] + (moreShown ? more : 0));
     if (sum('full') <= avail) return { compact: false, spill: [] };
     let total = sum('compact');
     if (total <= avail) return { compact: true, spill: [] };

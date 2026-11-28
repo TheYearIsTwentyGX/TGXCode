@@ -10,7 +10,7 @@
 
 import { agentOf, can } from '../capabilities.js';
 import { el, toast } from '../dom.js';
-import { clip, clockOf, dateOf, dur } from '../format.js';
+import { clip, clockOf, dateOf, dur, plural } from '../format.js';
 import { escapeHtml } from '../highlight.js';
 import { icon } from '../icons.js';
 import { inline, renderMarkdown } from '../markdown.js';
@@ -253,7 +253,7 @@ export function renderEvent(ev, opts = {}) {
         case 'orchestrator-inbox': return renderOrchestratorInbox(ev);
         case 'orchestrator-message': return renderOrchestratorMessage(ev);
         case 'system': return renderSystem(ev);
-        case 'compact': return row(ev, 'compact', 'context compacted');
+        case 'compact': return row(ev, 'compact', 'Context compacted');
         default: return null;
     }
 }
@@ -338,7 +338,7 @@ function renderThinking(ev) {
         el('summary', {},
             el('span', { class: 'tname' }, 'Thought'),
             el('span', { class: 'targ' }, clip(ev.text, 90)),
-            el('span', { class: 'tmeta' }, `${words} words`),
+            el('span', { class: 'tmeta' }, plural(words, 'word')),
         ),
         el('div', { class: 'tool-body' },
             el('div', { class: 'prose', html: renderMarkdown(ev.text) })),
@@ -359,7 +359,7 @@ function renderThinking(ev) {
  */
 function renderAgentDone(ev) {
     const failed = ev.status && ev.status !== 'completed';
-    const meta = [ev.toolUses && `${ev.toolUses} tools`, dur(ev.durationMs),
+    const meta = [ev.toolUses && plural(ev.toolUses, 'tool'), dur(ev.durationMs),
         ev.tokens && `${ev.tokens.toLocaleString()} tokens`].filter(Boolean).join(' · ');
 
     const body = [el('div', { class: 'ev-label' },
@@ -477,7 +477,7 @@ function renderPeerMessage(ev) {
     // 404s is worse than no button.
     if (peer && peer.sessionId) {
         btns.push(el('button', { class: 'more-btn', type: 'button',
-            onclick: () => openSession(peer.sessionId) }, 'Open that session'));
+            onclick: () => openSession(peer.sessionId) }, 'Open session'));
     }
     if (ev.fromName) {
         btns.push(el('button', { class: 'more-btn', type: 'button',
@@ -517,7 +517,7 @@ function renderHandoff(ev) {
     if (ev.from && state.sessions.some(s => s.sessionId === ev.from)) {
         body.push(el('div', { class: 'subagent-btns' },
             el('button', { class: 'more-btn', type: 'button',
-                onclick: () => openSession(ev.from) }, 'Open the session that sent this')));
+                onclick: () => openSession(ev.from) }, 'Open session')));
     }
 
     return row(ev, 'handoff', ...body);
@@ -557,7 +557,7 @@ function renderOrchestratorInbox(ev) {
     // No 📥 in front: an emoji is a glyph only where an emoji font is installed,
     // and on a Linux host without one it was a box.
     return row(ev, 'orchestrator-inbox',
-        `${n} item${n === 1 ? '' : 's'} waiting${what ? ` — ${what}` : ''}`);
+        `${plural(n, 'item')} waiting${what ? `: ${what}` : ''}`);
 }
 
 /**
@@ -579,10 +579,12 @@ function renderOrchestratorMessage(ev) {
     return row(ev, 'orchestrator-message', ...body);
 }
 
+const sentence = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
 function renderSystem(ev) {
     const label = ev.subtype === 'permission_denied' ? 'Denied'
         : ev.subtype === 'away_summary' ? 'Summary'
-        : ev.subtype.replace(/_/g, ' ');
+        : sentence(ev.subtype.replace(/_/g, ' '));
     const body = [
         el('div', { class: 'ev-label' }, label),
         // The CLI writes these, and a denial names the tool raw. A summary is the
@@ -590,12 +592,5 @@ function renderSystem(ev) {
         el('div', { class: 'prose', html: renderMarkdown(
             ev.subtype === 'away_summary' ? ev.text : toolNamesIn(ev.text)) }),
     ];
-    if (ev.subtype === 'permission_denied') {
-        // Now that asks are answerable, most denials on this line are somebody's
-        // answer rather than a mode quietly refusing. Point at the mode only as
-        // the thing to change if you are being asked more than you want to be.
-        body.push(el('div', { class: 'note', style: 'margin-top:6px; font-size:11.5px; color:var(--text-4)' },
-            'The permission mode below the composer decides how often you are asked.'));
-    }
     return row(ev, 'system', ...body);
 }

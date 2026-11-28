@@ -290,13 +290,13 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
                     <label for="snip-perm">Permissions</label>
                     <select id="snip-perm" value=${f.permissionMode}
                         onChange=${(e) => set({ permissionMode: e.target.value })}>
-                        <option value="">inherit — leave it where it is</option>
-                        <option value="acceptEdits">acceptEdits</option>
-                        <option value="auto">auto</option>
-                        <option value="manual">manual</option>
-                        <option value="plan">plan</option>
-                        <option value="dontAsk">dontAsk</option>
-                        <option value="bypassPermissions">bypassPermissions</option>
+                        <option value="">Leave it as it is</option>
+                        <option value="acceptEdits">Accept edits</option>
+                        <option value="auto">Auto</option>
+                        <option value="manual">Manual</option>
+                        <option value="plan">Plan</option>
+                        <option value="dontAsk">Don’t ask</option>
+                        <option value="bypassPermissions">Bypass permissions</option>
                     </select>
                 </div>
             </div>
@@ -332,7 +332,7 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
         </div>
         <div class="modal-foot">
             <span class="spacer"></span>
-            <button class="btn" data-close-snip="" type="button" onClick=${closeSnipEditor}>Cancel</button>
+            <button class="btn quiet" data-close-snip="" type="button" onClick=${closeSnipEditor}>Cancel</button>
             <button id="snip-save" class="btn primary" type="button" disabled=${saving}
                 onClick=${save}>Save</button>
         </div>`;

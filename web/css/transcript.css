@@ -173,7 +173,7 @@
 }
 /* Green is reserved in this UI for something actually running, so `starting`
    does not get it — it pulses in the colour it is about to leave. */
-.cmd-btn.pending .cmd-dot { background: var(--yellow); animation: cmd-pulse var(--dur-loop) var(--ease-standard) infinite; }
+.cmd-btn.pending .cmd-dot { background: var(--yellow); --pulse-dim: 0.35; animation: pulse var(--dur-loop) var(--ease-standard) infinite; }
 .cmd-btn.on { color: var(--text); }
 .cmd-btn.on .cmd-dot { background: var(--green); }
 .cmd-btn.failed .cmd-dot { background: var(--red); }
@@ -181,7 +181,6 @@
 .cmd-port { font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); color: var(--text-4); }
 .cmd-btn.on .cmd-port { color: var(--green); }
 
-@keyframes cmd-pulse { 50% { opacity: 0.35; } }
 
 /* Sans 13 with the branch in mono 12 and the path in mono 11 — mono a step
    under the sans beside it — on one baseline, so three sizes read as one line.
@@ -512,9 +511,9 @@
 .skel {
     background: var(--s3);
     border-radius: var(--r-xs);
-    animation: skel-pulse var(--dur-loop) var(--ease-standard) infinite;
+    --pulse-dim: 0.5;
+    animation: pulse var(--dur-loop) var(--ease-standard) infinite;
 }
-@keyframes skel-pulse { 50% { opacity: 0.5; } }
 @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
 
 /* Blocks have no baseline to share, so the skeleton's rows go back to the top. */
@@ -591,6 +590,13 @@
    It pushes the clock down a line, so on a dated row the date sits beside the
    'You'/'Claude' label and the clock beside the first line of the message. That
    is the better of the two: the clock ends up next to the text it stamps. */
+/* A call's or a thought's clock only under the pointer or the keyboard: a column
+   of near-identical seconds beside every Read said nothing the message clocks
+   around them do not. `visibility`, so nothing moves when it shows. The date
+   stays — it is the line that says a new day started. */
+:is(.ev-tool, .ev-thinking) .ev-clock { visibility: hidden; }
+:is(.ev-tool, .ev-thinking):is(:hover, :focus-within) .ev-clock { visibility: visible; }
+
 .ev-date {
     display: block;
     font-size: var(--fs-xs);
@@ -685,6 +691,10 @@
 .tool.thinking > summary { color: var(--text-4); }
 .tool.thinking > summary:hover { background: var(--s2); }
 .tool.thinking .tname { color: var(--purple); font-family: var(--sans); font-size: var(--fs-md); }
+/* Open, the thought is right underneath, so its first line in the summary is
+   the same words twice. Hidden rather than removed, so the word count keeps its
+   place at the right edge. */
+.tool.thinking[open] > summary .targ { visibility: hidden; }
 .tool.thinking .prose { color: var(--text-3); font-size: var(--fs-base); }
 
 /* a background task reporting back — adjacent to a tool call, not to your turn */
@@ -872,7 +882,7 @@
 .task > summary .caret {
     flex: none;
     margin-top: 1px;   /* optical: the glyph sits high in its box */
-    font-size: 8px;
+    font-size: var(--fs-2xs);
     color: var(--text-4);
     transition: transform var(--t-fast) var(--ease);
 }

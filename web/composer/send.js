@@ -270,7 +270,6 @@ async function branchAsNewSession(text, files, opts) {
             ...(cur.test ? { test: true } : {}),
         });
         cancelBranch();
-        toast('Started a new session from your edited first turn.', 'ok');
         openSessionSoon(r.sessionId);
     } catch (err) {
         restoreToComposer(text, files);
@@ -345,9 +344,13 @@ export function enterSends(e) {
     return BOOT_PREFS.keyboard.composerSend !== 'ctrl-enter';
 }
 
-/** The strip under the composer, which says whichever mode is in force. */
+/**
+ * The strip under the composer. Empty in the usual mode — Enter sends, as it does
+ * everywhere — and only said when Enter has been made a newline, which is the
+ * mode somebody would otherwise trip over.
+ */
 export function paintComposerHint() {
     dom.composerHint.textContent = BOOT_PREFS.keyboard.composerSend === 'ctrl-enter'
-        ? 'Ctrl+Enter to send · Enter for a newline'
-        : 'Enter to send · Shift+Enter for a newline';
+        ? 'Ctrl+Enter to send'
+        : '';
 }
