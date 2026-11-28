@@ -154,6 +154,19 @@ export function el(tag, attrs, ...kids) {
  * @param {object} [opts] {ms, action:{label, onClick}} — an action keeps the
  * toast up until it is used or dismissed, since it is the recovery path.
  */
+/**
+ * Put text on the clipboard and say so. `what` names it in the toast ("Path
+ * copied."). Guarded rather than left to the promise: outside a secure context
+ * — the plain-http LAN bind in docs/remote.md — `navigator.clipboard` is
+ * undefined, and the call would throw before there was a promise to reject.
+ */
+export function copyText(text, what = 'Text') {
+    if (!navigator.clipboard) return toast('Could not copy to the clipboard.', 'error');
+    return navigator.clipboard.writeText(text)
+        .then(() => toast(`${what} copied.`))
+        .catch(() => toast('Could not copy to the clipboard.', 'error'));
+}
+
 export function toast(text, kind = 'info', opts = {}) {
     const { ms = 4200, action = null } = typeof opts === 'number' ? { ms: opts } : opts;
     const t = el('div', { class: 'toast', 'data-kind': kind },
