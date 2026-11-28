@@ -2358,6 +2358,12 @@ export function showProjMenu(project, btn) {
     dom.projMenu.replaceChildren(
         el('div', { class: 'menu-note' }, clip(project.name, 30)),
         el('div', { class: 'sep' }),
+        // The card already knows where it is, so starting there skips the
+        // dialog's directory picker. A card with no directory has nowhere to
+        // start and nothing to copy.
+        row('New session here…', () => openNew({ cwd: project.cwd }), !project.cwd),
+        row('Copy path', () => copyText(project.cwd, 'Path'), !project.cwd),
+        el('div', { class: 'sep' }),
         row('Set project colour', () => openPcolor(project)),
         origin,
         publish,
