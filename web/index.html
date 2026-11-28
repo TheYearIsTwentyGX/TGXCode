@@ -252,6 +252,22 @@
       </div>
     </div>
 
+    <!-- Codex is behind its releases, outside the range this bridge was tested
+         with, or a session is on an older one than is installed. Absent
+         otherwise. No update button: how to update depends on how it was
+         installed (bridge/codex/version.js). -->
+    <div class="quota-wrap cv-wrap" id="cxv-wrap" hidden>
+      <button id="cxv-pill" class="quota-pill cv-pill" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="cxv-menu"></button>
+      <div id="cxv-menu" class="quota-menu" role="dialog" aria-label="Codex version" hidden>
+        <div class="quota-head">
+          <span>Codex</span>
+          <button id="cxv-check" class="quota-refresh" type="button">Check again</button>
+        </div>
+        <div id="cxv-body"></div>
+      </div>
+    </div>
+
     <!-- APKs on their way to the phone. Absent unless one was sent in the last
          day, which is as long as the bridge keeps the APK; yellow when the phone
          has gone quiet on one, one failed, or Android is waiting on a tap.
@@ -282,6 +298,8 @@
         <div id="quota-windows"></div>
         <div id="quota-events" class="quota-events"></div>
         <div id="quota-note" class="quota-note"></div>
+        <!-- Codex's meter, the second one: only where Codex is installed. -->
+        <div id="quota-codex" class="quota-codex" hidden></div>
 
         <!-- Restarting the bridge is the state of the machine, which is what
              this popover is about; in the bar it was an unlabelled glyph next

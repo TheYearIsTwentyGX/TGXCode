@@ -229,8 +229,10 @@ function scanMeta(file) {
     };
 
     let sawMeta = false;
+    let counted = null;        // the last line with a token count, parsed once
     for (const line of text.split('\n')) {
         if (!line) continue;
+        if (line.includes('"last_token_usage"')) counted = line;
         if (!SCAN_NEEDLES.some(n => line.includes(n))) continue;
         const o = safeParse(line);
         if (!o || !o.payload) continue;
@@ -275,6 +277,13 @@ function scanMeta(file) {
             const item = items.fromRollout(p.item);
             if (item && items.toolEvent(item)) meta.toolCalls++;
         }
+    }
+
+    // How full the context window was after the last request, for a session with
+    // no process to say it live.
+    const info = counted && (safeParse(counted)?.payload?.info);
+    if (info) {
+        meta.context = items.contextOf(info.last_token_usage?.total_tokens, info.model_context_window);
     }
 
     if (meta.firstPrompt) {

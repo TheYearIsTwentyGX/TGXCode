@@ -498,6 +498,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
 | `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
 | `bridge/claude-version.js` | Installed Claude Code against the registry, and which live sessions are on an older binary |
+| `bridge/codex/version.js` | The same for Codex (`GET /api/codex-version`), plus whether it is inside the tested range. No updater: it says how |
+| `bridge/codex/quota.js` | The Codex meter (`runtimes.codex` on `GET /api/quota`) and whether Codex is signed in: `account/read` and `account/rateLimits/read` from a short-lived app-server, with live conversations' pushes merged over them |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
 | `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
 | `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |

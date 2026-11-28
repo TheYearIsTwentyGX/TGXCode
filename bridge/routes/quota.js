@@ -1,7 +1,7 @@
 'use strict';
 
 // `/api/quota` and `/api/quota/refresh`: how much of the usage windows is gone,
-// and running the beacon now to find out. The payload and the beacon's
+// and running the beacon (or, for Codex, an app-server) now to find out. The payload and the beacon's
 // bookkeeping stay in server.js beside the timer that also runs it, and are
 // handed over through `init`, so the button and the clock cannot drift apart.
 //
@@ -17,9 +17,10 @@ let beacon = null;
 let quotaPayload = null;
 let quotaPrefs = null;
 let runBeaconNow = null;
+let codexQuota = null;
 
 function init(deps) {
-    ({ beacon, quotaPayload, quotaPrefs, runBeaconNow } = deps);
+    ({ beacon, quotaPayload, quotaPrefs, runBeaconNow, codexQuota } = deps);
 }
 
 async function handle(req, res, url, pathname, seg, who) {
@@ -52,6 +53,18 @@ async function handle(req, res, url, pathname, seg, who) {
     // including `beacon.ok` and `beacon.reason`, which is what a client draws
     // when a run was blocked by a dialog.
     if (pathname === '/api/quota/refresh' && req.method === 'POST') {
+        // `?runtime=codex` asks Codex instead (bridge/codex/quota.js): a few
+        // seconds of app-server, no thread and no quota spent.
+        const runtime = url.searchParams.get('runtime');
+        if (runtime && runtime !== 'claude') {
+            if (runtime !== 'codex') return send(res, 400, { error: `unknown runtime: ${runtime}` });
+            const ok = await codexQuota.refresh();
+            if (!codexQuota.installed) {
+                return send(res, 409, { error: 'Codex is not installed here', notInstalled: true,
+                    quota: quotaPayload() });
+            }
+            return send(res, 200, { ok, quota: quotaPayload() });
+        }
         const q = quotaPrefs();
         if (!q.beaconDir) {
             // Not an error the user can retry past, so it says what to do. 409

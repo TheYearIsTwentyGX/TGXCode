@@ -1,8 +1,8 @@
 'use strict';
 
 // The bridge process itself: `/api/health`, `/api/shutdown`, `/api/restart`,
-// the installed Claude Code (`/api/claude-version`, and `/update`), and
-// `/api/pairing`, which says how this bridge can be reached.
+// the installed Claude Code (`/api/claude-version`, and `/update`), the
+// installed Codex (`/api/codex-version`), and `/api/pairing`, which says how this bridge can be reached.
 //
 // **The most refused module there is.** Shutdown, restart (both methods) and the
 // update are refused to a remote caller by remoteRefusal() in server.js before
@@ -30,6 +30,7 @@ const { isWsl } = require('../platform');
 
 // Handed over by server.js — see the note above ROUTES there.
 let claudeVersion = null;
+let codexVersion = null;
 let index = null;
 let keepAwake = null;
 let markClaudeVersionSent = null;
@@ -41,7 +42,7 @@ let terminals = null;
 
 function init(deps) {
     ({
-        claudeVersion, index, keepAwake, markClaudeVersionSent, pool, registry, runs, shutdown, terminals,
+        claudeVersion, codexVersion, index, keepAwake, markClaudeVersionSent, pool, registry, runs, shutdown, terminals,
     } = deps);
 }
 
@@ -249,6 +250,12 @@ async function handle(req, res, url, pathname, seg, who) {
     // person pressing "check again" means.
     if (pathname === '/api/claude-version' && req.method === 'GET') {
         return send(res, 200, await claudeVersion.summary({ fresh: url.searchParams.get('refresh') === '1' }));
+    }
+
+    // The same for Codex, against its own releases, plus the range this bridge
+    // was tested with. No update route: see bridge/codex/version.js.
+    if (pathname === '/api/codex-version' && req.method === 'GET') {
+        return send(res, 200, await codexVersion.summary({ fresh: url.searchParams.get('refresh') === '1' }));
     }
 
     // `claude update`, on the machine. It replaces the binary new processes start

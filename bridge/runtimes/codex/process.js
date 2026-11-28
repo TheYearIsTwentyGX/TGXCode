@@ -55,8 +55,7 @@
 //
 // Kept deliberately out of here, for Phase 4: fork and branch (`thread/fork`),
 // the tgxcode MCP server in the thread `config`, the checklist from
-// `turn/plan/updated`, Codex's rate-limit snapshots, and the slash palette from
-// `skills/list`. `capabilities` in bridge/runtimes/index.js says false for each.
+// `turn/plan/updated`, and the slash palette from `skills/list`. `capabilities` in bridge/runtimes/index.js says false for each.
 
 const path = require('path');
 
@@ -68,7 +67,7 @@ const { KNOWN_NOTIFICATIONS, OPT_OUT } = require('../../codex/protocol');
 // The one table of item kinds, shared with the rollout reader (D2): the same item
 // is a `tool` event in a transcript and a `tool-start` label here, under the
 // same name, so a card, a row and the activity line agree on what a call is.
-const { TOOL, KINDS, toolEvent, scriptOf } = require('../../codex/items');
+const { TOOL, KINDS, toolEvent, scriptOf, contextOf } = require('../../codex/items');
 const { describeTool } = require('./tools');
 
 let bridgeVersion = '0.0.0';
@@ -532,6 +531,19 @@ class CodexAdapter {
                 }
                 return out;
             }
+
+            // Two readings the bridge shows and does not act on: how full this
+            // thread's context window is (a subagent's thread has its own, so
+            // only ours counts), and the account's usage windows.
+            case 'thread/tokenUsage/updated': {
+                if (p.threadId && p.threadId !== this.threadId) return [];
+                const u = p.tokenUsage || {};
+                const context = contextOf(u.last && u.last.totalTokens, u.modelContextWindow);
+                return context ? [{ type: 'context', context }] : [];
+            }
+
+            case 'account/rateLimits/updated':
+                return p.rateLimits ? [{ type: 'limits', limits: p.rateLimits }] : [];
 
             case 'serverRequest/resolved': {
                 // Sent after every request, answered or not. Only one we did not

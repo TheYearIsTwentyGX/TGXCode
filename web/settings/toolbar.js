@@ -116,7 +116,7 @@ function place(spill) {
         // the order the two had before the phone pill could be placed.
         if (def.id === 'quota') {
             const at = onBar.length - 1;
-            onBar.splice(onBar[at - 1] === dom.piWrap ? at - 1 : at, 0, dom.cvWrap);
+            onBar.splice(onBar[at - 1] === dom.piWrap ? at - 1 : at, 0, dom.cvWrap, dom.cxvWrap);
         }
         // An attribute of our own rather than `hidden`, which the quota pill
         // already uses to mean "no data yet" and must keep meaning.
@@ -211,7 +211,8 @@ const fit = { prev: null, prevAvail: undefined, frame: 0, pending: false };
 
 // The window-state pills: what the machine is doing, not a place to go. They
 // keep a ground of their own and stand a little apart from the view buttons.
-const isState = (n) => n === dom.quotaWrap || n === dom.cvWrap || n === dom.piWrap || n === dom.dbStatus;
+const isState = (n) => n === dom.quotaWrap || n === dom.cvWrap || n === dom.cxvWrap
+    || n === dom.piWrap || n === dom.dbStatus;
 
 function fitBar() {
     // `hidden`, not isUp(): a menu playing its exit is still on screen.
@@ -405,6 +406,7 @@ export function wireToolbar() {
     ro.observe(dom.barMoreWrap.parentElement);
     for (const def of TOOLBAR) ro.observe(dom[def.node]);
     ro.observe(dom.cvWrap);
+    ro.observe(dom.cxvWrap);
 }
 
 // ── the Toolbar settings group ───────────────────────────────────────────

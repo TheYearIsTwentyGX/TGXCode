@@ -672,6 +672,9 @@ class SessionIndex extends EventEmitter {
             worktree: moved ? moved.worktree : m.worktree,
             prs: m.prs,
             model: m.model,
+            // How full the context window is, where the transcript says (Codex's
+            // does): `{usedTokens, windowTokens}`. Absent otherwise.
+            ...(m.context && { context: m.context }),
             // What the composer should open on for a session with no process of
             // its own — the mode it was last seen running in, not the app default.
             permissionMode: m.permissionMode,
