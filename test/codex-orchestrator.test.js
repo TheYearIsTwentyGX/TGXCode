@@ -367,6 +367,7 @@ function harness(name, { codexWindows = [], claudeWindows = [] } = {}) {
         const u = orchestration.usageFor('cx');
         assert.deepStrictEqual(u.windows.map(w => [w.type, w.label]), [['codex:primary', 'Codex 30-day']],
             'get_usage reports the window it is judged by, labelled');
+        assert.deepStrictEqual(u.runtimes, ['codex'], 'and whose windows they are, so it does not quote Claude\'s cutoff');
 
         // A Claude worker brings Claude's windows in.
         h = harness('mixed', { claudeWindows: claudeHigh });

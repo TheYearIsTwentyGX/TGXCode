@@ -7357,8 +7357,9 @@ asks for it with its `move_session` MCP tool, which posts here with its own id.
 
 The first is `{workers, pendingSpawns, maxRunning, paused}` from the payload. The
 second is `{windows: [{type, usedPercent, usedPercentAt, resetsAt, status, label?}],
-cutoff: settings.usageStop|null, paused}`: the windows the cutoff is judged against
-(*Whose usage counts*), Codex's typed `codex:*` with a `label` such as `"Codex 30-day"`.
+cutoff: settings.usageStop|null, paused, runtimes: ["claude"|"codex"]}`: the windows the
+cutoff is judged against (*Whose usage counts*), Codex's typed `codex:*` with a `label`
+such as `"Codex 30-day"`, and `runtimes`, which says whose they are — as in the payload.
 
 #### The tool routes
 

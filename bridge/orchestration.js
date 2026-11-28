@@ -1150,6 +1150,9 @@ function usageFor(orchId) {
             resetsAt: w.resetsAt, status: w.status, ...(w.label ? { label: w.label } : {}) })),
         cutoff: o ? o.settings.usageStop : null,
         paused: o ? o.paused : null,
+        // Whose windows those are: the cutoff's Claude half only counts when
+        // `claude` is here, its Codex half when `codex` is.
+        runtimes: o ? runtimesInPlay(o) : [runtimes.DEFAULT],
     };
 }
 

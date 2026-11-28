@@ -1793,13 +1793,17 @@ async function callGetUsage(id) {
     });
     if (!lines.length) lines.push('No usage reading yet.');
     const c = body.cutoff;
+    // A bridge from before `runtimes` existed watched Claude's windows alone.
+    const rts = Array.isArray(body.runtimes) ? body.runtimes : ['claude'];
+    const claude = rts.includes('claude');
     if (c && !c.enabled) lines.push('Cutoff: off.');
+    else if (!claude) lines.push('Claude\'s windows: not watched — nothing here runs on Claude.');
     else if (c && c.window === 'all') {
         const each = Object.entries(c.limits || {}).filter(([, v]) => v != null)
             .map(([w, v]) => `${w} ${v}%`);
         lines.push(`Cutoff: everything stops when any of these is passed — ${each.join(', ') || 'none set'}.`);
     } else if (c) lines.push(`Cutoff: everything stops at ${c.percent}% of ${c.window}.`);
-    if (c && c.enabled && (body.windows || []).some(w => String(w.type).startsWith('codex:'))) {
+    if (c && c.enabled && (rts.includes('codex') || (body.windows || []).some(w => String(w.type).startsWith('codex:')))) {
         lines.push(c.codexPercent == null ? 'Codex windows: no cutoff.'
             : `Codex windows: everything stops at ${c.codexPercent}% of any of them.`);
     }
