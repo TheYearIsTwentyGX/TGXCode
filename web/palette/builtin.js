@@ -21,6 +21,7 @@ import { openPreviewPages, previewPane, resumeCommand, scrollToEnd, setDockSide,
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
 import { jumpToTurn } from '../transcript/turn-rail.js';
+import { collapseAllTools } from '../transcript/tools.js';
 import { openComposerFind } from '../composer/find.js';
 import { SETTINGS } from '../settings/general.js';
 import { openSettingsAt } from '../settings/index.js';
@@ -138,6 +139,15 @@ export function registerBuiltins() {
         keywords: 'top start oldest beginning scroll', when: () => !!state.current && !state.agent,
         // Through the turn rail, which loads the earlier stretch it is in first.
         run: () => (state.turns.length ? jumpToTurn(state.turns[0]) : (dom.scroll.scrollTop = 0)),
+    });
+    registerAction({
+        id: 'conversation.collapseTools', group: 'Actions', title: 'Collapse all tool calls',
+        keywords: 'fold close shut tools output', when: () => !!state.current,
+        run: () => {
+            const { tools, runs } = collapseAllTools();
+            toast(tools ? `Collapsed ${tools === 1 ? 'one tool call' : `${tools} tool calls`}.`
+                : runs ? 'Folded the open runs of tool calls.' : 'No tool calls are open.');
+        },
     });
     registerAction({
         id: 'find.open', group: 'Actions', title: 'Find in conversation', command: 'find.open',

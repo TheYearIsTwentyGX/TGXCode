@@ -214,6 +214,28 @@ export function markWaitingTool(id) {
     }
 }
 
+/**
+ * Shut every tool call opened in the session's log, and every run of them
+ * (`.trun`) opened from its fold. Returns how many of each were shut.
+ *
+ * From `state.nodes` rather than the log, because windowing takes settled
+ * stretches out of the document (web/transcript/window.js), and a call opened
+ * up there would otherwise still be open when you scrolled back to it. Shutting
+ * one there changes a held height; that is the stale-height case window.js
+ * already leaves to scroll anchoring, since chunks attach off-screen.
+ */
+export function collapseAllTools() {
+    const shut = { tools: 0, runs: 0 };
+    for (const entry of state.nodes.values()) {
+        const node = entry && entry.node;
+        if (!node) continue;
+        node.querySelectorAll('details.tool[open]').forEach((d) => { d.open = false; shut.tools++; });
+        const run = node.closest('details.trun');
+        if (run && run.open) { run.open = false; shut.runs++; }
+    }
+    return shut;
+}
+
 /** Build a tool's body the first time it is actually shown. */
 export function fillTool(det, ev) {
     const body = det.querySelector('.tool-body');
