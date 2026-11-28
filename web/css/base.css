@@ -144,6 +144,12 @@
     --shadow-dialog: 0 24px 64px #000a;
 
     --focus-colour: var(--blue);
+
+    /* Chunk C (UI audit). The image preview's near-black backdrop, and the red
+       wash behind the Skills full-screen risk confirm — the two scrims that are
+       not the dialog one. */
+    --scrim-image:  #000000d9;
+    --scrim-danger: color-mix(in oklab, var(--red-cont) 70%, var(--bg));
 }
 
 :root {
@@ -248,7 +254,23 @@
        step on the spacing scale: it is the one edge all of those line up on,
        and naming it is what keeps them lined up. */
     --pane-x: 28px;
+
+    /* Chunk C (UI audit). Control heights: a compact control inside a row or a
+       card (28), a control on the bar or a panel head (34), a dialog's footer
+       button (40). A new button or select takes one of these. */
+    --ctl-sm: 28px;
+    --ctl:    34px;
+    --ctl-lg: 40px;
+    /* A control that cannot be used right now. One value, so every disabled
+       button in the app is equally faint. */
+    --disabled-opacity: 0.45;
 }
+
+/* Chunk C (UI audit). The one pulse: a skeleton line, a status that is waiting
+   on something. `--pulse-dim` sets how far it fades; the period is the caller's,
+   normally `var(--dur-loop)`. The older per-file pulses (skel-pulse, crv-pulse,
+   cmd-pulse, pv-driving-pulse) still exist and can move onto this one. */
+@keyframes pulse { 50% { opacity: var(--pulse-dim, 0.4); } }
 
 /* Everything CSS animates, stopped in one place for a reader who asked for less
    motion: transitions are cut to nothing, and a looping keyframe like `breathe`

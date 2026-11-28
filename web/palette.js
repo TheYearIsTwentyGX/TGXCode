@@ -165,8 +165,8 @@ function model() {
 
     if (q) {
         add('Search', {
-            id: 'rail.filter.q', title: `Filter sessions for '${q}'`, hits: [],
-            meta: 'In the rail', chord: keys.label('palette.open'), run: () => filterRail(q),
+            id: 'rail.filter.q', title: `Filter sessions for “${q}”`, hits: [],
+            chord: keys.label('rail.filter'), run: () => filterRail(q),
         });
     }
     for (const e of always) add(e.group || 'Search', entryRow({ item: e, hits: [[]] }));

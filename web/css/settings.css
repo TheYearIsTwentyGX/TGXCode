@@ -796,7 +796,7 @@
 }
 .cfg-list-x:hover { background: var(--s4); color: var(--red); }
 .cfg-list-x:disabled { color: var(--s5); cursor: default; background: transparent; }
-.cfg-list-none { padding: var(--sp-3) 0; font-size: var(--fs-sm); color: var(--text-4); }
+.cfg-list-none { padding: var(--sp-3) 0; font-size: var(--fs-sm); color: var(--text-3); }
 .cfg-list-add { display: flex; gap: var(--sp-4); align-items: center; margin-top: var(--sp-4); flex-wrap: wrap; }
 /* Same trap as .cfg-kv-newvalue below: `is-long` means 100% of the row, which
    in a flex row is 100% *and* whatever it sits next to. */
@@ -1105,7 +1105,7 @@
     resize: none;
     overflow: hidden;
 }
-.cmd-area:focus { outline: 0; border-color: var(--blue); }
+.cmd-area:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cmd-area:disabled { color: var(--text-4); }
 
 .cmd-port { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }

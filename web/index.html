@@ -1585,8 +1585,8 @@
 
     <div id="placeholder" class="empty">
       <h2>No session selected</h2>
-      <p>Pick a session from the board, or start a new one. Sessions running in a
-         terminal show up here too, and stream as they go.</p>
+      <p>Pick a session from the list, or start a new one. Sessions started in a
+         terminal appear here too.</p>
     </div>
   </main>
 
@@ -1632,8 +1632,7 @@
       <div class="field">
         <label for="new-cwd">Working directory</label>
         <input id="new-cwd" type="text" spellcheck="false">
-        <div class="note">The agent runs here. Pick one below, or type a path —
-          <code>~</code> works, and Enter browses to it.
+        <div class="note">Pick one below or type a path; Enter browses to it.
           <button id="new-gh" class="link-btn" type="button" hidden>Publish to GitHub…</button>
           <button id="new-clone" class="link-btn" type="button">Clone from GitHub…</button></div>
       </div>
@@ -2119,7 +2118,7 @@
     </div>
     <div class="modal-foot">
       <span class="spacer"></span>
-      <button class="btn" data-close-fill type="button">Cancel</button>
+      <button class="btn quiet" data-close-fill type="button">Cancel</button>
       <button id="snip-fill-go" class="btn primary" type="button">Insert</button>
     </div>
   </div>
@@ -2146,13 +2145,13 @@
     <div class="modal-body">
       <div class="del-what" id="del-what"></div>
       <div class="del-meta" id="del-meta"></div>
-      <p class="del-warn">This deletes the transcript from disk, along with any
-        subagent transcripts and saved tool output belonging to it. It cannot be
-        undone, and it is not what archiving does.</p>
+      <p class="del-warn">Deletes the transcript, its subagent transcripts and saved
+        tool output. This can't be undone; archive it instead to keep it out of
+        the way.</p>
     </div>
     <div class="modal-foot">
       <span class="spacer"></span>
-      <button class="btn" data-close-del type="button">Cancel</button>
+      <button class="btn quiet" data-close-del type="button">Cancel</button>
       <button id="del-go" class="btn destructive" type="button">Delete permanently</button>
     </div>
   </div>

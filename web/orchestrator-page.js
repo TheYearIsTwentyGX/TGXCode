@@ -529,7 +529,7 @@ function matrix(p, now) {
     const live = ordered.filter(w => !w.closedAt);
     const done = ordered.filter(w => w.closedAt);
     const counts = [`${live.length} open`, p.pendingSpawns.length ? `${p.pendingSpawns.length} queued` : null,
-        done.length ? `${done.length} finished` : null].filter(Boolean).join(' · ');
+        done.length ? `${done.length} closed` : null].filter(Boolean).join(' · ');
     return html`<section class="op-sec" aria-label="Workers">
         <h2 class="op-h">Workers <span>${counts}</span></h2>
         ${!p.workers.length && !p.pendingSpawns.length ? html`<div class="op-empty">
@@ -548,7 +548,7 @@ function matrix(p, now) {
                 onClick=${() => { ui.finished = !ui.finished; paintOrchPage(); }}>
                 <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
                     dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
-                Finished <b>${done.length}</b>
+                Closed <b>${done.length}</b>
                 ${ui.finished ? null : html`<span class="op-fold-names">${done.map(w => w.title || 'untitled').join(', ')}</span>`}
             </button>` : null}
             ${ui.finished ? done.map(w => row(p, w, now)) : null}
@@ -584,7 +584,7 @@ function row(p, w, now) {
             <span class="op-who-text">
                 <span class="op-name">${fromTag(w.origin)}${w.title || 'untitled worker'}</span>
                 ${branch ? html`<span class="op-branch">${branch}</span>` : null}
-                ${mw ? html`<span class="op-model" title=${mw.title}>${mw.text}</span>` : null}
+                ${mw && mw.text !== 'default model' ? html`<span class="op-model" title=${mw.title}>${mw.text}</span>` : null}
             </span>
         </span>
         <span class="op-track" aria-hidden="true">
@@ -612,7 +612,7 @@ function order(p) {
             onClick=${() => { ui.orderFolded = !ui.orderFolded; storeOrderFolded(ui.orderFolded); paintOrchPage(); }}>
             <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
                 dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
-            Merge order <b>${m.fromBrief ? 'from the brief' : 'in the order the workers started — the brief has none yet'}</b>
+            Merge order${m.fromBrief ? null : html` <b>by start order</b>`}
         </button>
         ${ui.orderFolded ? null : html`<ol class="op-order">${m.rows.map(r => html`<li key=${r.key} data-merged=${String(r.status === 'merged')}>
             <span class="op-num">${r.n}</span>
@@ -636,7 +636,7 @@ function activity(p) {
             onClick=${() => { ui.activity = !ui.activity; paintOrchPage(); }}>
             <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
                 dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
-            Activity <b>${p.unread ? `${p.unread} unread by the orchestrator` : `${p.inbox.length} items`}</b>
+            Activity <b>${p.unread ? `${p.unread} unread` : `${p.inbox.length} items`}</b>
         </button>
         ${ui.activity ? html`<div class="op-activity-body">${inboxList(p)}</div>` : null}
     </section>`;
@@ -724,7 +724,7 @@ function peekTree(p, w) {
             <div class="op-peek-facts">
                 ${w.worktree && w.worktree.branch ? html`<span class="op-branch" title=${w.worktree.path || ''}>${w.worktree.branch}</span>` : null}
                 <span>${`started ${hm(w.spawnedAt)}`}</span>
-                ${mw ? html`<span class="op-model" title=${mw.title}>${mw.text}</span>` : null}
+                ${mw && mw.text !== 'default model' ? html`<span class="op-model" title=${mw.title}>${mw.text}</span>` : null}
                 ${w.pr ? html`<a class="op-pr" data-status=${freshPr(w.id) || w.pr.status} href=${w.pr.url || undefined}
                     target="_blank" rel="noreferrer">${`#${w.pr.number}`}<em>${PR_WORD[freshPr(w.id) || w.pr.status] || ''}</em></a>` : null}
             </div>

@@ -16,10 +16,10 @@
 .img-empty {
     margin: var(--sp-5) var(--sp-3);
     color: var(--text-3);
-    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
 .img-empty p { margin: 0 0 var(--sp-3); }
-.img-empty-sub { color: var(--text-4); }
+.img-empty-sub { color: var(--text-3); }
 
 /* As many columns as fit: three at the pane's 300px, two at the narrow-window
    240px, and more if the column is ever given more room. */

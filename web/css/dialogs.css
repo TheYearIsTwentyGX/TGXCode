@@ -120,6 +120,11 @@
    readable, whereas a clipped "Permissions" stops naming anything. */
 .opt label { flex: none; }
 .opt select { min-width: 0; }
+/* The composer's selects rest on --s2, which is this dialog's own ground, so
+   here they vanished into plain text. A control is one step above what it sits
+   on. */
+.modal .opts select { background: var(--s3); }
+.modal .opts select:hover { background: var(--s4); }
 
 .foot-acts {
     display: flex;
@@ -166,7 +171,7 @@
     outline: none;
     box-shadow: var(--ring-inset);
 }
-.field .note { margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--text-4); line-height: var(--lh-base); }
+.field .note { margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--text-3); line-height: var(--lh-base); }
 
 .field label.check {
     display: flex;
@@ -246,7 +251,7 @@
 .crumb[aria-current="page"] { color: var(--text); }
 
 .browse-foot { display: flex; align-items: center; gap: var(--sp-4); padding-top: var(--sp-5); }
-.btn.small { height: 30px; padding: 0 var(--sp-6); font-size: var(--fs-md); }
+.btn.small { height: var(--ctl-sm); padding: 0 var(--sp-6); font-size: var(--fs-md); }
 .browse-foot .note { margin-top: 0; flex: 1; min-width: 0; }
 .mkdir-name {
     flex: 1;
@@ -260,10 +265,10 @@
 .mkdir-name:focus { outline: none; box-shadow: var(--ring-inset); }
 
 /* Nothing to list, or nothing readable. Sits inside .picker in place of rows. */
-.picker-msg { padding: var(--sp-5) var(--sp-6); font-size: var(--fs-sm); line-height: var(--lh-base); color: var(--text-4); }
+.picker-msg { padding: var(--sp-5) var(--sp-6); font-size: var(--fs-sm); line-height: var(--lh-base); color: var(--text-3); }
 
 .btn {
-    height: 40px;
+    height: var(--ctl-lg);
     padding: 0 var(--sp-9);
     border-radius: var(--pill);
     font: 500 var(--fs-md)/var(--lh-none) var(--sans);
@@ -276,7 +281,7 @@
 .btn:hover { background: var(--blue-tint); }
 .btn.primary { background: var(--blue); color: var(--on-blue); }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
-.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
 
 /* The middle weight, for a footer with two things you might commit. Filled, so
    it reads as an action rather than a way out, but in the surface colour rather
@@ -340,7 +345,7 @@
     background: var(--s2);
 }
 .seg-btn {
-    height: 28px;
+    height: var(--ctl-sm);
     padding: 0 var(--sp-6);
     border-radius: var(--pill);
     color: var(--text-3);
@@ -498,14 +503,15 @@
     background: var(--bg);
     border-radius: 0 0 var(--r) var(--r);
     font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
-    color: var(--text-4);
+    color: var(--text-3);
 }
 .del-meta .sep { opacity: 0.7; }
 .del-warn {
     margin: var(--sp-7) 0 var(--sp-2);
     font-size: var(--fs-md);
     line-height: var(--lh-prose);
-    color: var(--red);
+    /* Read, not shouted: the button beside it is the red thing. */
+    color: var(--text-2);
 }
 
 /* ── restart ─────────────────────────────────────────────────────────── */
@@ -736,7 +742,8 @@
    and capped at the window, so everything around it is scrim and closes it.
    The bar floats over the top right, on the scrim rather than in a header,
    because a header would take height the picture wants. */
-.img-scrim { background: #000000d9; padding: 56px 24px 24px; }
+/* 56px: the bar's height over the picture, so the two never overlap. */
+.img-scrim { background: var(--scrim-image); padding: 56px var(--sp-9) var(--sp-9); }
 .img-modal {
     width: auto;
     max-width: 100%;
@@ -746,16 +753,16 @@
 }
 .img-view {
     display: block;
-    max-width: calc(100vw - 48px);
+    max-width: calc(100vw - 2 * var(--sp-9));
     max-height: calc(100vh - 80px);
     object-fit: contain;
 }
 .img-bar {
     position: absolute;
-    top: 10px; left: 24px; right: 14px;
+    top: var(--sp-5); left: var(--sp-9); right: var(--sp-7);
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-2);
 }
 .img-title {
     flex: 1;
@@ -763,7 +770,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font: 400 13px/1 var(--mono);
+    font: 400 var(--fs-sm)/var(--lh-none) var(--mono);
     color: var(--text-3);
 }
 .img-bar .icon-btn { color: var(--text-2); font-size: 15px; }
@@ -804,7 +811,7 @@
 .gc-vis[data-vis="private"], .gc-vis[data-vis="internal"] { color: var(--yellow); }
 .gc-when { margin-left: auto; flex: none; font-size: var(--fs-sm); color: var(--text-4); }
 .gc-repo-desc { font-size: var(--fs-sm); color: var(--text-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gc-msg { padding: var(--sp-5) var(--sp-6); font-size: var(--fs-sm); color: var(--text-4); }
+.gc-msg { padding: var(--sp-5) var(--sp-6); font-size: var(--fs-sm); color: var(--text-3); }
 .gc-msg.bad { color: var(--yellow); }
 .gc-more { display: block; margin: var(--sp-4) auto; }
 .gc-slash { padding-top: 0; }

@@ -77,9 +77,13 @@ function renderPicker() {
 const pickedRow = () => state.templates.rows.find(r => r.id === dom.newTpl.value) || null;
 
 function paintPickerButtons() {
+    // Hidden rather than only disabled: with nothing picked they are two
+    // greyed words that do nothing, and Save as… is the one thing to do.
     const on = !!pickedRow();
     dom.newTplEdit.disabled = !on;
     dom.newTplDel.disabled = !on;
+    dom.newTplEdit.hidden = !on;
+    dom.newTplDel.hidden = !on;
     disarmDelete();
 }
 
