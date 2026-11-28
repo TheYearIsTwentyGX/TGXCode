@@ -16,8 +16,8 @@
 // an app.js binding at module top level, only when a function is called.
 
 import { state } from '../state.js';
-import { dom, toast } from '../dom.js';
-import { openPreviewPages, previewPane, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
+import { copyText, dom, toast } from '../dom.js';
+import { openPreviewPages, previewPane, resumeCommand, setDockSide, setFocus, showPreviewPage, showView, startRename } from '../app.js';
 import { openNew } from '../new-session/dialog.js';
 import { openFind } from '../transcript/find.js';
 import { openComposerFind } from '../composer/find.js';
@@ -113,6 +113,16 @@ export function registerBuiltins() {
     registerAction({
         id: 'session.rename', group: 'Actions', title: 'Rename session', keywords: 'title',
         when: () => !!state.current, run: () => startRename(state.current),
+    });
+    registerAction({
+        id: 'session.copyId', group: 'Actions', title: 'Copy session ID', keywords: 'uuid clipboard',
+        when: () => !!state.current, run: () => copyText(state.current.sessionId, 'Session ID'),
+    });
+    registerAction({
+        id: 'session.copyResume', group: 'Actions', title: 'Copy resume command',
+        keywords: 'terminal shell continue clipboard cli',
+        when: () => !!resumeCommand(state.current),
+        run: () => copyText(resumeCommand(state.current), 'Resume command'),
     });
     registerAction({
         id: 'find.open', group: 'Actions', title: 'Find in conversation', command: 'find.open',

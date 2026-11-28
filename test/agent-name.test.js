@@ -16,11 +16,11 @@ let pass = 0;
 const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
 
 (async () => {
-    const { agentFrom } = await import('../web/agent-name.js');
+    const { agentFrom, resumeLine } = await import('../web/agent-name.js');
 
     // --- the bridge names each runtime ----------------------------------------------------------
-    assert.deepStrictEqual(runtimes.agentOf('claude'), { name: 'Claude', product: 'Claude Code' });
-    assert.deepStrictEqual(runtimes.agentOf('codex'), { name: 'Codex', product: 'Codex' });
+    assert.deepStrictEqual(runtimes.agentOf('claude'), { name: 'Claude', product: 'Claude Code', resume: ['claude', '--resume'] });
+    assert.deepStrictEqual(runtimes.agentOf('codex'), { name: 'Codex', product: 'Codex', resume: ['codex', 'resume'] });
     assert.strictEqual(runtimes.agentOf(), runtimes.agentOf('claude'), 'claude when none is named');
     assert.strictEqual(runtimes.capabilitiesOf('claude').updateCheck, true);
     assert.strictEqual(runtimes.capabilitiesOf('codex').updateCheck, true,
@@ -28,13 +28,23 @@ const ok = (what) => { pass++; console.log(`  ok  ${what}`); };
     ok('each runtime has a display name and says whether its version is checked');
 
     // --- the client reads them, and falls back to Claude for an older bridge ----------------------
-    assert.deepStrictEqual(agentFrom(runtimes.agentOf('codex')), { name: 'Codex', product: 'Codex' });
-    assert.deepStrictEqual(agentFrom(null), { name: 'Claude', product: 'Claude Code' },
+    assert.deepStrictEqual(agentFrom(runtimes.agentOf('codex')), { name: 'Codex', product: 'Codex', resume: ['codex', 'resume'] });
+    assert.deepStrictEqual(agentFrom(null), { name: 'Claude', product: 'Claude Code', resume: ['claude', '--resume'] },
         'a bridge that sends no agent ran only Claude');
-    assert.deepStrictEqual(agentFrom({ name: 'Gemini' }), { name: 'Gemini', product: 'Claude Code' });
-    assert.deepStrictEqual(agentFrom({ name: 7, product: '' }), { name: 'Claude', product: 'Claude Code' },
+    assert.deepStrictEqual(agentFrom({ name: 'Gemini' }), { name: 'Gemini', product: 'Claude Code', resume: null },
+        'an agent object with no resume has no resume command');
+    assert.deepStrictEqual(agentFrom({ name: 7, product: '', resume: ['x', 3] }), { name: 'Claude', product: 'Claude Code', resume: null },
         'a malformed field is no name');
     ok('web/agent-name.js reads the bridge\'s names, with Claude\'s for none');
+
+    // --- the resume line, from the runtime's own argv ----------------------------------------------
+    assert.strictEqual(resumeLine(['claude', '--resume'], 'abc-123', '/home/me/proj'),
+        'cd /home/me/proj && claude --resume abc-123');
+    assert.strictEqual(resumeLine(['codex', 'resume'], 'abc-123', ''), 'codex resume abc-123');
+    assert.strictEqual(resumeLine(['claude', '--resume'], 'x', "/tmp/it's here"),
+        "cd '/tmp/it'\\''s here' && claude --resume x", 'a path is quoted for the shell');
+    assert.strictEqual(resumeLine(null, 'x', '/p'), null, 'no command, no line');
+    ok('resumeLine builds a shell line from the runtime\'s argv, cd first');
 
     // --- only Claude runners count against Claude Code's installed version ------------------------
     const out = summarize({ installed: '2.1.300', runners: {

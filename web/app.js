@@ -49,8 +49,9 @@ export { paintDashBadge, renderLive };
 import { del, get, patch, post, put } from './api.js';
 import { PREFS_FALLBACK, BOOT_PREFS, BOOT_HOST, pairToken } from './boot.js';
 import { DEFAULT_PERM, state } from './state.js';
-import { can } from './capabilities.js';
-import { dom, closeModal, closeOnClickOutside, el, modalUp, openModal, toast } from './dom.js';
+import { agentOf, can } from './capabilities.js';
+import { dom, closeModal, closeOnClickOutside, copyText, el, modalUp, openModal, toast } from './dom.js';
+import { resumeLine } from './agent-name.js';
 import { ago, clip, dur, noteHome, setClock, shortPath } from './format.js';
 import { loadChannels, renderChannels } from './channels.js';
 import { PR_ICON, icon } from './icons.js';
@@ -2433,11 +2434,23 @@ export function showStripMenu(s, btn) {
         row('Rename', startRename),
         row(s.pinned ? 'Unpin' : 'Pin to the top', (x) => setFlags(x, { pinned: !x.pinned })),
         row(s.archived ? 'Restore from archive' : 'Archive', (x) => setFlags(x, { archived: !x.archived })),
+        el('div', { class: 'sep' }),
+        row('Copy session ID', (x) => copyText(x.sessionId, 'Session ID')),
+        ...(resumeCommand(s) ? [row('Copy resume command', (x) => copyText(resumeCommand(x), 'Resume command'))] : []),
         // Not on a session whose transcript is not ours to remove (`delete`).
         ...(can('delete', s) ? [el('div', { class: 'sep' }), row('Delete permanently', askDelete, 'danger')] : []),
     );
     placeProjMenu(btn);
     dom.projMenu.querySelector('.picker-row').focus();
+}
+
+/**
+ * The shell line that reopens `s` in a terminal, or null when its runtime has
+ * none. The command is the runtime's own, from the bridge's `agent.resume`, so
+ * nothing here knows which CLI is which.
+ */
+export function resumeCommand(s) {
+    return s ? resumeLine(agentOf(s).resume, s.sessionId, s.cwd) : null;
 }
 
 export function closeProjMenu() {
