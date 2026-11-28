@@ -1,0 +1,12 @@
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145manthropics/skills@pdf[0m [36m239.6K installs[0m
+[38;5;102m└ https://skills.sh/anthropics/skills/pdf[0m
+
+[38;5;145mvercel-labs/json-render@react-pdf[0m [36m2.5K installs[0m
+[38;5;102m└ https://skills.sh/vercel-labs/json-render/react-pdf[0m
+
+[38;5;145mopenai/skills@pdf[0m [36m14.1K installs[0m
+[38;5;102m└ https://skills.sh/openai/skills/pdf[0m
+

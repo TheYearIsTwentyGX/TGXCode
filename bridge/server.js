@@ -451,6 +451,12 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/worktrees/remove') {
         return 'worktrees can only be removed at the machine they live on';
     }
+    // Both methods and every route under it: the writes put files where a model
+    // reads its instructions, the import fetches a stranger's repository onto
+    // this machine, and the GETs name every path a skill lives at.
+    if (pathname === '/api/skills' || pathname.startsWith('/api/skills/')) {
+        return 'skills can only be managed on the machine they live on';
+    }
     if (pathname === '/api/shutdown') {
         return 'the bridge can only be shut down from the machine it runs on';
     }
@@ -786,6 +792,7 @@ const ROUTES = [
     require('./routes/files'),
     require('./routes/phone-installs'),
     require('./routes/preview'),
+    require('./routes/skills'),
     sudoRoutes,
     secretRoutes,
 ];

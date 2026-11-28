@@ -35,6 +35,7 @@
 <link rel="stylesheet" href="./css/analytics.css">
 <link rel="stylesheet" href="./css/settings.css">
 <link rel="stylesheet" href="./css/hooks.css">
+<link rel="stylesheet" href="./css/skills.css">
 <link rel="stylesheet" href="./css/narrow.css">
 <link rel="stylesheet" href="./css/viewers.css">
 <link rel="stylesheet" href="./css/colours.css">
@@ -149,6 +150,16 @@
         <path d="M5 20h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
       </svg>
       <span>Hooks</span>
+    </button>
+
+    <!-- Every skill Claude Code and Codex can load, and the importer. In the
+         More menu beside Hooks, for the same reason. -->
+    <button id="btn-skills" class="bar-btn" type="button" aria-pressed="false"
+            title="Skills — Claude Code’s and Codex’s, edit them or import new ones">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+      <span>Skills</span>
     </button>
 
     <!-- What already reached you, after the fact. A toast is gone the moment
@@ -1206,6 +1217,17 @@
         <div id="an-range" class="an-range" role="group" aria-label="Range"></div>
       </header>
       <div id="an-body" class="dash-body an-body"></div>
+    </section>
+
+    <!-- Every skill, Claude's and Codex's, and the importer. Drawn by web/skills/page.js. -->
+    <section id="skills" class="dash skp" hidden aria-label="Skills">
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Skills</h1>
+          <p id="skp-sub" class="dash-sub">Every skill Claude Code and Codex can load, as files.</p>
+        </div>
+      </header>
+      <div id="skp-body" class="dash-body skp-body"></div>
     </section>
 
     <!-- Hooks: every source and the editor for Claude Code's, and Codex's read-only. Drawn by web/hooks/page.js. -->

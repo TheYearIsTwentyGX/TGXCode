@@ -196,6 +196,9 @@ remembered.
   *Phase 2* below. It was right that it needed a file-content route: adding one
   was most of the work, and it is still the only route in the bridge that reads
   or writes a whole file's contents.
+- **`skills/`** — ~~deferred~~ **built** as the Skills page, for Codex's skills as
+  well; see `docs/plans/24-skills.md`. The argument below held: it is a small file
+  manager, and plugin-owned skills are read-only there with a copy offered instead.
 - **`agents/`, `commands/`, `skills/`.** None of those directories exists at
   user or project level on this machine; everything in use arrives from plugins.
   So the value there is *authoring*, which is a small file manager rather than
