@@ -121,8 +121,9 @@ import {
 import { toolSummary } from './transcript/tools.js';
 import { resetWindow } from './transcript/window.js';
 import {
-    flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
+    flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode, stepToTurn,
 } from './transcript/turn-rail.js';
+import { stepId } from './rail-nav.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import {
     onOrchestratorEvent, onOrchestratorPaint, paintOrchestrator, saveOwnModel, toggleOrchestrator,
@@ -4798,7 +4799,39 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'session.new') { e.preventDefault(); openNew(); }
+    // Alt and an arrow or Page key. Not from a text field, where Alt+arrows
+    // belong to the field (and to the palette's list); not from the shell; and
+    // not when a widget has already answered the key, as a queued message
+    // does with Alt+↑ to move itself.
+    if (WALKS[command]) {
+        if (inTerm || e.defaultPrevented || isTyping(e.target) || e.target.tagName === 'SELECT'
+            || e.target.isContentEditable) return;
+        e.preventDefault();
+        WALKS[command]();
+    }
 });
+
+const WALKS = {
+    'session.next': () => stepSession(1),
+    'session.prev': () => stepSession(-1),
+    'turn.next': () => state.current && !state.agent && stepToTurn(1),
+    'turn.prev': () => state.current && !state.agent && stepToTurn(-1),
+};
+
+/**
+ * Open the session above or below the one on screen, in the order the rail
+ * draws them — so a shut card, Hide finished and the filter are all respected,
+ * because a row that is not drawn is not there to land on.
+ */
+export function stepSession(step) {
+    const ids = [...dom.rail.querySelectorAll('.strip[data-id]')].map(n => n.dataset.id);
+    const id = stepId(ids, state.current && state.current.sessionId, step);
+    if (!id) return false;
+    openSession(id);
+    const row = dom.rail.querySelector(`.strip[data-id="${cssEscape(id)}"]`);
+    if (row) row.scrollIntoView({ block: 'nearest' });
+    return true;
+}
 
 // Copy buttons inside rendered markdown are delegated: the blocks are innerHTML.
 // Everywhere else, a copy button carries its own click — see copyButton.

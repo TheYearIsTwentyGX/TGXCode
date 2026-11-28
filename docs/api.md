@@ -2471,6 +2471,16 @@ the composer — a `<textarea>` — has the focus, so binding a bare letter woul
 make that letter untypeable with hand-editing the settings file as the only way
 back. `Shift+F3` is legal; `Shift+K` is not.
 
+**The catalogue grows; a client keys on `id` and never on position or count.**
+Four walks — `session.next` / `session.prev` (`Alt+Down` / `Alt+Up`, the next or
+previous row in the rail as drawn) and `turn.next` / `turn.prev`
+(`Alt+PageDown` / `Alt+PageUp`, the next or previous message you sent) — are the
+exception to "fires while the composer has the focus": the web UI ignores them
+while the focus is in an `<input>`, `<textarea>`, `<select>` or editable element,
+in the terminal, or on a widget that has already answered the key (a queued
+message moves itself with `Alt+Up`), because Alt and an arrow belong to the field
+there.
+
 The same catalogue is in a `tgx-keymap` `<meta>` tag on every page, percent-encoded
 like `tgx-prefs`, because the first key somebody presses can land before a fetch
 could answer.

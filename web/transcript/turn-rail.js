@@ -18,6 +18,7 @@ import { markOutcome, openReview } from './review.js';
 import { toolSummary } from './tools.js';
 import { ensureAttached, layoutTop } from './window.js';
 import { present } from '../motion.js';
+import { stepTurn } from '../rail-nav.js';
 
 // ── turn rail ────────────────────────────────────────────────────────────
 // A tick per thing you said, down the right edge of the transcript, and one for
@@ -178,6 +179,31 @@ export async function jumpToTurn(t) {
     hideTurnPop();
     const entry = await materialize(t);
     if (entry) revealNode(entry.node);
+}
+
+// Where the last keyboard step went, and when. A smooth scroll takes a moment to
+// arrive and `activeTurn` follows the scroll, so a second press read from it
+// mid-flight would step from wherever the scroll had got to. Within the window
+// the next press steps from the turn it was sent to instead.
+let lastStep = { i: -1, at: 0 };
+
+/**
+ * The previous or next message you sent — the keyboard's way of clicking a tick
+ * on the turn rail. Returns false when there is none that way.
+ */
+export function stepToTurn(step) {
+    const recent = Date.now() - lastStep.at < 900;
+    const from = recent ? lastStep.i : state.activeTurn;
+    // Back from partway through a message goes to its start first, the way
+    // every editor's "previous paragraph" does: the turn you are in counts as
+    // the one above you until you are sitting on its first line.
+    const here = !recent && from >= 0 && state.turns[from] && state.turns[from].node;
+    const into = here && layoutTop(here) < dom.scroll.getBoundingClientRect().top - 4;
+    const i = step < 0 && into ? from : stepTurn(state.turns.length, from, step);
+    if (i < 0) return false;
+    lastStep = { i, at: Date.now() };
+    jumpToTurn(state.turns[i]);
+    return true;
 }
 
 async function reviewMark(t) {

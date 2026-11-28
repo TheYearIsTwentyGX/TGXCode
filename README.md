@@ -352,7 +352,8 @@ three places — copy them across before the first launch:
 
 Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+9` switch panes, `Ctrl+F` find, `Ctrl+K`
 filter, `Ctrl+N` new session, ``Ctrl+` `` terminal, `Ctrl+P` / `Ctrl+M` cycle
-permission mode and model, `Esc` back out. Nearly all are rebindable.
+permission mode and model, `Alt+↑` / `Alt+↓` the previous or next session,
+`Alt+PgUp` / `Alt+PgDn` your previous or next message, `Esc` back out. Nearly all are rebindable.
 
 **[`docs/manual.md`](docs/manual.md) is the real documentation** — the panes in
 full, the settings, permissions, notifications, scheduling, and the rules that

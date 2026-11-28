@@ -41,7 +41,10 @@ find alone),
 searchable list; press it again with words typed to hand them to the rail's
 filter), `Ctrl+Shift+K` the rail filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
 snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model
-(`Shift` for backwards), `Esc` leave a subagent or close whatever is on top,
+(`Shift` for backwards), `Alt+↑` / `Alt+↓` the session above or below in the
+rail (as drawn, so shut cards and Hide finished are skipped), `Alt+PgUp` /
+`Alt+PgDn` the previous or next message you sent — none of the four while you
+are typing in a field — `Esc` leave a subagent or close whatever is on top,
 `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
 
 ![The command palette: a session, a view and two searches for one word](screenshots/palette.png)
@@ -1043,8 +1046,9 @@ dropdowns themselves keep their own order either way. The permission cycle skips
 a session everything — though from either one it still steps out. The model is
 remembered per session.
 
-**The shortcut table** covers all twenty-one: the eight views; *Start a session*,
-*Filter sessions* and the *Terminal* (``Ctrl+` ``); the composer's *Snippets*
+**The shortcut table** covers every one: the views; *Start a session*,
+*Filter sessions*, the *Terminal* (``Ctrl+` ``) and the four walks (next and
+previous session, next and previous message); the composer's *Snippets*
 (`Ctrl+/`), the four picker cycles and the two message finds; and the three find shortcuts. *Change* listens for a chord and swallows it, so binding
 `Ctrl+4` does not open the dashboard on the way past; *Unbind* leaves a command
 with no shortcut, which is a thing you can ask for and is not the same as
