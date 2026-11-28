@@ -514,7 +514,7 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
 // --- the store ----------------------------------------------------------
 
 const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'effort', 'permissionMode',
-    'test', 'cron', 'once', 'gate', 'createdBy', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
+    'runtime', 'test', 'cron', 'once', 'gate', 'createdBy', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
     'lastOutcome', 'lastSkipReason', 'lastError', 'lastMarker', 'reviewed',
     'sweepSlotAt', 'sweepUntil', 'runs', 'createdAt', 'updatedAt'];
 

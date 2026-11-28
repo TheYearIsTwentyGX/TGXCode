@@ -73,6 +73,7 @@ const { parseLines } = require('../../jsonl');
 const { projectRootOf, worktreeNameOf, branchOf } = require('../../places');
 const items = require('../../codex/items');
 const plans = require('../../codex/plan');
+const { parseSuggestion } = require('../../mcp-calls');
 
 // The rollout's file name: `rollout-<timestamp>-<uuid>.jsonl[.zst]`.
 const ROLLOUT_RE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(\.zst)?$/i;
@@ -308,6 +309,10 @@ function scanMeta(file) {
             if (ts) meta.lastTs = ts;
             const item = items.fromRollout(p.item);
             if (item && items.toolEvent(item)) meta.toolCalls++;
+            // A suggest_session call is a task on the board, as a Claude one is.
+            const card = item && item.type === 'mcpToolCall'
+                ? parseSuggestion(item, { timestamp: ts, cwd: meta.cwd }) : null;
+            if (card) meta.suggestions.push(card);
         }
     }
 
@@ -510,6 +515,8 @@ function buildEvents(entries, ctx = {}) {
     let model = ctx.model || null;
     // Which turn the lines belong to, so an event can say. Used for ids only.
     let turnId = null;
+    // Where the thread runs, for a suggestion card that names no directory.
+    let cwd = ctx.cwd || null;
 
     const agents = new Map();
     const list = entries || [];
@@ -519,8 +526,14 @@ function buildEvents(entries, ctx = {}) {
         const p = e.payload || {};
         const ts = typeof e.timestamp === 'string' ? e.timestamp : null;
 
+        if (e.type === 'session_meta') {
+            if (!cwd && typeof p.cwd === 'string') cwd = p.cwd;
+            continue;
+        }
+
         if (e.type === 'turn_context') {
             if (p.model) model = p.model;
+            if (typeof p.cwd === 'string') cwd = p.cwd;
             turnId = p.turn_id || turnId;
             continue;
         }
@@ -648,6 +661,12 @@ function buildEvents(entries, ctx = {}) {
             if (item.type === 'agentMessage' && item.delivery === 'async' && item.text) {
                 events.push({ id: `${item.id}:text`, kind: 'assistant', ts, text: item.text, model });
                 continue;
+            }
+            // A suggested follow-up is a card, not a tool row — the Claude
+            // reader's rule, through the same parseSuggestion (bridge/mcp-calls.js).
+            if (item.type === 'mcpToolCall') {
+                const card = parseSuggestion(item, { timestamp: ts, cwd });
+                if (card) { events.push(card); continue; }
             }
             const t = items.toolEvent(item);
             if (!t) continue;

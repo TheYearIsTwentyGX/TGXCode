@@ -59,6 +59,7 @@ const {
 } = require('./orchestrators');
 const models = require('./models');
 const workerRead = require('./worker-read');
+const { settled } = require('./minted');
 const { inTemp } = require('./sessions');
 const pulls = require('./pulls');
 const prStore = require('./pr-store');
@@ -98,6 +99,17 @@ function init(deps) {
     if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
     pool.roleOf = roleOf;
     pool.delegateFor = (id) => store.roleOf(id) === 'worker';
+    // A Codex worker is spawned under a placeholder id, which Codex replaces at
+    // `thread/start`. Re-keyed here, as the pool re-keys its runner and in the
+    // same tick, so the status, turn and report that follow find their worker.
+    if (typeof pool.on === 'function') {
+        pool.on('minted', ({ from, to }) => {
+            if (store.rekeyWorker(from, to)) {
+                const o = store.orchestratorOf(to);
+                if (o) emit(o.id);
+            }
+        });
+    }
     pool.settingsFor = ownModel;
     // A queue waits only for a move that will be made when the turn ends — not
     // for one that is itself waiting on background work, which can take hours.
@@ -650,6 +662,12 @@ async function spawn(orchId, opts) {
     // Checked before a task is claimed, so a typo does not use one up. Only
     // what the orchestrator named: a task's own model is the user's pick.
     const asked = { model: opts.model || null, effort: opts.effort || null };
+    // A task handed over from a Codex draft runs on Codex. Its models are Codex's
+    // own (`model/list`), so the orchestrator's Claude names and Settings' worker
+    // model do not apply to it: the task's pick or Codex's default, nothing else.
+    const taskItem = opts.task ? store.item(orchId, String(opts.task)) : null;
+    const codexTask = !!(taskItem && taskItem.task && taskItem.task.runtime && taskItem.task.runtime !== 'claude');
+    if (codexTask) { asked.model = null; asked.effort = null; }
     if (asked.model && !models.isModel(asked.model)) {
         throw refuse(400, `unknown model "${asked.model}" — use one of: ${models.MODEL_IDS.join(', ')}, `
             + 'or leave it out');
@@ -665,7 +683,10 @@ async function spawn(orchId, opts) {
     const item = opts.task ? openTask(orchId, opts.task) : null;
     if (item) opts = spawnOptsFromTask(item.task, opts);
     // Decided now rather than at start, so a queued spawn's reply can say it too.
-    const chosen = resolveWorkerModel(o.settings, asked, item ? item.task : null);
+    const chosen = codexTask
+        ? resolveWorkerModel({ ...o.settings, workerModel: CHOOSE, workerEffort: CHOOSE,
+            workerDefaultModel: null, workerDefaultEffort: null }, asked, item.task)
+        : resolveWorkerModel(o.settings, asked, item ? item.task : null);
     opts = { ...opts, model: chosen.model, effort: chosen.effort, modelSource: chosen.source };
     const said = { model: chosen.model, effort: chosen.effort, modelSource: chosen.source,
         overridden: chosen.overridden };
@@ -772,6 +793,7 @@ async function place(orchId, opts, free, { o, base, title, sessionId, wantTree }
     }
 
     // Filed before the spawn: the role is read off the store as `claude` starts.
+    const runtime = opts.runtime || 'claude';
     store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree, origin: opts.origin || null,
         model: opts.model || null, effort: opts.effort || null, modelSource: opts.modelSource || null });
     try {
@@ -779,6 +801,7 @@ async function place(orchId, opts, free, { o, base, title, sessionId, wantTree }
             sessionId, cwd: startIn, prompt: String(opts.prompt),
             model: opts.model || null, effort: opts.effort || null,
             permissionMode: normalizeMode(opts.permissionMode || 'auto'),
+            runtime,
         });
     } catch (err) {
         store.closeWorker(orchId, sessionId);
@@ -786,12 +809,23 @@ async function place(orchId, opts, free, { o, base, title, sessionId, wantTree }
     }
     // The runner counts now; the reservation would count it twice.
     free();
+    // A Codex worker's id is Codex's: the `minted` handler in init() has moved
+    // the row by the time this resolves, and the label and the reply want the
+    // id the worker will be known by.
+    let id = sessionId;
+    const got = await settled(pool, { sessionId }, runtime);
+    if (got.error) {
+        store.closeWorker(orchId, sessionId);
+        emit(orchId);
+        throw refuse(502, `the worker did not start: ${got.error}`);
+    }
+    id = got.out.sessionId;
     const parentFlags = flags.get(orchId);
     // A test orchestrator's workers are test sessions, and so is a test draft's.
-    flags.set(sessionId, { title, ...(parentFlags.test || opts.test ? { test: true } : {}) });
-    index.note(sessionId);
+    flags.set(id, { title, ...(parentFlags.test || opts.test ? { test: true } : {}) });
+    index.note(id);
     emit(orchId);
-    return { sessionId, title, cwd: startIn, worktree };
+    return { sessionId: id, title, cwd: startIn, worktree, ...(runtime !== 'claude' ? { runtime } : {}) };
 }
 
 function drainSpawns(orchId) {
@@ -1431,6 +1465,7 @@ function draftFromTask(t) {
         cwd: t.cwd, prompt: t.prompt,
         title: t.title || (t.origin && t.origin.title) || null,
         model: t.model, effort: t.effort, permissionMode: t.permissionMode, test: t.test,
+        runtime: t.runtime || 'claude',
     };
 }
 

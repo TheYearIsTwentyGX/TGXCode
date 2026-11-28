@@ -46,7 +46,7 @@ import { html, useState } from './vendor/preact.js';
 import { del, get, post } from './api.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { ago, hourOpts } from './format.js';
+import { agentWord, ago, hourOpts } from './format.js';
 import * as keys from './keys.js';
 import {
     closeOtherPanels, paintPanels, projectColor, rememberView, syncBoardWatch,
@@ -300,6 +300,8 @@ function DraftCard({ d }) {
             <div class="tb-card-meta">
                 ${d.test ? html`<span class="tag-test">test</span>` : null}
                 <span title=${d.cwd}>${d.projectName || 'unknown'}</span>
+                ${d.runtime && d.runtime !== 'claude'
+                    ? html`<span class="dot">·</span><span title="The agent it starts on">${agentWord(d.runtime)}</span>` : null}
                 <span class="dot">·</span>
                 <span>${d.model || 'inherit'}</span>
                 ${d.effort ? html`<span class="dot">·</span><span>${d.effort} effort</span>` : null}

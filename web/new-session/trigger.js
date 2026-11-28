@@ -21,7 +21,10 @@ import { commitAttachments } from '../composer/attachments.js';
 import { openSessionSoon } from '../transcript/conversation.js';
 import { firstLine } from '../transcript/suggestions.js';
 import { sendToOrchestrator } from '../orch-picker.js';
-import { closeNew, newC, newDialogName, newDialogOrchestrator, newDialogRuntime, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
+import {
+    closeNew, newC, newDialogName, newDialogOrchestrator, newDialogRuntime, newDialogRuntimeAlways,
+    newDialogValues, newDialogWorktree, openNew,
+} from './dialog.js';
 
 // ── the trigger picker ──────────────────────────────────────────────────────
 //
@@ -356,6 +359,8 @@ function schedDialogValues() {
     const body = newDialogValues();
     if (!body) return null;
     body.title = newDialogName();
+    // Which CLI each run starts on; always sent, so an edit can switch it back.
+    body.runtime = newDialogRuntimeAlways();
 
     const when = whenValues();
     if (!when) return null;
@@ -506,6 +511,7 @@ export function drToSchedule() {
             model: body.model,
             effort: body.effort,
             test: body.test,
+            runtime: newDialogRuntimeAlways(),
             permissionMode: 'dontAsk',
             // Null from a plain Start-a-session dialog, where there is nothing to
             // consume. The save is what acts on it; see schedSave.
@@ -560,6 +566,9 @@ export async function drSave() {
     if (!body) return;
     const orch = newDialogOrchestrator();
     body.title = newDialogName();
+    // The Agent picker, kept: before drafts stored it, a draft saved with Codex
+    // picked started as Claude. Always sent, so an edit can switch it back.
+    body.runtime = newDialogRuntimeAlways();
 
     const editing = state.drafts.editing;
     const label = dom.newSave.textContent;
@@ -627,9 +636,9 @@ export async function startNew() {
     // the session to name itself. See newDialogName.
     const title = newDialogName();
     if (title) body.title = title;
-    // Which CLI it runs on, Start alone again (newDialogRuntime says why). The
-    // id that comes back is the one the runtime minted — Codex names its own
-    // threads — so opening it below needs nothing different.
+    // Which CLI it runs on. The id that comes back is the one the runtime
+    // minted — Codex names its own threads — so opening it below needs nothing
+    // different.
     const runtime = newDialogRuntime();
     if (runtime) body.runtime = runtime;
 

@@ -41,7 +41,7 @@ import { html, useState } from './vendor/preact.js';
 import { del, get, patch, post } from './api.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { ago, clip, hourOpts } from './format.js';
+import { agentWord, ago, clip, hourOpts } from './format.js';
 import * as keys from './keys.js';
 import {
     closeOtherPanels, paintPanels, rememberView, syncBoardWatch, syncTaskboardWatch,
@@ -454,6 +454,8 @@ function SchedCard({ s }) {
                 <span>${schedNext(s)}</span>
                 ${dot()}
                 <span title=${s.cwd}>${s.projectName || 'unknown'}</span>
+                ${s.runtime && s.runtime !== 'claude'
+                    ? html`${dot()}<span title="The agent each run starts on">${agentWord(s.runtime)}</span>` : null}
                 ${dot()}
                 <span>${s.permissionMode}</span>
                 ${schedGate(s.gate, s)}

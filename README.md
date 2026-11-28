@@ -472,6 +472,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
+| `bridge/minted.js` | Waiting for a runtime that names its own sessions (Codex) to say the id, so a draft's Start, a schedule's run and an orchestrator's worker are labelled and remembered under it |
 | `bridge/runner.js` | One agent process per active conversation: the queue and `inFlight`, approval cards, the stall clock, eviction, host notes and adoption. Everything about the CLI itself goes through its runtime's process adapter |
 | `bridge/runtimes/index.js` | The runtimes a session can run on (`claude`, `codex`) and any it can only be read on (none, since Phase 3): each one's process adapter, transcript reader, tool tables, and the `capabilities` clients hide controls by |
 | `bridge/runtimes/claude/process.js` | The Claude process adapter — argv, the line a turn is written as, stream-json read into busy/idle/tool/ask events, the control verbs, exit classification. Its header is the contract another runtime's adapter implements |
@@ -531,6 +532,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
 | `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session, install an APK on the phone, read the agent brief's sections, open a page in the preview |
+| `bridge/mcp-calls.js` | An MCP tool call read the same way from a Claude `mcp__<server>__<tool>` block and a Codex `{server, tool}` item, and `parseSuggestion`, which makes a suggestion card of either |
 | `bridge/preview-agent.js` | An agent driving the preview, the bridge's half: the endpoint a window registered (a 0600 file per port) and the `preview-open` handshake |
 | `bridge/preview-mcp.js` | The `preview` MCP server: Playwright MCP, run against a relay that finds the window's current endpoint on every connection |
 | `bridge/phone-installs.js` | APKs filed for the phone: the copy and its sha256, the state the phone reports, the first-`downloading` claim, progress heartbeats, `stalled` and the 3-minute release of a claim gone quiet, retry, and the 24h retention |

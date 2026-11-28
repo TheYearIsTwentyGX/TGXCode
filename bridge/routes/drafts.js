@@ -19,6 +19,8 @@ const { broadcast } = require('../events');
 const { NEXT, readJson, send } = require('../http');
 const { resolveWorkdir } = require('../runner');
 const { projectName } = require('../sessions');
+const runtimes = require('../runtimes');
+const { settled } = require('../minted');
 
 // Handed over by server.js — see the note above ROUTES there.
 let CREATE_LIMIT = null;
@@ -102,6 +104,15 @@ function draftFields(body, who, { partial, requireCwd = true, requirePrompt = tr
         const refusal = modeRefusal(mode, who);
         if (refusal) return { error: refusal, status: 403, remote: true };
         fields.permissionMode = mode;
+    }
+
+    // Which CLI to start it on, refused here as `POST /api/sessions` refuses it, so
+    // a draft cannot be saved for a runtime it could never be started on. Absent
+    // is Claude, as it always was.
+    if (!partial || body.runtime !== undefined) {
+        const runtime = body.runtime == null || body.runtime === '' ? runtimes.DEFAULT : String(body.runtime);
+        if (!runtimes.known(runtime)) return { error: `unknown runtime: ${runtime}`, status: 400 };
+        fields.runtime = runtime;
     }
 
     // The two that mean "no choice made" when empty, rather than being invalid.
@@ -205,6 +216,9 @@ async function handle(req, res, url, pathname, seg, who) {
                 });
             }
 
+            const runtime = draft.runtime || runtimes.DEFAULT;
+            if (!runtimes.known(runtime)) return send(res, 400, { error: `unknown runtime: ${runtime}` });
+
             let out;
             try {
                 out = pool.create({
@@ -213,6 +227,7 @@ async function handle(req, res, url, pathname, seg, who) {
                     model: draft.model,
                     effort: draft.effort,
                     permissionMode: mode,
+                    runtime,
                 });
             } catch (err) {
                 // The draft is still there, which is the point of doing this in
@@ -220,6 +235,14 @@ async function handle(req, res, url, pathname, seg, who) {
                 // should cost you the press, not the message you wrote.
                 return send(res, 400, { error: err.message });
             }
+            // A Codex draft's session is named by Codex; label and answer with
+            // that id, as POST /api/sessions does (bridge/minted.js). A start that
+            // failed keeps the draft, for the reason above.
+            const got = await settled(pool, out, runtime);
+            if (got.error) {
+                return send(res, 502, { error: got.error, kind: got.kind, unsent: got.unsent });
+            }
+            out = got.out;
 
             // The draft's name becomes the session's, as Start in the dialog
             // does with the same box — see POST /api/sessions.

@@ -41,7 +41,7 @@ function fresh() {
 }
 
 const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'effort', 'permissionMode',
-    'test', 'createdAt', 'updatedAt'];
+    'runtime', 'test', 'createdAt', 'updatedAt'];
 
 // --- the round trip ------------------------------------------------------
 

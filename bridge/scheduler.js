@@ -38,6 +38,8 @@ const {
 } = require('./schedule');
 const { broadcast } = require('./events');
 const gate = require('./pr-gate');
+const runtimes = require('./runtimes');
+const { settled } = require('./minted');
 const {
     SWEEP_MS, REVIEWS_PER_TICK, REVIEWS_IN_FLIGHT, CREATE_RESERVE,
     rangeFailures, noteRangeFailure, sawRangeFailure,
@@ -276,6 +278,14 @@ function scheduleFields(body, who, { partial }) {
         }
     }
 
+    // Which CLI a run starts on, refused as `POST /api/sessions` refuses it.
+    // Absent is Claude, as it always was.
+    if (!partial || body.runtime !== undefined) {
+        const runtime = body.runtime == null || body.runtime === '' ? runtimes.DEFAULT : String(body.runtime);
+        if (!runtimes.known(runtime)) return { error: `unknown runtime: ${runtime}`, status: 400 };
+        fields.runtime = runtime;
+    }
+
     // The ones that mean "no choice made" when empty, rather than being invalid.
     if (!partial || body.model !== undefined) fields.model = body.model || null;
     if (!partial || body.effort !== undefined) fields.effort = body.effort || null;
@@ -426,16 +436,26 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER, target = nu
     // pull-request drain and Run now agree; and Run now getting it too is the
     // point of the docstring above, not an oversight.
     const prompt = unattended(fillPrompt(row.prompt, facts));
+    const runtime = row.runtime || runtimes.DEFAULT;
+    if (!runtimes.known(runtime)) return { ok: false, skip: 'error', error: `unknown runtime: ${runtime}` };
     let out;
     try {
         out = pool.create({ cwd: row.cwd, prompt, model: row.model,
-            effort: row.effort, permissionMode: mode });
+            effort: row.effort, permissionMode: mode, runtime });
     } catch (err) {
         // The marker is untouched, which is the point of doing this in this
         // order: a directory that has moved since you saved the schedule should
         // cost you tonight's run, not the commits it was going to review.
         return { ok: false, skip: 'error', error: err.message };
     }
+    // A Codex run's session is named by Codex at `thread/start`. Everything
+    // below keys on the id — the label, and above all `rememberScheduledRun`,
+    // which is how the finished turn finds its schedule and its verdict — so it
+    // waits for the real one (bridge/minted.js). A start that fails here never
+    // ran: the marker stays where it was, as for a spawn that threw.
+    const got = await settled(pool, out, runtime);
+    if (got.error) return { ok: false, skip: 'error', error: got.error, detail: got.kind };
+    out = got.out;
 
     if (row.test) flags.set(out.sessionId, { test: true });
     index.note(out.sessionId);

@@ -960,6 +960,9 @@ function clean(row) {
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
+        // Which CLI a run starts on: `"claude"` or `"codex"`, never null. A row
+        // from before this field existed runs Claude, which is what it ran.
+        runtime: row.runtime,
         test: row.test,
         cron: row.cron,
         // Beside the cron because it qualifies it: the expression says 5 PM on
@@ -993,6 +996,11 @@ function clean(row) {
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
     };
+}
+
+/** A stored runtime name, or Claude's for none. */
+function runtimeOf(v) {
+    return typeof v === 'string' && v.trim() ? v.trim() : 'claude';
 }
 
 /** Newest-updated first, the order a client draws them in. */
@@ -1039,6 +1047,8 @@ function read() {
                 // of modes were ever renamed upstream.
                 permissionMode: typeof row.permissionMode === 'string'
                     ? row.permissionMode : 'auto',
+                // Checked against the runtimes at fire time, the mode's rule.
+                runtime: runtimeOf(row.runtime),
                 test: !!row.test,
                 cron: row.cron,
                 // Absent reads as false — a row from before this field existed
@@ -1444,6 +1454,7 @@ class Schedules {
             model: orNull(fields.model),
             effort: orNull(fields.effort),
             permissionMode: String(fields.permissionMode || 'auto'),
+            runtime: runtimeOf(fields.runtime),
             test: !!fields.test,
             cron: String(fields.cron),
             once: !!fields.once,
@@ -1501,6 +1512,7 @@ class Schedules {
         if (fields.permissionMode !== undefined) {
             row.permissionMode = String(fields.permissionMode);
         }
+        if (fields.runtime !== undefined) row.runtime = runtimeOf(fields.runtime);
         if (fields.test !== undefined) row.test = !!fields.test;
         if (fields.cron !== undefined) row.cron = String(fields.cron);
         if (fields.once !== undefined) row.once = !!fields.once;

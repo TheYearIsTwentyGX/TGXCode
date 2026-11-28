@@ -43,6 +43,7 @@ const {
     isOrchestratorMessage, parseOrchestratorMessage, parseAttachmentNote,
 } = require('../../envelopes');
 const { describeTool } = require('./tools');
+const { parseSuggestion } = require('../../mcp-calls');
 
 // Entries that carry conversation content. Everything else is bookkeeping.
 const CONTENT_TYPES = new Set(['user', 'assistant', 'system']);
@@ -926,38 +927,10 @@ function isTaskNotification(text) {
 }
 
 // The tool bridge/mcp.js provides, as the CLI names it once it has been
-// resolved through an MCP server. Matched on the suffix rather than the whole
-// string: the middle segment is the server's name in --mcp-config, which is ours
-// to choose today and could reasonably be namespaced differently tomorrow.
+// resolved through an MCP server. Matched on the suffix — see bridge/mcp-calls.js,
+// which reads a Codex session's calls the same way. This constant is only the
+// cheap pre-filter scanMeta runs over raw lines.
 const SUGGEST_TOOL_SUFFIX = '__suggest_session';
-
-/**
- * A `suggest_session` call as a card, or null for any other tool.
- *
- * `cwd` falls back to the entry's own working directory rather than being left
- * empty: the agent is being asked for the exception, not the rule, and a card
- * with nowhere to run is a card with a broken button.
- */
-function parseSuggestion(block, entry) {
-    const name = String(block.name || '');
-    if (!name.endsWith(SUGGEST_TOOL_SUFFIX)) return null;
-    const input = block.input || {};
-    const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-    const prompt = str(input.prompt);
-    // Structurally not one of these after all. The tool refuses an empty prompt,
-    // so this is a call that never should have been written — rendering an
-    // offer with nothing behind it would be worse than rendering the tool block.
-    if (!prompt) return null;
-    return {
-        id: block.id,
-        kind: 'suggestion',
-        ts: entry.timestamp,
-        prompt,
-        why: str(input.why),
-        title: str(input.title),
-        cwd: str(input.cwd) || (typeof entry.cwd === 'string' ? entry.cwd : null),
-    };
-}
 
 /**
  * Every suggested follow-up on one transcript entry.

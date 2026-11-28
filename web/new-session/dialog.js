@@ -206,12 +206,18 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // stops at the first prompt and waits until morning. Editing an existing
     // schedule keeps whatever it already had.
     dom.newPerm.value = src ? src.permissionMode : (schedMode ? 'dontAsk' : 'plan');
-    // Claude on every open, and offered by Start alone: drafts and schedules do
-    // not carry a runtime yet, so a Codex pick saved into one would come back as
-    // Claude without a word. Hidden rather than ignored, for that reason.
-    dom.newRuntime.value = 'claude';
-    dom.newRuntime.closest('.opt').hidden = schedMode;
-    paintNewRuntime();
+    // Which CLI, written on every open like the mode: what the draft or schedule
+    // being edited runs on, and Claude for anything new. Drafts and schedules
+    // store it (`runtime`), so the picker is offered for both. A template does
+    // not, so it is hidden while one is edited — a Codex pick saved into one
+    // would come back as Claude without a word.
+    //
+    // The model and effort are set again once the lists are Codex's or
+    // Claude's, because a value the select does not hold yet is dropped as it
+    // is written — a Codex draft's model would otherwise open as `inherit`.
+    dom.newRuntime.value = (src && src.runtime) || 'claude';
+    dom.newRuntime.closest('.opt').hidden = !!template;
+    paintNewRuntime({ model: src ? (src.model || '') : '', effort: src ? (src.effort || '') : '' });
     // **Only what somebody said.** A draft or schedule being edited carries its
     // own directory, and every caller that means a particular project passes
     // one — the suggested-task dialog, the rail's split button, the conversion
@@ -651,17 +657,34 @@ export function newDialogValues() {
  * Refill the model and effort pickers for the runtime picked. Claude's are the
  * page's list; Codex's are Codex's own (`model/list`), fetched on first use.
  */
-export function paintNewRuntime() {
+export function paintNewRuntime(want = null) {
     const rt = dom.newRuntime.value || 'claude';
+    const jobs = [];
     for (const [sel, kind] of [[dom.newModel, 'model'], [dom.newEffort, 'effort']]) {
-        if ((sel.dataset.runtime || 'claude') !== rt) fillSelectFor(sel, kind, rt);
+        const fill = (sel.dataset.runtime || 'claude') !== rt ? fillSelectFor(sel, kind, rt) : Promise.resolve();
+        // `want` is what an opened draft or schedule had: written once the list
+        // is the runtime's, and only if the picker has not moved on since.
+        if (want) jobs.push(fill.then(() => { if (sel.dataset.runtime === rt) sel.value = want[kind] || ''; }));
+        else jobs.push(fill);
     }
+    return Promise.all(jobs);
 }
 
-/** `runtime` for `POST /api/sessions` — only when it is not the default. */
+/**
+ * `runtime` for `POST /api/sessions` — only when it is not the default — or
+ * null. Drafts and schedules send `newDialogRuntimeAlways()`, because a PATCH
+ * reads absence as "leave it", and switching a Codex draft back to Claude has to
+ * say so.
+ */
 export function newDialogRuntime() {
+    const rt = newDialogRuntimeAlways();
+    return rt !== 'claude' ? rt : null;
+}
+
+/** The runtime picked, `"claude"` included; Claude while the picker is hidden. */
+export function newDialogRuntimeAlways() {
     const rt = dom.newRuntime.value;
-    return rt && rt !== 'claude' && !dom.newRuntime.closest('.opt').hidden ? rt : null;
+    return rt && !dom.newRuntime.closest('.opt').hidden ? rt : 'claude';
 }
 
 export function newDialogName() {
@@ -741,7 +764,7 @@ export function wireNewDialog() {
         n.addEventListener('click', closeNew);
     }
     closeOnClickOutside(dom.newScrim, closeNew);
-    dom.newRuntime.addEventListener('change', paintNewRuntime);
+    dom.newRuntime.addEventListener('change', () => paintNewRuntime());
 
     dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
     dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));

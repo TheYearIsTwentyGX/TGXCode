@@ -381,6 +381,8 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
 - Not done here, and Phase 4's: drafts and schedules carry no `runtime`, so the
   Start dialog offers the runtime picker to Start alone; an orchestrator cannot run
   on Codex (its role is keyed by an id the create route mints before Codex does).
+  Phase 4 has since given drafts and schedules a `runtime` and let workers run on
+  Codex; see its *Done in part*.
 
 ### Phase 4 — The features around the conversation
 
@@ -490,6 +492,73 @@ above was wrong:
 - **`$name` at the start of a message runs a skill even without a skill input**, and
   Codex injects a `<skill>` harness message after it. A palette sends both the input
   and the `$name args` text; the reader reads either as `command {name, args}`.
+
+**Done in part** (the MCP server, dev-server attribution, drafts and schedules,
+workers, the PR gate measured) — what was built and what it found:
+
+- **The MCP server is in the thread `config`** (`threadConfig` in
+  `bridge/runtimes/codex/process.js`): `mcp_servers.tgxcode` and, with
+  `preview.agentControl`, `mcp_servers.preview`, both `approve`, as dotted keys so the
+  user's own servers stay. **One thing the plan assumed did not hold: there is no id to
+  give a new thread's server.** Codex mints the thread id in the same `thread/start`
+  that starts the server, and a thread with no rollout cannot be `thread/resume`d to
+  pass it again ("no rollout found", measured). What Codex does send is the thread id on
+  every tool call, as `_meta.threadId` (with `x-codex-turn-metadata.thread_id` beside
+  it). So `bridge/mcp.js` *did* change, by one opt-in flag: `--session-from-call` takes
+  the id from there. Without the flag a Claude session behaves as before. The
+  alternative, an alias table in the bridge from placeholder to minted id, would have
+  had to survive host adoption and cover every route mcp.js reaches.
+- **Codex gives an MCP server a bare environment** — nothing of the bridge's arrived
+  in a probe server — so `XDG_DATA_HOME` and `XDG_CACHE_HOME` go in the server's `env`,
+  or a test bridge's mcp.js reads the everyday token and is refused.
+- **Dev-server attribution needed less than planned.** Codex sets `CODEX_THREAD_ID` on
+  every command itself (measured), which is the only id a brand-new thread's commands
+  can carry; `devservers.js` reads it below `TGXCODE_SESSION_ID` and above
+  `CLAUDE_CODE_SESSION_ID`. `TGXCODE_SESSION_ID` goes through
+  `shell_environment_policy.set` on a resume, where the id is ours to give, and
+  `codexEnv` now strips an inherited `CLAUDE_CODE_SESSION_ID`.
+- **Suggestion cards and handoff.** `bridge/mcp-calls.js` reads a Claude
+  `mcp__…__suggest_session` block and a Codex `{server: "tgxcode", tool}` item alike;
+  the rollout reader makes the card in the view and the task in the index from it. The
+  desktop draws an `mcp_tool_call` row under its `mcp__<server>__<tool>` name, so
+  `message_session` and the orchestrator tools read as they do for Claude.
+- **Drafts and schedules carry `runtime`**, and the dialog offers the Agent picker for
+  both (not for a template, which still has no such field). A draft's Start, a
+  schedule's run and a worker's spawn wait for the minted id (`bridge/minted.js`, the
+  create route's wait moved out of it). A scheduled Codex run's `VERDICT:` comes from
+  the turn's last `agentMessage`, which is what the adapter already made the turn's
+  result text.
+- **Workers can run on Codex; orchestrators cannot yet.** A task from a Codex draft
+  spawns a Codex worker, re-keyed to the minted id on the pool's `minted` (in the same
+  tick, so the status and the turn that follow find it); its model is the task's or
+  Codex's default, never a Claude one. `spawn_worker` itself has no `runtime` argument,
+  so an orchestrator cannot choose Codex for a worker of its own idea. What an
+  orchestrator *on* Codex still needs: its brief names its own session id, which for a
+  new thread is the placeholder, and its `tools/list` reads its settings by that id
+  before any call has said the real one; the store's orchestrator record would need
+  re-keying as a worker's now is.
+
+**The PR gate's `review/start` was tried, and it is not wired in.** Measured on
+0.172.0 against a scratch repo: `review/start {threadId, target: {type: "baseBranch",
+branch: "main"}}` answers at once with a turn, then `enteredReviewMode`, a userMessage
+Codex writes itself ("Review the code changes against the base branch 'main'. The merge
+base commit … Run `git diff <merge-base>`…"), the commands it ran, `exitedReviewMode
+{review}` and an `agentMessage` with the same text, ending `completed` in about 12 s.
+The review is prose with findings tagged by priority (`- [P1] Restore addition in
+`add` — <path>:2-2`) and **no verdict line**. Three things stand between that and the
+gate, none of them large but all of them the gate's design rather than this slice's:
+
+1. `baseBranch` reviews the *checkout's* HEAD against the merge base. The gate runs a
+   PR's review in the schedule's `cwd` and lets the prompt fetch the PR; the native
+   review would need the PR head checked out first, in a worktree as
+   `bridge/pr-reviews.js` already makes for its own button.
+2. It is a different request from `turn/start`, so the process contract would need a
+   queue entry that is a review rather than a message.
+3. Its verdict would have to be read from the priorities (`P0`/`P1` → BLOCK, `P2` →
+   CONCERNS, none → CLEAN) instead of `verdictOf`.
+
+Until then a Codex gate is a `runtime: "codex"` schedule whose prompt is written out
+rather than a Claude skill's name, and it ends on a `VERDICT:` line like any other.
 
 ### Phase 5 — Config surfaces
 
