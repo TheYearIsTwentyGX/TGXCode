@@ -1,16 +1,16 @@
 # Working on TGXCode
 
-This app is used while it is being worked on. Dylan keeps a window open with
-live sessions in it, and those sessions are real work in progress. The rules
-below exist because breaking them destroys that work.
+This app is used while it is being worked on. The user keeps a window open with
+live sessions in it, and those sessions are real work in progress. Breaking the
+rules below destroys that work.
 
 ## Never touch the everyday instance
 
 **Port 45888 belongs to the user.** Do not start a bridge on it, do not
-`pkill -f bridge/server.js`, and do not `Stop-Process` TGXCode (or ClaudeSessions,
-the same app as installed before the rename).
+`pkill -f bridge/server.js` (it matches every bridge, the user's included), and do
+not `Stop-Process` TGXCode or ClaudeSessions, its name before the rename.
 
-Use your own instance instead:
+Use your own instance:
 
 ```bash
 npm run dev                  # bridge on 45899 (or the next free port) + a window
@@ -18,218 +18,168 @@ npm run dev:headless         # bridge only; open the printed URL in a browser
 npm run dev -- --port=45905  # ask for a particular one
 ```
 
-`npm run dev` refuses to bind 45888 and picks a free port near 45899, so two
-agents can each have one. The window it opens is titled `dev :45899` and carries
-an amber badge, so it is never confused with the everyday one.
-
-`--port` is refused for 45888 exactly like the environment variable is, and it
-wins over it. Prefer it when you want a specific port: `TGXCODE_PORT=…`
-in front of a command reads like the thing the section below is about, and it is
-also the variable a run started from the app never receives.
-
-The **Dev instance** button in the conversation header does all of this for you —
-it is `.tgxcode/commands.json` in this repo, and it picks a free port in
-45899–45918, names the DevBrowser tab for your worktree, and gives the name back
-when you stop it. The **Land** button beside it runs `npm run land` from the
-worktree you are in — see *Landing what you finished*.
-
-`pkill -f bridge/server.js` matches *every* bridge including the user's. If you
-must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:
+`npm run dev` refuses 45888, `--port` included, and its window is titled
+`dev :<port>` with an amber badge. The **Dev instance** button in the conversation
+header does the same from `.tgxcode/commands.json`, picking a free port in
+45899–45918. Stop your own bridge with Ctrl-C, or by port:
 
 ```bash
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
 
-**`TGXCODE_PORT` in your environment is not a port you chose.** A session
-started from the app inherits the bridge's environment, so for a long time that
-variable arrived pre-set to `45888` — and `bash bridge/launch.sh` or
-`node bridge/server.js` from a worktree then bound the user's port without a port
-ever being mentioned. That bridge reported `dev: false`, the Windows shell adopted
-it in place of its own, and the everyday window quietly served a branch's UI out
-of a stale worktree. It is the most expensive way this rule has been broken.
-
-Three things stop it now, and none of them is you remembering:
-
-- `bridge/server.js` refuses to bind 45888 when it is running out of
-  `.claude/worktrees/` — exit 4, before the socket. `npm run dev` still refuses
-  the port outright.
-- The bridge no longer passes `TGXCODE_PORT` to the sessions or terminals
-  it starts, so a fresh session inherits nothing to trip over.
-- `scripts/restart-bridge.sh` refuses the everyday port from a worktree. Without
-  that it would kill the user's bridge and then fail to replace it, which is worse
-  than the bug. `--status` still works from anywhere.
-
-`/api/health` reports `root` — which checkout a bridge is serving. When a window
-shows something you cannot explain, check that first:
+**A `TGXCODE_PORT` already in your environment is not a port you chose.** It used to
+arrive pre-set to 45888 in every session the app started, so `bash bridge/launch.sh`
+from a worktree bound the user's port without anyone naming it, and the everyday
+window quietly served a stale branch. Prefer `--port`. Three guards now stop it:
+`bridge/server.js` exits 4 rather than bind 45888 from under `.claude/worktrees/`;
+the bridge no longer passes `TGXCODE_PORT` to the sessions and terminals it starts;
+and `scripts/restart-bridge.sh` refuses the everyday port from a worktree
+(`--status` still works anywhere). When a window shows something you cannot
+explain, check which checkout it serves:
 
 ```bash
 curl -s http://127.0.0.1:45888/api/health | python3 -m json.tool | grep root
 ```
 
+**Do not kill the session host either.** `claude` stops when the process holding its
+stdin exits, so live turns are held by `bridge/host.js`, one per port, at
+`~/.local/share/tgxcode/host-<port>.sock`. A bridge that exits hands its sessions to
+the host, and the next bridge on that port adopts them, so restarting a bridge is
+safe. Killing the host ends every turn it holds. Its pid is `sessionHost.pid` in
+`/api/health`; it runs under `setsid` and exits on its own after ten idle minutes,
+which is how a new `host.js` gets picked up. `atRisk` in `/api/health` counts turns
+started with no host to hold them, which a restart would end. Keep `host.js`
+boring: it relays bytes and knows nothing of stream-json, because replacing it
+costs every turn it holds. Protocol changes go in `bridge/runner.js`. Run
+`node test/host.test.js` if you touch it.
+
+A midnight cron restarts the everyday bridge and logs each run to
+`~/.cache/tgxcode/restart-45888.log`. Uncommitted changes under `bridge/` in the
+main checkout make it skip (`grep skipped-dirty`), so half-finished `bridge/` edits
+there silently pin the everyday instance to yesterday's code. See docs/manual.md
+§Picking up new code.
+
 ## Work in a worktree, never the main checkout
 
-Several agents work on this repo at once — there are usually a handful of live
-worktrees under `.claude/worktrees/` — and they all reach for the same few files
-in `bridge/` and `web/`. Editing `/home/dylan_hays/Other/claude-sessions`
-directly means two agents silently overwriting each other, and it leaves the
-user's own checkout dirty while they are running the app out of it.
+Several agents work on this repo at once and reach for the same files in `bridge/`
+and `web/`. Editing the main checkout means agents overwriting each other, and it
+leaves the checkout the user runs the app from dirty.
 
-**Make the worktree your first action, before the first edit.** Use
-`EnterWorktree` with a short name for the work; it branches `worktree-<name>` off
-HEAD and moves you there.
+**Make the worktree your first action, before the first edit.** `cd` into the repo,
+then call `EnterWorktree` with a short name; it branches `worktree-<name>` off local
+HEAD (`baseRef` is pinned to `head` in `.claude/settings.json`). Launched in `~`,
+it fails with "not in a git repository and no WorktreeCreate hooks are configured",
+which is the wrong directory, not a missing hook. Edits made before you move stay
+behind in the main checkout and have to be carried across by hand.
 
-- **`cd` into the repo first.** `EnterWorktree` needs a git repository at the
-  working directory; an agent launched in `~` reports "not in a git repository
-  and no WorktreeCreate hooks are configured", which looks like a missing hook
-  but is just the wrong directory.
-- `baseRef` is pinned to `head` in `.claude/settings.json`, so a worktree branches
-  from local HEAD rather than `origin/<default-branch>`. The pin dates from when
-  this repo had no remote. It has one now — `origin` is
-  `github.com/TheYearIsTwentyGX/TGXCode` and `main` tracks `origin/main` — so the
-  `fresh` default would resolve too. Leaving it at `head` keeps a worktree based on
-  the checkout in front of you, which is the predictable thing while several agents
-  are committing to main; the choice is now a real one rather than forced.
-- **Enter it before you start editing, not after.** Moving mid-session works, but
-  every edit you have already made stays behind in the main checkout and has to
-  be carried across by hand — which is a merge you did not need to do.
-- Either way, a session that enters a worktree ends up with two transcript files.
-  That is expected and handled; see *Notes that save time* for what it means.
-- A dev bridge run from inside the worktree serves that worktree's `bridge/` and
-  `web/`, which is what you want when verifying your own change.
+Reading, diagnosing, querying a bridge and `npm run dev` are fine from anywhere;
+the rule is about writing tracked files. A dev bridge run from the worktree serves
+that worktree's `bridge/` and `web/`.
 
-Not everything is an edit. Reading transcripts, diagnosing, querying a bridge and
-running `npm run dev` are fine from wherever you are. The rule is about writing
-to tracked files: if you are about to change one, be in a worktree. When in
-doubt, make one — it costs a second and nothing is lost by it.
+Entering a worktree leaves the session with two `<id>.jsonl` files, one under the
+worktree's project directory. That is expected: `conversationRecord` in
+`bridge/sessions.js` picks the copy holding the conversation.
 
 ## There is no mobile web UI
 
-**A UI change lands in `web/app.js` and `web/index.html`. Desktop only.** Do not ask
-whether a feature should also go to mobile, do not build a narrow-screen variant of
-it, and do not add a `/m` back.
+**A UI change lands in `web/` (`app.js`, `index.html` and their modules), desktop
+only.** Do not ask whether it should also go to mobile, do not build a
+narrow-screen variant, and do not add a `/m` back; `test/browser.test.js` asserts
+`/m` and its old assets 404.
 
-The phone client is the native Android app in `~/Other/tgxcode-mobile`. It reads
-`docs/api.md` and nothing else of ours, so if the phone needs what you are building,
-the deliverable here is a field in that document — see the next section. Filing it
-there is the whole of your obligation to the phone; the app is a separate repository
-with its own sessions.
+The phone client is the native Android app in the `tgxcode-mobile` repository, a
+sibling of the main checkout. It reads `docs/api.md` and nothing else of ours, so if
+the phone needs what you are building, your deliverable here is that document (next
+section).
 
-There *was* a phone-shaped web page at `/m` — `web/mobile.js` and friends — and it
-was deleted rather than fixed. It had drifted a long way behind the API (it dropped
-the `tool-result` event, misread `runner`, rendered a slash command as
-`/[object Object]`), and every UI feature was arriving at the question "desktop, or
-desktop and mobile?" — a question with a real cost and no good answer once a native
-client existed. `test/browser.test.js` asserts `/m` and its old assets still 404, so
-the page cannot creep back by accident.
-
-What did *not* go with it, because none of it was mobile-web machinery:
-`web/sw.js` (the desktop registers it for notification action buttons), the
-`/pair` handshake and the **Connect a phone** group in Settings (the Android app is
-pointed at a bridge by pasting the link they produce), and every `@media` block in
-`web/css/*.css` (once `web/styles.css`) — those are narrow-*desktop*-window and `prefers-reduced-motion`,
-so do not mistake them for phone CSS and delete them.
+Not phone machinery, so do not delete them: `web/sw.js` (the desktop registers it
+for notification actions), the `/pair` handshake and the **Connect a phone** group
+in Settings, and the `@media` blocks in `web/css/*.css` (narrow desktop windows and
+`prefers-reduced-motion`).
 
 ## Leave `docs/api.md` true before you land
 
 **If your change touched the bridge's wire surface, updating `docs/api.md` is part
-of the change, not a follow-up.** Wire surface means: a route added, removed or
-renamed; a request or response field added, removed, retyped or given a new
-meaning; a new `/api/events` event or a new payload field on an existing one; a
-status code, a refusal rule, a local/remote classification, a required header, a
-cap or a rate limit. If a client would behave differently after your commit, the
-document has to say so before you land it.
+of the change.** Wire surface means: a route added, removed or renamed; a request
+or response field added, removed, retyped or given a new meaning; a new
+`/api/events` event or payload field; a status code, refusal rule, local/remote
+classification, required header, cap or rate limit. If a client would behave
+differently after your commit, the document says so before you land.
 
-This is heavier than the usual "keep the docs current" because there is now a
-client that cannot read the code. `~/Other/tgxcode-mobile` is a native Android
-app — the second client of this bridge, alongside `web/app.js` — and its whole
-design premise is that `docs/api.md` *is* the contract: it adds
-no code to this repo, and anything it needs and cannot get from that file is
-recorded as a gap to be fixed here. An agent working in that project reads
-`docs/api.md` and nothing else of ours. So a field that changed shape and was
-never written down does not produce a merge conflict or a failing test; it
-produces a phone that silently renders the wrong thing, and a session that spends
-an afternoon finding out why.
-
-That has already happened, more than once, which is what this section is made of.
-Four fields were documented by name alone and turned out to be
-objects — `user.command`, `tool.result.patch` and `tool.agent` in the event table,
-and the `status` a send returns. A whole event kind, `tool-result`, was never listed, so a phone client
-left every tool spinning while you watched a live turn. And
-`X-TGXCode-Client: 1` (then `X-Claude-Sessions-Client`) has been mandatory on every non-GET `/api/` route
-since the CSRF guard landed, without appearing in the document at all — so the
-first thing a new client does is 403 on its entire write surface.
-
-Three habits follow from that:
+The Android app cannot read the code. A field that changes shape without being
+written down produces no conflict and no failing test, only a phone that silently
+renders the wrong thing. Three habits:
 
 - **Write the type, not the field name.** `command` in a table cell is a lie a
-  reader can act on; `command {name, args}` is not. An object, an array of
-  objects, "a string or null" — say which.
-- **Say when a route is narrower than it looks.** `/api/sessions` and
-  `/api/dashboard` carry a *six-field* `runner`, not the full `runner-status`
-  payload; a client that reads `runner.pendingPermission` there gets `undefined`
-  forever and no error. The same goes for a response that is eventually consistent:
-  `POST /api/sessions` returns an id that `GET /api/sessions/:id` 404s on for a
-  few seconds, and the obvious client — navigate straight to the new id — reports
-  "session not found" about a session that is being created perfectly well.
-- **Fix the document rather than the reader.** If a client had to discover
-  something by experiment, that discovery belongs in `docs/api.md` in the same
-  commit. Both directions: gaps that `~/Other/tgxcode-mobile/README.md` reports
-  under *Things found while building this* are ours to close, and closing one
-  means editing `docs/api.md`, not replying in a transcript.
+  reader can act on; `command {name, args}` is not.
+- **Say when a route is narrower than it looks, or eventually consistent.**
+  `/api/sessions` carries a six-field `runner`, not the full `runner-status`
+  payload. `POST /api/sessions` returns an id that `GET /api/sessions/:id` 404s on
+  for a few seconds.
+- **Fix the document, not the reader.** Anything a client had to discover by
+  experiment goes into `docs/api.md` in the same commit. The gaps listed under
+  *Things found while building this* in the `tgxcode-mobile` README are ours to
+  close, and closing one means editing `docs/api.md`.
 
-`docs/remote.md` is the same deal for anything you change about the local/remote
-split, and `README.md` §Layout for a new module. `docs/api.md` is the one with a
-client depending on it.
+`docs/remote.md` is the same for the local/remote split, and README §Layout for a
+new module.
 
 ## Landing what you finished
 
-`npm run land`, from the worktree you worked in, merges the pull request for the
-branch you are on and then fast-forwards the main checkout at
-`~/Other/claude-sessions` — so the checkout the user actually runs the app from
-has your work in it, rather than the work sitting on origin where nobody sees it.
+`npm run land`, from your worktree, merges the pull request for your branch and
+fast-forwards the main checkout (`$TGXCODE_MAIN`, default `~/Other/claude-sessions`;
+set it where the checkout lives elsewhere). It is the sanctioned way to reach the
+main checkout: your harness refuses `git -C` there, and the script only
+fast-forwards and never commits. The **Land** button in the header runs it.
 
 ```bash
-npm run land -- --status    # what would land, and whether it can
-npm run land -- --dry-run   # say what would happen, change nothing
-npm run land                # merge the PR, pull the main checkout, restart if bridge/ changed
+npm run land -- --status      # what would land, and whether it can
+npm run land -- --dry-run     # say what would happen, change nothing
+npm run land                  # merge, pull the main checkout, restart if bridge/ changed
 npm run land -- --no-restart  # the same, but leave the running bridge alone
 ```
 
-It refuses rather than guesses, and every refusal says what to do next:
-uncommitted files in your worktree (they are not in the PR, so landing would
-leave them behind), commits you have not pushed, a PR that conflicts or is
-blocked, a main checkout that is dirty or on some other branch. A refusal that
-comes *after* the merge says so, so you always know which half happened.
+It refuses rather than guesses, and each refusal says what to do next: uncommitted
+files or unpushed commits in your worktree, a PR that conflicts or is blocked, a
+main checkout on another branch. A refusal after the merge says so.
 
-**When the merge touched `bridge/`, it restarts the everyday bridge.** Live turns
-survive that now — they run in the session host, and the next bridge adopts them
-(see *Notes that save time*). The restart is delegated to `scripts/restart-bridge.sh`,
-which refuses while any turn is `atRisk` (started with no host to hold it); land
-reports that refusal and says to `npm run restart` later, and never forces it. It
-does not start a bridge that was not already running on 45888. `--no-restart`
-leaves the running bridge alone; `--restart` restarts even when `bridge/` did not
-change.
+**If the main checkout has uncommitted tracked files, land merges and then does not
+pull.** Those are usually the user's own edits. Report that to the user, with the
+files land listed. Do not stash, check out, reset or otherwise discard them, and do
+not try to pull around them.
 
-The restart runs in its own session (`setsid`), because the **Land** button is a
-run of the bridge being restarted and the bridge kills its runs as it exits —
-before that, the restart died halfway and left 45888 down. So from the button the
-pane ends with the old bridge; whether the new one came up is the last line of
-`~/.cache/tgxcode/restart-45888.log`.
+When the merge touched `bridge/`, land restarts the everyday bridge through
+`scripts/restart-bridge.sh`; live turns survive because the host holds them. The
+script refuses while any turn is `atRisk`. Land reports that, tells you to run
+`npm run restart` later, and never forces it. It never starts a bridge that was not
+already running. `--restart` restarts even when `bridge/` did not change. The
+restart runs under `setsid`, because the bridge kills its runs as it exits, the Land
+button's included. From the button the pane therefore ends on the old bridge, and
+whether the new one came up is the last line of `~/.cache/tgxcode/restart-45888.log`.
 
-It is also the sanctioned way to reach the main checkout at all: a worktree-isolated
-session is refused `git -C ~/Other/claude-sessions` by its own harness, which is
-why the gap existed. The script is narrow so that being sanctioned is safe — it
-fast-forwards and nothing else, and never commits there.
+Before landing:
+
+- **Check whether `README.md` needs changing.** This is a check, not a requirement
+  to edit it, and keep the README brief.
+- **If you changed the UI, check whether README's text or pictures should show
+  it.** Regenerate pictures with `npm run screenshots`, which uses invented demo
+  data on an isolated bridge (docs/manual.md §Screenshots). A screenshot taken from
+  a real window may show data only from these projects: TGXCode, TGXCode-Combined,
+  TableGX, MobiliTGX and TGXReact.
+- **Write the commit message as prose.** The subject is an imperative,
+  sentence-case description of the change as the user meets it ("Give each session
+  its own terminal pane"). The body says why, including what was rejected. No
+  `feat:` or `fix:` prefixes.
 
 ## Clean up the sessions you start
 
-Every session you start to try something out lands in the user's sidebar, because
-both instances read the same `~/.claude/projects`. Groups full of `probe`,
-`sandbox` and the like are what that looks like after a few agents have been
-through. **Do not leave them there.** Either:
+Both instances read the same `~/.claude/projects`, so every session you start shows
+up in the user's sidebar. Do not leave `probe` and `sandbox` sessions there. Label
+them on the way in, and delete them on the way out.
 
-- **Mark it a test session**, which keeps it out of the everyday window entirely.
-  Tick *Test session — dev only* in the Start a session dialog, or pass the field:
+- **Mark it a test session**, which keeps it out of the everyday window (it shows in
+  a **Test sessions** card on dev only). Tick *Test session — dev only* in the Start
+  a session dialog, or:
 
   ```bash
   curl -sX POST http://127.0.0.1:45899/api/sessions \
@@ -238,11 +188,7 @@ through. **Do not leave them there.** Either:
     -d '{"cwd":"'"$PWD"'","prompt":"…","test":true}'
   ```
 
-  Labelled sessions collect in a **Test sessions** card at the foot of the rail on
-  dev only. Prefer this: a session you forget to delete is then still invisible to
-  the user.
-
-- **Or delete it when you are done**, with the trash icon on the row, or:
+- **Delete it when you are done**, with the trash icon on its row, or:
 
   ```bash
   curl -sX DELETE http://127.0.0.1:45899/api/sessions/$ID \
@@ -250,42 +196,27 @@ through. **Do not leave them there.** Either:
     -H 'X-TGXCode-Client: 1'
   ```
 
-  This is a hard delete — the transcript and its sidecar directory. Do it to
-  sessions *you* created, never to one you found.
+  This hard-deletes the transcript and its sidecar directory, so only use it on
+  sessions you created. Stop the session first: a `claude` still exiting can write
+  back to the path, and the session reappears as an empty row.
 
-  If the session's process is still shutting down, the exiting `claude` can write
-  its bookkeeping back to the path you just unlinked, and the session reappears as
-  an empty row with 0 turns. Stop it, wait a moment, then delete — or delete twice.
+## The API needs a token
 
-Best is both: label it on the way in, delete it on the way out.
-
-## The API needs a token now
-
-Every `/api/` route but `/api/health` requires the token at
-`~/.local/share/tgxcode/token`, created on first run with mode `0600`. So
-any `curl` against the bridge needs:
+Every `/api/` route except `/api/health` needs the token at
+`~/.local/share/tgxcode/token`, and every non-GET route also needs
+`X-TGXCode-Client: 1` (the CSRF guard):
 
 ```bash
 -H "Authorization: Bearer $(cat ~/.local/share/tgxcode/token)"
 ```
 
-Without it you get `401 {"error":"unauthorized"}`, which is easy to misread as a
-broken bridge.
-
-**Nothing in `web/` had to change for this, and nor should yours.** A page fetched
-over loopback is served with the token in a `<meta name="tgx-token">` tag *and* with
-an `HttpOnly` cookie set; `fetch` and `EventSource` both send same-origin cookies
-on their own. So the browser and the Electron shell need no login step, and the
-service worker keeps working. Loopback is not otherwise trusted — "any process on
-this machine" is the hole the token closes.
-
-`/api/health` stays open because `app/main.js` pings it before it could know a
-token. It reports `remote`, which is what raises the banner in the UI.
-
-The bridge also refuses to bind a non-loopback interface without
-`TGXCODE_ALLOW_REMOTE_BIND=1`, and refuses several routes outright to
-remote callers. See `docs/remote.md` for the reasoning and `docs/api.md` for the
-contract.
+A `401 {"error":"unauthorized"}` means the token is missing, not that the bridge is
+broken. `web/` needs no login code, and yours should not add any: a page fetched
+over loopback gets the token in a `<meta name="tgx-token">` tag and an `HttpOnly`
+cookie, and `fetch` and `EventSource` send the cookie on their own. `/api/health`
+stays open because `app/main.js` pings it before it has a token. The bridge refuses
+to bind a non-loopback interface without `TGXCODE_ALLOW_REMOTE_BIND=1`.
+`docs/remote.md` has the reasoning and `docs/api.md` the contract.
 
 ## There are tests, and they are quick
 
@@ -294,350 +225,136 @@ npm test               # starts a bridge on a free port, runs everything, stops 
 npm test -- 45901      # run against a bridge you already have on that port
 ```
 
-`test/run.js` refuses 45888 the same way everything else here does — these tests
-start and delete sessions, so pointing them at the everyday instance is exactly
-the accident the rest of this file is about.
+`test/run.js` is the list: `UNIT` runs without a bridge, and `LIVE` needs one. Add a
+new test file to the right array there. It refuses 45888, because the tests start
+and delete sessions. Which tests to run when:
 
-The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskboard`, `ports`,
-`spinner`, `changes`, `restart`, `restart-process`, `move-session`, `handoff`, `drafts`, `later`, `wakes`, `snippets`, `snippet-trigger`, `caret`, `composer-find`,
-`templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `codex-rpc`, `codex-transcript`, `codex-runner`, `codex-host`, `codex-features`, `codex-gaps`, `codex-envelopes`, `codex-orchestrator`, `codex-review`, `codex-mcp`, `codex-schedules`, `agent-name`, `host`, `titles`,
-`tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
-`claude-docs`, `ask-result`, `commands`, `message-date`, `folded`, `live-over`,
-`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `search-index`, `github`, `standing`, `worktree-create`, `worktrees`, `orchestrators`, `setup`, `digest`, `palette-score`, `orchestrator-view`, `orchestrator-page`, `orchestrator-models`, `worker-read`, `code-reviews`, `tool-image`, `images`, `hook-scripts`, `hook-sources`, `overview-hosts`, `session-index`, `session-title`, `tool-name`, `keepawake`, `startup`, `viewers`, `spend`, `pr-reviews`, `worktree-branch`, `bar-fit`, `phone-installs`, `brief`, `titlebar`, `preview-cdp`, `preview-grants`, `preview-open`, `preview-mcp`, `sudo`, `update-feed`, `updater`, `shell-build`, `secrets`, `screenshots`, `runtimes`, `runtime-contract`, `skills` and `skill-import` on their own — no bridge needed
-— plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
-Between them they cover the token, what a remote caller is refused, what an
-unpaired remote device sees before and after pairing, and what the nightly restart
-does when there is nobody to ask. If you touch `bridge/auth.js` or any route's
-local/remote rule, run it: that is the part of this codebase with tests around it.
+- **`bridge/auth.js` or any route's local/remote rule:** the whole suite. The live
+  tests `gate`, `browser`, `refusals` and `unpaired` cover the token, what a remote
+  caller is refused, and pairing.
+- **`bridge/runner.js`: `node test/runner.test.js`.** `inFlight` is both the record
+  of the current turn and the gate in `_flushQueue`. An exit path that forgets to
+  empty it leaves a session that accepts messages and never sends them, with no
+  error anywhere. The test drives a real `Runner` against a stub `claude`
+  (`TGXCODE_CLAUDE_BIN`) and checks three things: nothing is left in flight, the
+  next message is delivered, and the stopped turn is *not* sent again. Do not "fix"
+  a stuck queue by re-queueing what was in flight. `claude` writes the user entry at
+  submission, so re-sending re-runs work the user cancelled.
+- **Snippet seeding: `snippets`.** A deleted snippet coming back after a restart
+  looks like data loss. The guard is a record of which shipped ids were offered,
+  never "is the list empty".
+- **`bridge/schedule.js`: `schedule`.** Its bugs (a slot firing twice when the clocks
+  go back, a missed run hidden across a weekend) only show at 2 AM.
+- **`bridge/host.js`: `host`.** **`bridge/platform.js`: `platform`**, which asserts
+  on what got spawned. **`scripts/restart-bridge.sh`: `restart`**, which spawns
+  the script `detached` so that it never reaches a real terminal's prompt.
 
-**`runner` is the one to run when you touch `bridge/runner.js`**, and for the same
-reason `schedule` exists: its bugs do not announce themselves. `inFlight` is both the
-record of the turn being answered and the gate in `_flushQueue`, so an exit path that
-forgets to empty it does not throw or log — it leaves a session that accepts a
-message, draws a chip for it, reports `idle`, and never sends it. That is
-indistinguishable from a slow turn from every surface the app has, and it is what a
-hard stop did for months. The test drives a real `Runner` against a stub `claude`
-(`TGXCODE_CLAUDE_BIN`, set before the require — the constant is destructured
-at load), and asserts three things per case rather than one: that nothing is left in
-flight, that the next message is actually delivered, and that the *stopped* turn is
-not delivered again. The third is not padding. The obvious fix for this bug is to
-re-queue what was in flight, and that is wrong: `claude` writes its user entry at
-submission, so a stopped turn is already in the transcript and re-sending it re-runs
-work the user cancelled.
+### Isolate shared state when you test
 
-**`snippets` is the one to run when you touch the seeding.** The failure it guards is
-a deleted LGTM coming back on the next restart, which does not read as a policy — it
-reads as the delete not having worked — and it is the only bug in that feature somebody
-would report as data loss. The guard is a record of which shipped ids the file has been
-offered, never "is the list empty", and the test covers the three situations that never
-arise while you are looking at them: a file whose list you emptied, a file written before
-seeding existed, and a file written by a *newer* build, which must not be seeded at all
-because the write that followed would put a version 1 document over one the next build
-owns. It shares `snippets.json` in `STATE_DIR` with every other bridge, so it takes its
-own `XDG_DATA_HOME` for the reason the paragraph below gives.
+Every bridge shares `STATE_DIR`, `~/.tgxcode` and the user's Codex home. A test that
+writes to them writes to the user's real data.
 
-**Testing a schedule needs its own store, not the shared one.** Two things bite
-otherwise, and both were measured rather than guessed. `schedules.json` lives in
-`STATE_DIR`, which every bridge shares — so the everyday instance reads it every
-thirty seconds and writes the rows back through a whitelist `clean()` that has
-never heard of whatever field you just added, stripping it within half a minute
-and resurrecting rows you deleted. And a schedule marked `test` is only skipped by
-the *everyday* bridge as of the pull-request work; before that the guard narrowed a
-dev bridge alone, and a probe schedule created while 45888 was up got run by 45888,
-in the user's own checkout. So:
+- **Schedules.** `schedules.json` is shared, and the everyday bridge rewrites it
+  every thirty seconds, which strips fields it does not know and brings back deleted
+  rows. Give the bridge its own store and token:
 
-```bash
-XDG_DATA_HOME=$(mktemp -d) TGXCODE_SCHEDULE_ON_DEV=1 \
-  TGXCODE_PORT=45921 node bridge/server.js
-```
+  ```bash
+  XDG_DATA_HOME=$(mktemp -d) TGXCODE_SCHEDULE_ON_DEV=1 \
+    TGXCODE_PORT=45921 node bridge/server.js
+  ```
 
-That gets its own store *and* its own token, which is the point: nothing you do
-there can reach the user's schedules. `TGXCODE_SCHEDULE_ON_DEV=1` is what
-lets a dev bridge fire at all, and it fires only `test` rows.
+  `TGXCODE_SCHEDULE_ON_DEV=1` lets a dev bridge fire, and it fires only `test` rows.
+  A `test` schedule never comments on or labels a pull request (`postReviewToPr`
+  in `bridge/pr-gate.js`), and `gate.post: false` does the same for a schedule you
+  want quiet. `gh` is authenticated as the user on every bridge, so that check is
+  all that keeps a probe off real PRs.
+- **Settings.** Saving Settings on a dev bridge rewrites the user's
+  `~/.tgxcode/settings.json`. Overriding `HOME` is refused by the worktree guard, so
+  use `TGXCODE_PREFS_DIR=$(mktemp -d) npm run dev:headless`.
+- **Codex.** Never run against the real `~/.codex`. `bridge/config.js` resolves
+  `HOME` and `CODEX_HOME` at load, so a unit test sets both to a temp directory
+  *before* its first `require` and asserts the resolved paths are inside it before
+  writing; copy the header of `test/skills.test.js` or `test/codex-config.test.js`.
+  A dev bridge that will write Codex config, hooks or skills gets
+  `CODEX_HOME=$(mktemp -d)`.
 
-**Testing a Settings save needs its own `~/.tgxcode`, for the same reason.**
-`~/.tgxcode/settings.json` is derived from `HOME`, and every bridge shares it, so
-pressing Save on a dev bridge rewrites the user's real settings. Overriding `HOME`
-is refused by the worktree guard, because it also moves git's config. Use the
-variable instead:
-
-```bash
-TGXCODE_PREFS_DIR=$(mktemp -d) npm run dev:headless
-```
-
-It stands in for the whole directory, so the spinner's `verbs/` is seeded there
-too. Rewriting the `tgx-prefs` `<meta>` tag with Playwright's `page.route` only
-tests reading a setting and never exercises the save.
-
-**A `test` schedule never writes to GitHub.** The pull-request gate comments on
-pull requests and labels them, and `gh` is authenticated as the user on every
-bridge — so that one line in `postReviewToPr` is the only thing between testing
-this feature and commenting on real PRs. `gate.post: false` is the same switch for
-a schedule you want quiet.
-
-`schedule` is the other part worth that treatment, and for a different reason:
-its bugs are ones nobody sees until 2 AM. A slot that fires twice on the night the
-clocks go back, a missed run that is invisible because the lookback could not see
-across a weekend, a marker that advances on a run that never happened — all three
-were real, all three were caught by that file, and none of them would have shown
-up in a window you were looking at. If you touch `bridge/schedule.js`, run it.
-
-Most of the first group are pure functions, but `restart` is not — it runs a
-copy of `scripts/restart-bridge.sh` in a throwaway git repo, with a stub
-`bridge/launch.sh` and a port the kernel just handed back. It spawns the script
-`detached`, which is load-bearing rather than tidiness: `/dev/tty` is the
-*controlling* terminal and is inherited, so without the detach a run from a real
-terminal would reach a live `Continue? [y/N]` and hang the suite. Its first
-assertion checks the detach worked, so that failure is a failure and not a hang.
-
-## You cannot add a dependency. Vendor a bundle instead
+## No dependencies, no build step
 
 **`"dependencies": {}` in `package.json` is load-bearing, and `web/` has no build
-step on purpose.** Both are easy to break with a single `npm install`, neither
-breaks loudly, and the thing that breaks is the user's everyday workflow rather
-than a test.
+step on purpose.** A single `npm install` breaks both, and neither breaks loudly.
 
-Two separate reasons, and a proposal has to survive both:
+- `web/` is served live off disk per request, so a UI edit shows on refresh.
+  A bundler would turn `web/app.js` into a build artifact and end that.
+- `install.ps1` copies `package.json` into a Windows staging directory and runs
+  `npm install` there before electron-builder. Anything in `dependencies` gets
+  packaged into the shell. That is why `electron` and `electron-builder` are
+  devDependencies.
+- `bridge/` requires only Node built-ins. If you want a package there, the answer is
+  almost always less code.
 
-- **`web/` is served live off disk by the bridge, per request.** `install.ps1`
-  says so twice — at line 8 and again in the message it prints when it finishes:
-  *changes to `bridge/` or `web/` do not need a rebuild*. Introduce a bundler and
-  `web/app.js` becomes a build artifact, so every UI edit needs a build before a
-  refresh shows it. That is the loop this project is pleasant to work in, and it
-  is worth more than any library.
-- **`install.ps1` copies `package.json` into a Windows staging directory and runs
-  `npm install` there** (lines 100 and 117) before electron-builder. Anything in
-  `dependencies` is therefore installed on the Windows side and packaged into the
-  shell. `electron` and `electron-builder` are devDependencies for exactly that
-  reason. A runtime dependency added here does not fail — it quietly grows the
-  installer and adds a way for the build to break on a machine you are not at.
+The one exception is `web/vendor/`: **prebuilt browser bundles, committed**, fetched
+with `npm pack` (never `npm install`), renamed to `.js`/`.css`, with their licence
+and version recorded, and never from a CDN, because the CSP refuses it. **Check the
+bundle's footer before you load it**. An ESM bundle (ends in `export{…}`) is
+imported. A UMD one (`}(this, …)`, like `diff2html.js`) needs a classic `<script>`,
+because importing it throws before `app.js` runs. docs/vendoring.md has the
+procedure.
 
-`bridge/` has no dependencies either, and that is not an accident waiting to be
-corrected: every module under it requires only Node built-ins — `fs`, `path`,
-`http`, `net`, `crypto`, `child_process`, `os`, `events`, `readline`. If you find
-yourself wanting a package there, the answer is almost always a smaller amount of
-code. The one place that argument has lost is `web/vendor/`.
-
-### How to vendor one
-
-`web/vendor/` holds **prebuilt bundles, committed** — xterm, diff2html for the
-diff viewer, and Preact for the rail. Fetched with `npm pack`, which writes a tarball and leaves no
-`node_modules`, never with `npm install`:
-
-```bash
-npm pack diff2html@3.4.56 --pack-destination /tmp
-tar -xzf /tmp/diff2html-3.4.56.tgz -C /tmp
-cp /tmp/package/bundles/js/diff2html.min.js   web/vendor/diff2html.js
-cp /tmp/package/bundles/css/diff2html.min.css web/vendor/diff2html.css
-cp /tmp/package/LICENSE.md                    web/vendor/LICENSE.diff2html
-```
-
-Four rules for what lands there:
-
-- **A prebuilt browser bundle, or nothing.** A package that ships only `cjs`/`esm`
-  with bare imports needs a bundler to become one, which is the first reason
-  above. That is what ruled out `react-diff-viewer-continued`, which was the
-  preferred library on the merits and lost on this alone.
-- **Rename it to plain `.js` and `.css`,** whatever it ships as — xterm dropped
-  `.mjs`, diff2html dropped `.min.js`. `web/terminal.js:16-18` explains why: the
-  bridge's MIME table already has those two extensions, so adding a file needs no
-  bridge change, and a `web/` change should never require a restart to take
-  effect.
-- **Copy the licence next to it** as `LICENSE.<name>`, and **record the version**
-  in a comment — the CSS block that themes it, or the header of the file that
-  loads it. The next upgrade should be a diff against a known base.
-- **No CDN, ever.** The CSP at `web/index.html:12-13` is `default-src 'self'`, so
-  a remote `<script src>`, stylesheet or `@font-face` is refused outright. The only
-  sign is a console message you have to be looking at — the page loads, and the
-  feature is simply not there.
-
-### Check the bundle's footer before you decide how to load it
-
-The two files in `web/vendor/` are loaded in *different* ways, and the difference
-is not a style choice:
-
-- `xterm.js` is the **ESM build renamed** — it ends `export{Dl as Terminal}` — so
-  `web/terminal.js` imports it normally.
-- `diff2html.js` is a **UMD bundle**. Its footer is `}(this, …)` and it assigns
-  its global off the `this` it was called with. Top-level `this` in an ES module
-  is `undefined`, so `import './vendor/diff2html.js'` throws a `TypeError` before
-  `app.js` runs a line. It is loaded with a classic `<script>` before the module
-  script, and read as `window.Diff2Html` at call time.
-
-So: `head -c 200` the file and look. If it opens `!function(e,t){…}(this,` it is
-UMD and needs the script tag; if it ends in an `export`, import it. Both cases
-carry a comment saying which and why, because the UMD one reads like something to
-tidy up and tidying it up is an immediate crash on page load.
-
-### Preact, for UI that updates under the cursor
-
-`web/vendor/preact.js` is htm 3.1.1's `preact/standalone.module.js`: Preact 10,
-its hooks and htm in one ESM file. It ends in `export{…}`, so it is imported like
-xterm (`import { html, render } from './vendor/preact.js'`), and it has no eval, so
-the CSP accepts it. It carries no version string of its own; `web/rail.js`'s header
-records what is known. Licences are in `LICENSE.preact` — **htm is Apache-2.0, not
-MIT**, so both texts are there.
-
-`web/rail.js` is the pattern for moving a surface over, and the rest of `app.js`
-still builds DOM by hand with `el()`. What it settled:
-
-- **No JSX, no build step.** Components are `` html`<div class=${…}>…</div>` ``,
-  which htm turns into `h()` calls at runtime. Attributes are written the DOM's
-  way (`class`, `aria-*`, `data-*`); events are `onClick`, `onDragStart`.
-- **State stays in `app.js`'s `state`.** A render is a plain synchronous call
-  (`render(tree, container)`) from the existing entry point, so callers do not
-  change. Builders are ordinary functions returning vnodes; use hooks only for
-  state a piece genuinely owns.
-- **Key every list child** by something stable (`sessionId`, a group key). The
-  keys are the whole point: they are what keeps a node, and its hover, focus,
-  animation and in-flight click, across an update. Chromium 126 has no
-  `moveBefore`, so a node that actually *moves* can still lose focus.
-- **Do not touch rendered DOM by hand.** No `setAttribute`, `classList` or
-  `insertBefore` on nodes Preact owns: it diffs against its last vnode, not the
-  DOM, so a hand edit is either undone later or never. Put the fact in `state` and
-  re-render. The rail's drag-to-reorder does exactly that (`state.railDrag.order`).
-- A `null` prop is written as an empty DOM property, so you will see `title=""`
-  and `draggable="false"` where `el()` left the attribute off. Harmless, but do not
-  write CSS that selects on those attributes being absent.
+UI that updates under the cursor uses Preact (`web/vendor/preact.js`, with htm, no
+JSX); `web/rail.js` is the pattern. Keep state in `app.js`'s `state`, key every list
+child by something stable, and never edit DOM that Preact rendered: put the fact in
+`state` and re-render. docs/vendoring.md §Preact has the details.
 
 ## Never rebuild without asking
 
-`install.ps1` force-closes any running TGXCode (and the pre-rename ClaudeSessions) and replaces the
-executable, which shuts the user's window. You almost never need it: **changes
-to `bridge/` and `web/` need no rebuild at all** — restart your dev bridge, or
-just refresh for UI-only edits. Only `app/main.js` and `package.json` are
-packaged, and if one of those has to ship, say so and let the user run it.
+`install.ps1` force-closes the running TGXCode and replaces the executable, which
+shuts the user's window, and two agents packaging at once wipe each other's staging
+directory. Changes to `bridge/` and `web/` never need a rebuild: restart your dev
+bridge, or refresh for UI-only edits. Only `app/main.js` and `package.json` are
+packaged. If one of those has to ship, say so and let the user run it.
 
-Two agents packaging at once will also pull the executable out from under each
-other, since the staging directory is wiped and rebuilt.
+`npm run release:local` closes nothing, but it publishes to the folder the everyday
+app auto-updates from. It refuses a branch or uncommitted `app/` build unless you
+name a folder (`--feed <dir>`). Do not pass `--allow-dev` unasked, and leave
+**Restart to update** to the user (docs/manual.md §Updating the desktop app).
 
-**`npm run release:local` is the exception that closes nothing.** It stages in its
-own directory, runs no installer, and publishes to the updates folder — but that
-folder is what the everyday app installs from, and it auto-downloads. So it refuses
-a build of a branch or of uncommitted `app/` edits unless you name a folder
-(`--feed <dir>`), which is how to try one. Do not pass `--allow-dev` unasked. Applying
-an update replaces the user's app, so that part is still theirs: leave **Restart to
-update** to them. See docs/manual.md §Updating the desktop app.
-
-**On a Linux host the rule is the same and the reason is weaker.** There is no
-staging directory and no file lock on a running executable, so `npm run build`
-cannot pull anything out from under anyone — but it still replaces the app the
-user is looking at, and a rebuild is still not something to do unasked. What does
-*not* need asking there is `npm install`: it only fetches devDependencies into a
-gitignored `node_modules/`, and `electron .` out of it is the normal way to look
-at an `app/main.js` change without packaging anything.
-
-## What is safe
-
-- Editing anything under `bridge/`, `web/`, `scripts/`.
-- Running `npm run dev` and restarting it as often as you like.
-- `npm pack` to look at what a package ships. It writes a tarball and installs
-  nothing. `npm install` is the one that is not safe — see *You cannot add a
-  dependency*.
-- Reading transcripts: both instances read the same `~/.claude/projects`, so a
-  session you start in dev is visible in the everyday window and vice versa.
+On a Linux host, `npm run build` still replaces the app the user is looking at, so
+ask first. `npm install` there only fetches devDependencies into `node_modules/`,
+and `electron .` is the normal way to try an `app/main.js` change. On WSL there is
+no `node_modules` on purpose: the shell has to be a Windows build, packaged from the
+Windows-side staging directory, and `npm start` finds the built executable.
 
 ## The old name is still wired in, on purpose
 
-The app was **Claude Sessions** before it was TGXCode, and every identifier that
-carried the name changed with it — but the old spelling of each is still accepted,
-because a bridge, a packaged shell, a phone build or a paired browser from before
-the rename has to keep working until it is replaced:
+The app was **Claude Sessions** before it was TGXCode. Every old spelling is still
+accepted, so builds and paired devices from before the rename keep working. None of
+it is a leftover to tidy:
 
 - `CLAUDE_SESSIONS_<X>` fills in for an unset `TGXCODE_<X>` (`bridge/legacy-env.js`,
-  and the same loop at the top of `app/main.js`). Stripping the port from a
-  session's environment strips both names.
-- `X-Claude-Sessions-Client` passes the CSRF guard beside `X-TGXCode-Client`, and
-  `web/`, `bridge/mcp.js` and `app/main.js` send both — `web/` goes live before the
-  bridge serving it restarts.
-- `cs_token` is read beside `tgx_token`; the `cs-*` `<meta>` names beside `tgx-*`.
+  and the loop at the top of `app/main.js`). Stripping the port strips both.
+- `X-Claude-Sessions-Client` passes the CSRF guard; `web/`, `bridge/mcp.js` and
+  `app/main.js` send both headers.
+- `cs_token` is read beside `tgx_token`, and the `cs-*` `<meta>` names beside `tgx-*`.
 - `~/.local/share/claude-sessions` and `~/.cache/claude-sessions` are moved to
-  `…/tgxcode` by the first bridge module to load `bridge/config.js`, and left as
-  symlinks (`bridge/legacy-dirs.js` says why). Scripts that find those directories
-  themselves use "new if it exists, else old" and never create the new one.
+  `…/tgxcode` and left as symlinks (`bridge/legacy-dirs.js`).
 
-So a `claude-sessions` you find in the code is either the checkout path — which
-kept its name — or one of these, and neither is a leftover to tidy. The checkout
-is still `~/Other/claude-sessions`, and so is every `.claude/projects` directory
-derived from it.
+The checkout directory `~/Other/claude-sessions`, and the `.claude/projects`
+directories derived from it, kept the old name too.
 
 ## Finding your way around
 
-`README.md` **§Layout** is the file map — one line per module, and it is kept
-current. `docs/api.md` is the bridge API as a contract, and `docs/remote.md` the
-reasoning behind the local/remote split; `docs/plans/` holds the design notes the
-features were built from.
+README §Layout is the file map, one line per module. `docs/api.md` is the API
+contract, `docs/remote.md` the local/remote reasoning, and `docs/plans/` the design
+notes. Every module under `bridge/` opens with a header comment saying why it exists;
+read that before grepping the body. Each `/api/` route family is a module under
+`bridge/routes/`, tried in the order of `ROUTES` in `server.js`, which is a
+first-match chain, so order matters.
 
-Every module under `bridge/` opens with a header comment saying why it exists and
-what it decided — read that before grepping the body. `server.js` is now the
-plumbing and wiring; each `/api/` route family is a module under `bridge/routes/`,
-tried in the order of the `ROUTES` list in `server.js` (the order matters — it is a
-first-match chain), and the feature sections live in their own modules
-(`events.js`, `scheduler.js`, `pr-gate.js`, `later-delivery.js`, …). README §Layout
-names them all.
+## Gotchas
 
-## Notes that save time
-
-- **Entering a worktree splits the session's transcript in two.** Claude Code
-  files a transcript under the project directory for the cwd it is running in,
-  and a worktree is a project directory of its own, so a session that crosses
-  into one leaves a second `<id>.jsonl` under
-  `~/.claude/projects/…--claude-worktrees-<name>/`. One copy holds the
-  conversation and the other only bookkeeping — a title, a mode, the worktree
-  state — and which gets which goes either way: both orders exist on this
-  machine. `conversationRecord` in `bridge/sessions.js` is what picks the copy
-  with the conversation in it. Before that the index took whichever copy was
-  scanned last, so directory order decided whether a session showed its history
-  or showed 0 turns and nothing at all.
-- **No `node_modules` on the Windows path, on purpose.** `electron .` will not
-  work from WSL; the shell is packaged from a Windows-side staging directory, and
-  a Linux Electron is not the app you want when the window has to be a Windows
-  one. `npm start` finds the built executable instead. On a Linux host the
-  opposite is true — `npm run build` installs devDependencies in place and
-  `electron .` is the short loop. The rule that holds on both is about
-  `dependencies`, not `node_modules`: see *You cannot add a dependency*.
-- **A login shell has neither node nor `claude` on PATH** — nvm and `~/.local/bin`
-  both come from `~/.bashrc`, which `bash -lc` never reads. `bridge/launch.sh`
-  resolves node itself; that is why it exists. This is not a WSL quirk: cron and
-  systemd hand you the same empty `PATH` on any machine.
-- **The bridge knows which host it is on in exactly one place.**
-  `bridge/platform.js` — `isWsl()`, from `WSL_DISTRO_NAME` or
-  `/proc/sys/fs/binfmt_misc/WSLInterop`, overridable with
-  `TGXCODE_HOST_KIND` so tests can drive both branches from either
-  machine. Two modules read it: `bridge/explorer.js` (`explorer.exe` vs
-  `xdg-open`) and `bridge/devbrowser.js` (where the control-server file lives).
-  If you are about to add a third `process.platform` check somewhere, use this
-  instead — and add a case to `test/platform.test.js`, which asserts on *what got
-  spawned* rather than on an error string.
-- **Commit messages are prose, not prefixes.** The log is uniform: an imperative
-  sentence-case subject describing the change as the user meets it — "Give each
-  session its own terminal pane", "Let an approval card wait as long as you do" —
-  and a body explaining why, including what was rejected and what still holds. No
-  `feat:` or `fix:` prefixes appear anywhere in this repo.
-- **Killing a bridge no longer kills its turns — killing the session host does.**
-  `claude` reads stdin for input, so when whoever holds that pipe exits, `claude`
-  treats it as end-of-input and stops, mid-turn. That is measured, not assumed, and
-  running it detached changes nothing. What changed is who holds the pipe:
-  `bridge/host.js`, one per port, at `~/.local/share/tgxcode/host-<port>.sock`.
-  A bridge that exits releases its sessions to the host, and the next bridge on the
-  same port adopts them. A turn started while no host could be reached still dies
-  with its bridge; `atRisk` in `/api/health` is the count of those.
-
-  So the host is now the process not to kill. Its pid is `sessionHost.pid` in
-  `/api/health`, it lives in its own session (`setsid`), and it exits by itself once
-  it has held nothing for ten minutes, which is also how a new `host.js` gets picked
-  up. **Keep `host.js` boring:** it relays bytes and knows nothing about stream-json,
-  because replacing it costs every turn it holds. Protocol changes belong in
-  `bridge/runner.js`. Run `node test/host.test.js` if you do touch it. The separate
-  development port still matters: a dev bridge gets its own host, and nothing it
-  does can reach the everyday one's.
-- **"Why is the bridge still on old code?" has a log.** A midnight cron entry
-  restarts the everyday bridge, and every run that could change something appends
-  a line to `~/.cache/tgxcode/restart-45888.log` — a `start` line and then
-  one word for the outcome. `grep skipped-dirty` is the usual answer: uncommitted
-  changes **under `bridge/`** stop the nightly run, because there is no terminal
-  to confirm them at. So a worktree is not the only reason to keep the main
-  checkout clean — leaving half-finished `bridge/` edits in it is what silently
-  pins the everyday instance to yesterday's code. Nothing else in that directory
-  blocks it: `web/` is read per request and is already live, and docs, tests and
-  scripts the bridge never reads. See docs/manual.md §Picking up new code.
+- **A login shell has neither node nor `claude` on PATH.** nvm and `~/.local/bin`
+  come from `~/.bashrc`, which `bash -lc`, cron and systemd never read.
+  `bridge/launch.sh` resolves node itself for that reason.
+- **Host detection lives in `bridge/platform.js`** (`isWsl()`, overridable with
+  `TGXCODE_HOST_KIND`). Use it rather than adding a `process.platform` check, and
+  add a case to `test/platform.test.js`.
