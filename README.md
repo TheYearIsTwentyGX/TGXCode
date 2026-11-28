@@ -514,7 +514,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |
 | `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
 | `bridge/skills.js` | Every skill on disk for Claude Code and Codex — the roots, which are read-only and why, and reading, writing, creating, copying and trashing one |
-| `bridge/skill-import.js` | Importing a skill: `npx skills find` parsed into results, a source fetched into staging, the hashed preview manifest, and an install that refuses unless the staged bytes are still what was shown |
+| `bridge/skill-import.js` | Importing a skill: `npx skills find` parsed into results, a source fetched into staging, the hashed preview manifest, and an install that refuses unless the staged bytes are still what was shown, and refuses a red skill without `confirmedRisk` |
+| `bridge/skill-safety.js` | The 0–100 safety score of a skill being imported, from its hooks, pre-approved tools, scripts, binaries and size, with the weights in its header |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/models.js` | The models and effort levels every picker offers, with a line on when each fits — the one list the composer, the Start dialog, the orchestrator settings and `spawn_worker` read (`GET /api/models`, and the `tgx-models` `<meta>` tag) |
@@ -618,7 +619,7 @@ Two rules worth knowing before you send a patch:
 | `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
 | `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
 | `web/skills/page.js` | The Skills page — the rail by runtime and scope, the file editor with stamp and 409, New skill, copy a read-only skill, delete to trash |
-| `web/skills/import.js` | The import view on that page — search via `npx skills find`, a source box, the per-file preview with warnings, the target and Install |
+| `web/skills/import.js` | The import view on that page — search via `npx skills find`, a source box, the preview with its Safety section and files by folder, the target, and Install with a full-screen confirm for a red skill |
 | `web/settings/updates.js` | The Updates group — where the shell looks for a build, what it found, Restart to update, and Build update |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md and AGENTS.md files — and the full-height dialog on the same file |
 | `web/settings/codex-config.js` | The Codex group, shown where Codex is installed: one key saved per change |
