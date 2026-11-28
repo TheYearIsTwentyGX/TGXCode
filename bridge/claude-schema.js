@@ -242,8 +242,7 @@ const GROUPS = [
                     + 'session that reads this file. Set it anyway?' } },
             { path: 'permissions.allow', kind: 'rules', wide: true,
                 label: 'Allowed without asking',
-                note: 'One rule per row, in the file’s own order — nothing here sorts '
-                    + 'them, so a one-rule change stays a one-line diff.' },
+                note: 'One rule per row, in the file’s own order.' },
             { path: 'permissions.deny', kind: 'rules', wide: true,
                 label: 'Never allowed',
                 note: 'Beats an allow rule for the same thing, at every scope.' },
@@ -293,8 +292,7 @@ const GROUPS = [
     },
     {
         title: 'Worktrees', key: 'worktree',
-        note: 'How `EnterWorktree` builds a worktree. This repository pins the '
-            + 'first of these, and its CLAUDE.md explains why.',
+        note: 'How `EnterWorktree` builds a worktree.',
         rows: [
             { path: 'worktree.baseRef', kind: 'choice', open: true, options: ['fresh', 'head'],
                 label: 'Branch from',
@@ -353,8 +351,7 @@ const GROUPS = [
                 label: 'Notification channel', hint: 'user' },
             { path: 'cleanupPeriodDays', kind: 'int', min: 1, max: 3650,
                 label: 'Keep transcripts for (days)',
-                note: 'Claude Code deletes its own older transcripts on this schedule. '
-                    + 'This app never deletes one you did not ask it to.', hint: 'user' },
+                note: 'Claude Code deletes its own older transcripts on this schedule.', hint: 'user' },
             { path: 'respectGitignore', kind: 'bool', label: 'Respect ignore files when searching' },
             { path: 'autoUpdatesChannel', kind: 'choice', options: ['stable', 'latest', 'rc'],
                 label: 'Update channel', hint: 'user' },
@@ -362,11 +359,8 @@ const GROUPS = [
     },
     {
         title: 'Hooks', key: 'hooks',
-        note: 'Commands that run around a session’s work. A hook `command` is an '
-            + 'arbitrary shell string run on every matching event — the highest-'
-            + 'privilege field in the file — so this editor saves only when you ask, '
-            + 'and shows you what will run before it does. Hooks from every scope '
-            + 'run; none overrides another.',
+        note: 'Shell commands that run on session events, with your permissions. Hooks from '
+            + 'every scope add up.',
         rows: [
             { path: 'disableAllHooks', kind: 'bool', label: 'Turn every hook off',
                 note: 'The status line goes with them. A quick way to find out whether '

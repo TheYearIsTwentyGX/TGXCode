@@ -2889,7 +2889,7 @@ function connect() {
         // A PR raised elsewhere is the likeliest thing to have moved, and it is
         // what turns a plain `#N` in this conversation into a link.
         loadPrOwners();
-        if (state.dash.open) loadDash();
+        if (state.dash.open) loadDash({ silent: true });
     });
 
     // The nightly review of some PR was read or rewritten. The rows' verdict chips
@@ -2898,7 +2898,7 @@ function connect() {
     es.addEventListener('pr-reviews-changed', () => {
         forgetReviews();
         if (state.current) loadPrStatus();
-        if (state.dash.open) loadDash();
+        if (state.dash.open) loadDash({ silent: true });
     });
 
     // Settings were saved — possibly in another window, possibly this one. Two

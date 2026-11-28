@@ -180,14 +180,13 @@ export function renderSearch() {
     dom.sxTools.classList.toggle('on', tools);
 
     if (error) {
-        dom.sxSub.textContent = 'The search did not finish.';
+        dom.sxSub.textContent = '';
         paint(dom.sxBody, note(`Could not search: ${error}`));
         return;
     }
     if (!q.trim()) {
-        dom.sxSub.textContent = 'Everything said in every session, by you and your agents.';
-        paint(dom.sxBody, note('Type a few words. Every word has to be in the same message; '
-            + 'put a phrase in quotes to keep it whole.'));
+        dom.sxSub.textContent = '';
+        paint(dom.sxBody, note('All words must be in one message.'));
         return;
     }
     if (!data) {
@@ -201,26 +200,26 @@ export function renderSearch() {
     parts.push(data.matched
         ? `${data.matched} ${data.matched === 1 ? 'session' : 'sessions'} matched`
         : 'Nothing matched');
-    if (data.truncated) parts.push(`showing the newest ${shown}, so narrow the search to see the rest`);
+    if (data.truncated) parts.push(`newest ${shown} shown`);
     if (loading) parts.push('searching…');
-    dom.sxSub.textContent = `${parts.join(' · ')}.`;
+    dom.sxSub.textContent = parts.join(' · ');
 
     const pending = data.pending
         ? html`<div key="pending" class="sx-pending">
-            <span>Still reading ${data.pending} ${data.pending === 1 ? 'session' : 'sessions'}, so more may turn up.</span>
-            <button class="dash-btn" type="button" onClick=${runSearch}>Search again</button>
+            <span>${`${data.pending} ${data.pending === 1 ? 'session' : 'sessions'} still indexing`}</span>
+            <button class="btn small" type="button" onClick=${runSearch}>Search again</button>
           </div>`
         : null;
     if (!shown) {
         paint(dom.sxBody, html`<div key="none">${pending}${note(tools
             ? 'No message or tool call has all of those words.'
-            : 'No message has all of those words. Tool calls are left out; include them to look there too.')}</div>`);
+            : 'No message has all of those words.')}</div>`);
         return;
     }
     paint(dom.sxBody, html`<div key="list" class="sx-list">
         ${pending}
         ${data.sessions.map(s => html`<${Session} key=${s.sessionId} s=${s} />`)}
-    </div>`);
+    </div>`, { flip: false });
 }
 
 /** Listeners on the panel's own controls. Called once, from app.js. */

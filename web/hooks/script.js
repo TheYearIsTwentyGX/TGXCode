@@ -146,13 +146,13 @@ export function ScriptPane() {
                 </span>
                 <span class="cmd-field-label">${d.exists ? 'Make it executable' : 'Executable'}</span>
             </label>` : null}
-            <span class="cmd-foot-note">${sc.dirty ? (d.exists ? 'Edited — not saved.' : 'Not created yet.')
-                : 'Matches the file on disk.'}</span>
+            <span class="cmd-foot-note">${sc.dirty ? (d.exists ? 'Unsaved changes' : 'Not created yet.')
+                : ''}</span>
             <div class="cmd-card-spacer"></div>
             <button class="btn quiet small" type="button" disabled=${!sc.dirty || !d.exists}
-                onClick=${() => { sc.text = d.text || ''; sc.dirty = false; sc.rev += 1; redrawPane(); }}>Discard</button>
+                onClick=${() => { sc.text = d.text || ''; sc.dirty = false; sc.rev += 1; redrawPane(); }}>Revert</button>
             <button class="btn primary small" type="button" disabled=${!!sc.saving || (!sc.dirty && !(sc.exec && !d.executable))}
-                onClick=${() => saveScript()}>${d.exists ? 'Save the script' : 'Create the script'}</button>
+                onClick=${() => saveScript()}>${d.exists ? 'Save' : 'Create'}</button>
         </div>`}
     </div>`;
 }

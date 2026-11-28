@@ -37,9 +37,8 @@ const NOTE = {
         + 'stopped until you answer. A turn finishing only does if it ran over '
         + '30 seconds. Never for the session already in front of you.',
 };
-const DESKTOP_NOTE = 'Ticking this is what asks the browser for permission — nothing '
-    + 'else does, because a prompt no gesture invited is the one people press Block on.';
-const SOUND_NOTE = 'A short chime, synthesised in the page rather than fetched.';
+const DESKTOP_NOTE = 'Turning this on asks the browser for permission.';
+const SOUND_NOTE = 'A short chime.';
 const WORKERS_NOTE = 'Sessions an orchestrator started stay quiet. Their notifications '
     + 'still show; only the chime is dropped.';
 
@@ -99,15 +98,10 @@ function NotifyGroup() {
         }
     };
 
-    // htm trims whitespace that holds a newline where text meets a tag, so the
-    // space after </strong> below has to stay on its line.
     return html`<section id="set-g-notify" class="settings-group">
         <h2 class="settings-group-title">Notifications</h2>
-        <p class="settings-group-note">What reaches you when this window is
-            not the thing you are looking at. <strong>This browser only</strong> — unlike
-            everything above, these live in its own storage rather than in the
-            settings file, because whether a notification can fire at all is
-            something each browser decides for itself.</p>
+        <p class="settings-group-note">What reaches you when this window is not
+            in front. Saved in this browser only, not in the settings file.</p>
 
         <div class="settings-row">
             <div class="settings-row-text">

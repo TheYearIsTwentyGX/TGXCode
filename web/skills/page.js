@@ -27,7 +27,7 @@ import { ImportView, openImport } from './import.js';
 export const skState = () => state.skills;
 
 const RUNTIME_LABEL = { claude: 'Claude Code', codex: 'Codex' };
-const SCOPE_LABEL = { user: 'Yours', project: 'This project', plugin: 'Plugins', synced: 'claude.ai', system: 'Codex built-in' };
+const SCOPE_LABEL = { user: 'Yours', project: 'This project', plugin: 'Plugins', synced: 'claude.ai', system: 'built-in' };
 const SCOPE_ORDER = ['user', 'project', 'plugin', 'synced', 'system'];
 
 function skDir() {
@@ -74,8 +74,8 @@ export function renderSkills() {
     if (!s.open) return;
     const n = s.data ? s.data.skills.length : 0;
     dom.skpSub.textContent = s.data
-        ? `${n} skill${n === 1 ? '' : 's'} for Claude Code and Codex${skDir() ? ` — ${shortPath(skDir())}` : ''}`
-        : 'Every skill Claude Code and Codex can load, as files.';
+        ? `${n} skill${n === 1 ? '' : 's'}${skDir() ? ` · ${shortPath(skDir())}` : ''}`
+        : '';
     render(html`<${SkillsPage} />`, dom.skpBody);
 }
 
@@ -87,7 +87,7 @@ function selected() {
 function SkillsPage() {
     const s = skState();
     if (!s.data) {
-        return html`<div class="dash-note${s.error ? ' error' : ''}">${s.error ? `Could not read the skills: ${s.error}` : 'Reading…'}</div>`;
+        return html`<div class="dash-note${s.error ? ' error' : ''}">${s.error ? `Could not read the skills: ${s.error}` : 'Loading…'}</div>`;
     }
     return html`
         ${skBar()}
@@ -201,8 +201,7 @@ function skillDetail(k) {
     return html`<div class="skp-detail">
         <div class="skp-head">
             <h2 class="skp-h">${k.name}</h2>
-            <span class="skp-chip">${RUNTIME_LABEL[k.runtime]}</span>
-            <span class="skp-chip">${SCOPE_LABEL[k.scope]}${k.plugin ? ` · ${k.plugin}` : ''}</span>
+            ${k.plugin ? html`<span class="skp-chip">${k.plugin}</span>` : null}
             ${k.hooks ? html`<span class="skp-chip warn" title="Its frontmatter declares hooks, which run while the skill is active">hooks</span>` : null}
             ${k.allowedTools ? html`<span class="skp-chip warn" title="Tools this skill pre-approves">allowed-tools: ${k.allowedTools}</span>` : null}
         </div>
@@ -304,7 +303,7 @@ async function newFile(k) {
 
 async function removeSkill(k) {
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`Delete ${k.name}? It moves to the skills trash under the bridge's cache, not straight off the disk.`)) return;
+    if (!window.confirm(`Delete ${k.name}? It goes to the skills trash.`)) return;
     const s = skState();
     try {
         const got = await del(`/api/skills?dir=${encodeURIComponent(k.dir)}&${projQ()}`);

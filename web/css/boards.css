@@ -19,32 +19,6 @@
    same yellow here as it does there, and one running the same green. Two boards
    with two vocabularies for one fact is how you end up checking both. */
 
-.tb-head {
-    flex: none;
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-7);
-    padding: var(--sp-8) var(--pane-x, 28px) var(--sp-7);
-}
-.tb-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
-.tb-sub {
-    margin: var(--sp-2) 0 0;
-    max-width: 640px;
-    font-size: var(--fs-md);
-    line-height: var(--lh-prose);
-    color: var(--text-3);
-}
-
-/* Refresh carries `margin-left: auto` of its own, so wrapping it took the auto
-   up a level to keep the row looking as it did. The other two appear only in
-   the focused view. */
-.tb-tools {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-4);
-}
 .tb-search {
     width: 260px;
     height: 34px;
@@ -185,12 +159,10 @@
     gap: var(--sp-4);
     margin: var(--sp-4) var(--sp-4) 0;
     font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
     color: var(--text-4);
 }
 .tb-sub-head:first-child { margin-top: var(--sp-1); }
-.tb-sub-head span { margin-left: auto; letter-spacing: 0; text-transform: none; }
+.tb-sub-head span { margin-left: auto; }
 
 /* ── a card ─────────────────────────────────────────────────────────────── */
 
@@ -204,21 +176,20 @@
     border-radius: var(--r);
     min-width: 0;
     cursor: pointer;
-    /* Which column it is in, said again in colour along its edge, so a card
-       read out of the corner of the eye still carries its state. */
-    box-shadow: inset var(--edge-w) 0 0 var(--s4);
     transition: background var(--dur-fast) var(--ease-standard);
 }
 .tb-card:hover { background: var(--s3); }
 
-.tb-card[data-col="needs"]   { box-shadow: inset var(--edge-w) 0 0 var(--yellow); background: var(--yellow-tint); }
+/* The dot in the head says which column a card is in. Only the cards waiting on
+   you get more than that: their whole ground is tinted, because they are the
+   ones the board exists to put in front of you. (Each card used to carry an
+   edge stripe as well, which said what the dot says a second time.) */
+.tb-card[data-col="needs"]   { background: var(--yellow-tint); }
 .tb-card[data-col="needs"]:hover { background: var(--yellow-cont); }
-.tb-card[data-col="working"] { box-shadow: inset var(--edge-w) 0 0 var(--green); }
-.tb-task                     { box-shadow: inset var(--edge-w) 0 0 var(--blue); }
 /* A task whose conversation has been filed away. Still offered — dismissing is
    the gesture for "not this", and archiving must not become a second, silent
    one — but visibly the loose end it is. */
-.tb-task[data-archived="true"] { opacity: 0.62; box-shadow: inset var(--edge-w) 0 0 var(--s5); }
+.tb-task[data-archived="true"] { opacity: 0.62; }
 
 .tb-card-head { display: flex; align-items: flex-start; gap: var(--sp-4); }
 
@@ -333,11 +304,13 @@
    full-width buttons — "Run now / Resume / Edit / Delete" as a 2×2 grid — and
    four buttons of one weight say nothing about which is the point. A card
    names its main action with `.primary`; everything else is a quiet text
-   button that only takes a ground under the pointer. */
-.tb-btn {
+   button that only takes a ground under the pointer. The live board's `.lbtn`
+   is the same button under its own names (`.ok`, `.no`; dashboard.css), so the
+   two share one rule here. */
+.tb-btn, .lbtn {
     flex: none;
     min-width: 0;
-    height: 28px;
+    height: var(--ctl-sm);
     padding: 0 var(--sp-5);
     border: 0;
     border-radius: var(--pill);
@@ -350,7 +323,7 @@
     white-space: nowrap;
     transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
-.tb-btn:hover { background: var(--s4); color: var(--text); }
+.tb-btn:hover, .lbtn:hover { background: var(--s4); color: var(--text); }
 /* The filled one sits back at the row's left edge: only the quiet labels need
    the inset undone, and a pill's ground would otherwise hang into the margin. */
 .tb-acts > .tb-btn.primary:first-child { margin-left: var(--sp-5); }
@@ -362,8 +335,8 @@
    quick click lands on, and red only once the pointer is on it. */
 .tb-btn.danger { margin-left: auto; }
 .tb-btn.danger:hover { background: var(--red-cont); color: var(--red); }
-.tb-btn:disabled { opacity: 0.45; cursor: default; }
-.tb-btn:disabled:hover { background: none; color: var(--text-3); }
+.tb-btn:disabled, .lbtn:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.tb-btn:disabled:hover, .lbtn:disabled:hover { background: none; color: var(--text-3); }
 .tb-btn.primary:disabled:hover { background: var(--blue-cont); color: var(--blue); }
 
 /* ── the foot of a column ───────────────────────────────────────────────── */
@@ -434,22 +407,6 @@
    The card is the task board's card either way: same class, same meta line, same
    buttons, because it is the same object at a different moment. */
 
-.dr-head {
-    flex: none;
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-7);
-    padding: var(--sp-8) var(--pane-x, 28px) var(--sp-7);
-}
-.dr-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
-.dr-sub {
-    margin: var(--sp-2) 0 0;
-    max-width: 640px;
-    font-size: var(--fs-md);
-    line-height: var(--lh-prose);
-    color: var(--text-3);
-}
-.dr-head .dash-btn { margin-left: auto; flex: none; }
 
 .dr-body {
     flex: 1;
@@ -494,14 +451,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-
-/* `.tb-card` colours its left edge by which column it is in — yellow for needs
-   you, green for working, blue for a suggested task. The columns here mean a
-   project rather than a state, so there is nothing for that edge to say, and a
-   draft takes the quietest one in the set rather than borrowing a meaning from
-   one of those three. It is the one thing in this app not asking for anything,
-   and the stripe should say so. */
-.dr-card { box-shadow: inset var(--edge-w) 0 0 var(--s5); }
 
 /* The message itself, which is the point of the card. Several lines of it, then
    an ellipsis: a draft is usually a paragraph, and one that is not should not
@@ -689,10 +638,6 @@
    the message. It is the one line in this app whose job is to make "this quietly
    stopped happening" impossible to scroll past. */
 
-.sched-head { flex: none; display: flex; align-items: flex-start; gap: var(--sp-7); padding: var(--sp-8) var(--pane-x, 28px) var(--sp-7); }
-.sched-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
-.sched-sub { margin: var(--sp-2) 0 0; max-width: 640px; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-3); }
-.sched-head .dash-btn { margin-left: auto; flex: none; }
 
 .sched-body {
     flex: 1;
@@ -771,12 +716,6 @@
 .sched-band[data-band="done"] .sched-card { opacity: 0.6; }
 .sched-band[data-band="done"] .sched-when { text-decoration: line-through; }
 
-/* The stripe says what the last run did, which is the same question the dot
-   answers — two readings of one fact, because the dot is what you see scanning
-   the column and the stripe is what you see having stopped at one card. */
-.sched-card { box-shadow: inset var(--edge-w) 0 0 var(--s5); }
-.sched-card:has(.sched-dot.is-bad)  { box-shadow: inset var(--edge-w) 0 0 var(--red); }
-.sched-card:has(.sched-dot.is-warn) { box-shadow: inset var(--edge-w) 0 0 var(--yellow); }
 
 /* A paused schedule is dimmed rather than hidden or moved: it is a decision you
    made and may want back, and sorting it to the bottom would mean the card you

@@ -83,6 +83,28 @@ export function ago(ts) {
     return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/**
+ * `ago()` as words: "3h ago", "just now", or "on Sep 29". `ago()` turns into a
+ * date after a week, so appending " ago" to it prints "Sep 29 ago"; use this
+ * wherever the time reads as part of a phrase.
+ */
+export function agoWords(ts) {
+    const a = ago(ts);
+    if (!a) return '';
+    if (a === 'now') return 'just now';
+    return /\d[mhd]$/.test(a) ? `${a} ago` : `on ${a}`;
+}
+
+// The permission modes as the composer and the New session dialog word them, for
+// places that print a stored mode rather than offering a select of them.
+const MODE_WORDS = {
+    default: 'Default', acceptEdits: 'Accept edits', auto: 'Auto', manual: 'Manual',
+    plan: 'Plan', dontAsk: 'Don’t ask', bypassPermissions: 'Bypass permissions',
+};
+export const modeWord = (mode) => MODE_WORDS[mode] || mode || '';
+/** A stored model, or the select's "Default" when none was picked. */
+export const modelWord = (model) => model || 'Default model';
+
 export function dur(ms) {
     if (!ms || ms < 0) return '';
     if (ms < 1000) return `${ms}ms`;

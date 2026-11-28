@@ -42,11 +42,15 @@ const claimed = new WeakSet();
  * `<p>` holding the sentence the page loads with. So the first render into each
  * container clears it, and every render after that is an ordinary diff.
  */
-export function paint(container, tree) {
+export function paint(container, tree, { flip = true } = {}) {
     if (!claimed.has(container)) {
         claimed.add(container);
         container.textContent = '';
     }
+    // A list that is read rather than rearranged (History, search results)
+    // passes `flip: false`: measuring three hundred rows twice on every push
+    // buys a slide nobody needs.
+    if (!flip) { render(tree, container); return; }
     // A card that changes column or place slides there, and one that arrives
     // fades in. Cards carry their session in `data-id`, or their task in
     // `data-task`; anything else on a board is not tracked and just updates.

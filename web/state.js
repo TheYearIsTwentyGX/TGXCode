@@ -356,7 +356,7 @@ export const state = {
     },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
-    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set(), reviewOpen: null },
+    dash: { open: false, data: null, at: 0, loading: false, quiet: false, error: null, files: new Set(), reviewOpen: null },
     // The analytics board (web/boards/analytics.js): the last rollup, for `days`.
     analytics: { open: false, data: null, at: 0, days: 30, loading: false, error: null },
     // The open conversation's spend, for its header: `/api/analytics/sessions/:id`,

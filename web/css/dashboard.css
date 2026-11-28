@@ -797,27 +797,13 @@ span.lw-title { cursor: default; color: var(--text-3); }
    it and left a gap between the box and the buttons that belong to it. */
 .lsend + .lcard-acts { margin-top: 0; }
 
-/* The task board's button, in the live board's names: `.ok` is the one filled
-   action, anything without it is a word that takes a ground under the pointer,
-   and `.no` reddens only when it is about to be pressed. */
-.lbtn {
-    flex: none;
-    height: 28px;
-    padding: 0 var(--sp-5);
-    border: 0;
-    border-radius: var(--pill);
-    background: none;
-    color: var(--text-3);
-    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
-    cursor: pointer;
-    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
-}
-.lbtn:hover { background: var(--s4); color: var(--text); }
+/* The task board's button (its base rule is shared with `.tb-btn` in
+   boards.css), in the live board's names: `.ok` is the one filled action,
+   anything without it is a word that takes a ground under the pointer, and
+   `.no` reddens only when it is about to be pressed. */
 .lbtn.ok { padding: 0 var(--sp-6); background: var(--blue-cont); color: var(--blue); }
 .lbtn.ok:hover { background: var(--blue-cont-hover); color: var(--on-blue-cont); }
 .lbtn.no:hover { background: var(--red-cont); color: var(--red); }
-.lbtn:disabled { opacity: 0.45; cursor: default; }
-.lbtn:disabled:hover { background: none; color: var(--text-3); }
 .lbtn.ok:disabled:hover { background: var(--blue-cont); color: var(--blue); }
 
 /* An urgent badge is a count of people waiting, not of things happening. */
@@ -881,6 +867,18 @@ span.lw-title { cursor: default; color: var(--text-3); }
 }
 
 .dash-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
+.dash-sub:empty { display: none; }
+
+/* Whatever sits at the head's right: a button, a segmented control, a search
+   box. One wrapper, so every panel lines these up the same way. */
+.dash-tools {
+    margin-left: auto;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+}
+.dash-tools .dash-btn { margin-left: 0; }
 
 .dash-sub {
     margin: var(--sp-2) 0 0;
@@ -939,7 +937,7 @@ span.lw-title { cursor: default; color: var(--text-3); }
     padding: var(--sp-6) var(--sp-7) var(--sp-4);
 }
 .dproj-name { font: 500 var(--fs-base)/var(--lh-tight) var(--sans); color: var(--text); }
-.dproj-repo { font: 400 var(--fs-xs)/var(--lh-tight) var(--mono); color: var(--text-4); }
+.dproj-repo { font: 400 var(--fs-xs)/var(--lh-tight) var(--sans); color: var(--text-4); }
 .dproj-counts {
     margin-left: auto;
     font: 400 var(--fs-sm)/var(--lh-tight) var(--sans);

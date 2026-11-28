@@ -39,7 +39,7 @@ import { devBrowserShown } from '../app.js';
 import { DeleteButton } from '../snippets/settings.js';
 import { icon } from '../boards/parts.js';
 import { grow } from '../composer/send.js';
-import { copyPath } from './claude-config.js';
+import { copyPath, ticked } from './claude-config.js';
 import { renderSettings, settingsProject } from './index.js';
 
 // ── the commands a project declares ──────────────────────────────────────
@@ -86,15 +86,9 @@ const CMD_FIELDS = [
     { key: 'env', kind: 'env', label: 'Environment',
         note: 'Extra variables, on top of the ones a terminal here already gets.' },
     { key: 'web', kind: 'bool', label: 'Web app', choices: ['Once it answers', 'Straight away'],
-        note: 'When to show its page in the preview. Once it answers waits until the port '
-            + 'answers HTTP. Straight away opens the preview as soon as the port is taken '
-            + 'and lets the page load there, for a server whose first page is slow. '
-            + 'Needs a port.' },
+        note: 'When to show its page in the preview. Needs a port.' },
     { key: 'disabled', kind: 'bool', label: 'Visibility', choices: ['Shown', 'Hidden'],
-        note: 'Hiding one keeps the declaration and takes away the button. Worth '
-            + 'setting explicitly on the local tab: a project can ship a command '
-            + 'hidden, and showing it again means writing the opposite rather than '
-            + 'leaving the key out.' },
+        note: 'Hidden keeps the command but takes away its button.' },
 ];
 
 const cmdCfgState = () => state.cmdCfg;
@@ -271,12 +265,12 @@ function cmdScopeTabs() {
                 title=${row ? row.file : 'Pick a project above'}
                 onClick=${() => go(() => { s.scope = scope; cmdClearDrafts(s); })}
                 >${CMD_SCOPES[scope]}${
-                    row && !row.exists ? html`<span class="cfg-tab-tag">none</span>` : null}${
                     row && row.exists && !row.parsed ? html`<span class="cfg-tab-tag">broken</span>` : null}${
                     row && row.symlink ? html`<span class="cfg-tab-tag">symlink</span>` : null}</button>`;
         })}
         <div class="cfg-tabs-spacer"></div>
         <button class=${`cfg-tab${s.tab === 'form' ? ' on' : ''}`} type="button"
+            role="tab" aria-selected=${s.tab === 'form' ? 'true' : 'false'}
             onClick=${() => go(() => { s.tab = 'form'; })}>Form</button>
         <button class=${`cfg-tab${s.tab === 'raw' ? ' on' : ''}`} type="button"
             onClick=${() => go(() => { s.tab = 'raw'; })}>JSON</button>
@@ -325,16 +319,12 @@ function cmdReachNote() {
     const s = cmdCfgState();
     if (!s.data) return null;
     if (s.scope === 'project-local') {
-        return html`<p class="cfg-reach"><strong>Your local overrides follow you into every worktree.</strong>${
-            ' This file is read from the main checkout whichever worktree a session is in, '
-            + 'which is what it is for — and it is the tab to use when you want a change to '
-            + 'reach work already in flight.'}</p>`;
+        return html`<p class="cfg-reach"><strong>Applies in every worktree.</strong>${
+            ' Read from the main checkout, so a change reaches work already in flight.'}</p>`;
     }
-    return html`<p class="cfg-reach"><strong>A worktree carries its own copy of this file.</strong>${
-        ' A session running in '}<code>.claude/worktrees/…</code>${
-        ' uses that copy, so a change here does not reach it until the branch picks '
-        + 'this up. The '}<strong>Local</strong>${' tab is read from the main '
-        + 'checkout for every worktree, and does reach them.'}</p>`;
+    return html`<p class="cfg-reach"><strong>Each worktree has its own copy.</strong>${
+        ' A change here reaches a worktree when its branch picks it up. The '}<strong>Local</strong>${
+        ' tab applies to every worktree at once.'}</p>`;
 }
 
 /** What the bridge already thinks is wrong with these files, before any edit. */
@@ -387,8 +377,7 @@ function cmdFormCard() {
     if (row.exists && !row.parsed) {
         return card(html`<div class="cfg-broken">
             <p><strong>This file does not parse, so the form cannot show it.</strong>${
-                ' Nothing here is lost — the JSON tab has the text exactly as it is on disk, '
-                + 'and it is the only thing in the app that can repair one.'}</p>
+                ' Nothing is lost: the JSON tab has the text as it is on disk.'}</p>
             ${row.problem ? html`<pre class="cfg-stale-text">${row.problem.message}</pre>` : null}
             <button class="btn small" type="button"
                 onClick=${() => { s.tab = 'raw'; renderSettings(); }}>Open the JSON tab</button>
@@ -568,7 +557,7 @@ function cmdField(field, entry, i, ctx) {
             !set && !forced && inherited !== undefined
                 ? html`<span class="cmd-field-from">inherited</span>` : null}</div>
         ${cmdControl(field, entry, { set: set || forced, disabled, inherited, local })}
-        ${field.note ? html`<p class="cmd-field-note">${field.note}</p>` : null}
+        ${field.note ? html`<p class="cmd-field-note">${ticked(field.note)}</p>` : null}
         ${bad ? html`<p class="cmd-field-bad">${bad.message}</p>` : null}
     </div>`;
 }
@@ -779,13 +768,13 @@ function cmdFoot() {
     return html`<div class="cmd-foot">
         <span class=${`cmd-foot-note${s.problems ? ' bad' : ''}`}>${s.problems
             ? `${s.problems.length} ${s.problems.length === 1 ? 'problem' : 'problems'} — nothing was written.`
-            : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</span>
+            : (s.dirty ? 'Unsaved changes' : '')}</span>
         <div class="cmd-card-spacer"></div>
         <button class="btn quiet small" type="button" disabled=${!s.dirty}
             onClick=${() => { cmdClearDrafts(s); renderSettings(); }}>Revert</button>
         <button class="btn primary small" type="button"
             disabled=${!editable || !s.dirty || s.saving}
-            onClick=${() => saveCmdConfig()}>${row && row.exists ? 'Save' : 'Create the file'}</button>
+            onClick=${() => saveCmdConfig()}>${row && row.exists ? 'Save' : 'Create'}</button>
     </div>`;
 }
 
@@ -915,13 +904,13 @@ function cmdRawCard() {
             }}></textarea>`,
         html`<div class="cmd-foot">
             <div class=${`cfg-json-note${s.jsonError ? ' bad' : ''}`}>${s.jsonError
-                || (s.rawDirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</div>
+                || (s.rawDirty ? 'Unsaved changes' : '')}</div>
             <div class="cmd-card-spacer"></div>
             <button class="btn quiet small" type="button" disabled=${!s.rawDirty}
                 onClick=${() => { cmdClearDrafts(s); renderSettings(); }}>Revert</button>
             <button class="btn primary small" type="button"
                 disabled=${readonly || !s.rawDirty || !!s.jsonError || s.saving}
-                onClick=${() => saveCmdText()}>${row.exists ? 'Save' : 'Create the file'}</button>
+                onClick=${() => saveCmdText()}>${row.exists ? 'Save' : 'Create'}</button>
         </div>`);
 }
 

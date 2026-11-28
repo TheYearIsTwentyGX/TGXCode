@@ -20,7 +20,7 @@ import { html, render } from './vendor/preact.js';
 import { get, post } from './api.js';
 import { state } from './state.js';
 import { toast } from './dom.js';
-import { ago } from './format.js';
+import { agoWords } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { openSession, openSessionSoon } from './transcript/conversation.js';
 
@@ -29,13 +29,7 @@ const SEVERITY_WORD = { critical: 'Critical', warning: 'Warning', note: 'Note' }
 
 export const reviewKey = (repo, number) => `${repo}#${number}`;
 
-/** "3h ago", "now", or "on Sep 29" — `ago()` turns into a date after a week. */
-function when(ts) {
-    const a = ago(ts);
-    if (!a) return '';
-    if (a === 'now') return 'just now';
-    return /\d[mhd]$/.test(a) ? `${a} ago` : `on ${a}`;
-}
+const when = agoWords;
 
 /** Forget every fetched review, so the next draw asks again. */
 export function forgetReviews() {

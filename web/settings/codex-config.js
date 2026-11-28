@@ -90,8 +90,7 @@ function cards() {
 
     const head = html`<section key="codex" class="settings-group" id="set-g-codex">
         <h2 class="settings-group-title">Codex</h2>
-        <p class="settings-group-note">${'The settings '}<code>codex</code>${' itself reads. Codex does the '
-            + 'reading and the writing, so the file keeps your comments and layout.'}</p>
+        <p class="settings-group-note">The settings file Codex reads. Your comments and layout are kept.</p>
         ${data ? html`<div class="settings-file">
             <span class="settings-file-lede">Writing to</span>
             <button class="settings-file-path" type="button" title="Copy this path"
@@ -147,8 +146,8 @@ function row(r) {
             <div class="settings-row-side">
                 ${set
                     ? html`<button class="linkish" type="button" disabled=${!!s.saving}
-                        title="Remove it from your config.toml" onClick=${() => save(r.key, null)}>Unset</button>`
-                    : html`<span class="settings-row-from">not set</span>`}
+                        title="Remove it from your config.toml" onClick=${() => save(r.key, null)}>Clear</button>`
+                    : null}
             </div>
         </div>
     </div>`;
@@ -218,6 +217,5 @@ function restCard(data) {
         </div>
         ${other.length ? html`<p class="settings-group-note">${'Also in your file, with no control here: '}
             ${other.map((k, i) => [i ? ', ' : '', html`<code key=${k}>${k}</code>`])}</p>` : null}
-        <p class="cmd-field-note">${`Controls were written for Codex ${data.againstVersion}.`}</p>
     </section>`;
 }

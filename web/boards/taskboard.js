@@ -203,17 +203,18 @@ export function renderTaskboard() {
     const d = state.taskboard.data;
 
     dom.tbRefresh.disabled = state.taskboard.loading;
-    dom.tbRefresh.textContent = state.taskboard.loading ? 'Reading…' : 'Refresh';
+    dom.tbRefresh.textContent = state.taskboard.loading ? 'Refreshing…' : 'Refresh';
 
     if (state.taskboard.error) {
         dom.tbBody.classList.remove('cols');
-        paint(dom.tbBody, html`<div key="error" class="tb-note"><p>${
-            `Could not read the board. ${state.taskboard.error}`}</p></div>`);
+        paint(dom.tbBody, html`<div key="error" class="dash-note error"><p>${
+            `Could not load the board: ${state.taskboard.error}`}</p>
+            <button class="btn small" type="button" onClick=${() => loadTaskboard()}>Try again</button></div>`);
         return;
     }
     if (!d) {
         dom.tbBody.classList.remove('cols');
-        paint(dom.tbBody, html`<div key="wait" class="tb-note"><p>Reading every session…</p></div>`);
+        paint(dom.tbBody, html`<div key="wait" class="dash-note"><p>Loading…</p></div>`);
         return;
     }
 
@@ -230,12 +231,9 @@ export function renderTaskboard() {
     // class is still set by hand.
     dom.tbBody.classList.toggle('cols', focused && groups.size > 0);
 
-    dom.tbSub.textContent = focused ? tbFocusWords(d, groups.size, shown) : [
-        `${d.counts.needs} blocked on you`,
-        `${d.counts.working} working`,
-        `${d.counts.suggested} open ${d.counts.suggested === 1 ? 'task' : 'tasks'}`,
-        `${d.counts.idle} idle`,
-    ].join(' · ');
+    // Unfocused, each column head carries its own count; a subtitle adding them
+    // up again said the same four numbers twice.
+    dom.tbSub.textContent = focused ? tbFocusWords(d, groups.size, shown) : '';
 
     // Each column scrolls on its own. Keyed columns keep their nodes, and so
     // their scroll, across an ordinary push; this is the backstop for the passes
@@ -454,11 +452,7 @@ function tbFocusNote(d) {
                 + `${d.counts.suggested === 1 ? 'task is' : 'tasks are'} hidden by it.`}</p>
         </div>`;
     }
-    return html`<div key="note" class="tb-note">
-        <p>No open tasks.</p>
-        <p class="dim">${'Suggested tasks are raised by agents as they '
-            + 'work, for the things they noticed and did not do.'}</p>
-    </div>`;
+    return html`<div key="note" class="tb-note"><p>No open tasks.</p></div>`;
 }
 
 /** The subtitle, focused. */
@@ -496,8 +490,6 @@ function tbTaskCard(t) {
                     onClick=${() => openTaskDialog(t)}>${t.title || firstLine(t.prompt)}</button>
             </header>
             <div class="tb-card-meta">
-                <span>Suggested</span>
-                <span class="dot">·</span>
                 <span>${where.worktree ? where.worktree.name : (where.projectName || 'unknown')}</span>
                 <span class="dot">·</span>
                 <span title=${t.ts || ''}>${ago(t.ts)}</span>
@@ -512,7 +504,6 @@ function tbTaskCard(t) {
             <div class="tb-acts">
                 <button class="tb-btn primary" type="button"
                     onClick=${() => tbStartTask(t)}>Start</button>
-                <button class="tb-btn" type="button" onClick=${() => openTaskDialog(t)}>View task</button>
                 <button class="tb-btn quiet" type="button" title="Not this one"
                     onClick=${() => tbDecide(t, 'dismissed')}>Dismiss</button>
             </div>
@@ -565,7 +556,7 @@ function tbSessionCard(s) {
                 <span>${`${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`}</span>
                 ${(r && r.queued) ? queuedBadge(r.queued) : null}
             </div>
-            ${s.column === 'idle' ? null
+            ${s.column === 'idle' || s.ask ? null
                 : html`<div class="tb-card-line">${liveStatusWords(s, busy, away)}</div>`}
             ${s.tasks ? taskBar(s.tasks) : null}
             ${s.tasks ? html`<div class="tb-card-meta"><span>${
@@ -614,8 +605,6 @@ function tbShowAll(d) {
         <div key="more" class="tb-more">
             <button class="tb-btn" type="button"
                 onClick=${() => loadTaskboard({ all: true })}>${`Show all ${d.counts.idle}`}</button>
-            <p>${`${d.idleHidden} older ${d.idleHidden === 1 ? 'session' : 'sessions'} `
-                + 'are not shown. The column leads with what has moved today.'}</p>
         </div>`;
 }
 

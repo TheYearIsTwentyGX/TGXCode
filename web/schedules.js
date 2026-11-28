@@ -41,7 +41,7 @@ import { html, useState } from './vendor/preact.js';
 import { del, get, patch, post } from './api.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { agentWord, ago, clip, hourOpts } from './format.js';
+import { agentWord, agoWords, clip, hourOpts, modeWord } from './format.js';
 import * as keys from './keys.js';
 import {
     closeOtherPanels, paintPanels, rememberView, syncBoardWatch, syncTaskboardWatch,
@@ -132,30 +132,22 @@ export function renderSched() {
     // about how many directories they came out of.
     const cols = groups.size >= 2;
 
-    dom.schedSub.textContent = rows.length
-        ? schedSummary(rows, cols ? groups.size : 0)
-        : 'Sessions that start on a clock.';
+    dom.schedSub.textContent = rows.length ? schedSummary(rows, cols ? groups.size : 0) : '';
 
     // The container is web/index.html's, not Preact's, so its class is still set
     // by hand — the task board's arrangement.
     dom.schedBody.classList.toggle('cols', !state.sched.error && rows.length > 0 && cols);
 
     if (state.sched.error) {
-        paint(dom.schedBody, html`<div key="error" class="dr-note">
-            <p>${`Could not read the schedules. ${state.sched.error}`}</p></div>`);
+        paint(dom.schedBody, html`<div key="error" class="dash-note error">
+            <p>${`Could not load the schedules: ${state.sched.error}`}</p>
+            <button class="btn small" type="button" onClick=${() => loadSched()}>Try again</button></div>`);
         return;
     }
 
     if (!rows.length) {
-        paint(dom.schedBody, html`<div key="empty" class="dr-note">
-            <p>Nothing scheduled yet.</p>
-            <p class="dim">${'A schedule is a session that starts on its own '
-                + '— an overnight review, a nightly sweep. It can be told to run only '
-                + 'when a branch has new commits, and the range since its last run is '
-                + 'available to the prompt.'}</p>
-            <button class="tb-btn primary" type="button"
-                onClick=${() => openNew({ schedule: true })}>New schedule</button>
-        </div>`);
+        paint(dom.schedBody, html`<div key="empty" class="dash-note"><p>${
+            state.sched.at ? 'No schedules.' : 'Loading…'}</p></div>`);
         return;
     }
 
@@ -245,16 +237,15 @@ function schedBand(s) {
 function schedSummary(rows, projects) {
     const n = { active: 0, paused: 0, done: 0 };
     for (const s of rows) n[schedBand(s)]++;
-    // Only the non-zero clauses, so a healthy list reads "4 schedules — 4 active."
+    // Only the non-zero clauses, so a healthy list reads "4 schedules · 4 active"
     // rather than carrying two zeroes it wants you to ignore.
     const parts = [
         n.active ? `${n.active} active` : null,
         n.paused ? `${n.paused} paused` : null,
         n.done ? `${n.done} finished` : null,
     ].filter(Boolean);
-    const head = `${rows.length} schedule${rows.length === 1 ? '' : 's'}`
-        + (projects ? ` across ${projects} projects` : '');
-    return `${head} — ${parts.join(', ')}.`;
+    return [`${rows.length} schedule${rows.length === 1 ? '' : 's'}`,
+        projects ? `${projects} projects` : null, ...parts].filter(Boolean).join(' · ');
 }
 
 /**
@@ -359,11 +350,13 @@ function schedLast(s) {
     }
     if (!s.lastFiredAt) return { state: 'quiet', text: 'has not run yet' };
 
-    const when = ago(new Date(s.lastFiredAt).toISOString());
-    if (s.lastOutcome === 'BLOCK') return { state: 'bad', text: `ran ${when} — BLOCK` };
-    if (s.lastOutcome === 'CONCERNS') return { state: 'warn', text: `ran ${when} — CONCERNS` };
-    if (s.lastOutcome === 'CLEAN') return { state: 'ok', text: `ran ${when} — clean` };
-    if (s.lastOutcome === 'error') return { state: 'bad', text: `ran ${when} — ended in an error` };
+    // The verdict words are pr-review.js's, so a schedule and the review it
+    // produced name one outcome the same way.
+    const when = agoWords(new Date(s.lastFiredAt).toISOString());
+    if (s.lastOutcome === 'BLOCK') return { state: 'bad', text: `ran ${when} · blocked` };
+    if (s.lastOutcome === 'CONCERNS') return { state: 'warn', text: `ran ${when} · concerns` };
+    if (s.lastOutcome === 'CLEAN') return { state: 'ok', text: `ran ${when} · clean` };
+    if (s.lastOutcome === 'error') return { state: 'bad', text: `ran ${when} · ended in an error` };
     // Ran, finished, said nothing a verdict could be read out of. Most prompts
     // are like this, so it is the ordinary case and not a defect.
     if (s.lastOutcome === 'done') return { state: 'ok', text: `ran ${when}` };
@@ -457,7 +450,7 @@ function SchedCard({ s }) {
                 ${s.runtime && s.runtime !== 'claude'
                     ? html`${dot()}<span title="The agent each run starts on">${agentWord(s.runtime)}</span>` : null}
                 ${dot()}
-                <span>${s.permissionMode}</span>
+                <span>${modeWord(s.permissionMode)}</span>
                 ${schedGate(s.gate, s)}
                 ${s.createdBy ? dot() : null}
                 ${s.createdBy ? html`<button class="sched-open" type="button"
@@ -469,13 +462,13 @@ function SchedCard({ s }) {
                 s.runs ? html`<span class="dim">${` · ${s.runs} run${s.runs === 1 ? '' : 's'}`}</span>` : null}${
                 s.lastSessionId ? html`<button class="sched-open" type="button"
                     title="Open the session the last run produced"
-                    onClick=${() => { showSched(false); openSession(s.lastSessionId); }}>open</button>` : null}</p>
+                    onClick=${() => { showSched(false); openSession(s.lastSessionId); }}>Open</button>` : null}</p>
             <p class="dr-prompt">${clipLines(s.prompt, 400)}</p>
             <div class="tb-acts">
                 <button class="tb-btn primary" type="button"
                     title="Start a run now, whatever the clock says"
                     disabled=${running} onClick=${() => schedRun(s, setRunning)}
-                    >${running ? 'Starting' : 'Run now'}</button>
+                    >${running ? 'Starting…' : 'Run now'}</button>
                 <button class="tb-btn" type="button"
                     title=${s.enabled ? 'Stop it firing, without deleting it' : 'Arm it again'}
                     onClick=${() => schedToggle(s)}>${s.enabled ? 'Pause' : 'Resume'}</button>

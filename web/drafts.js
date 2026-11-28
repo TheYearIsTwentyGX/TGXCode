@@ -46,7 +46,7 @@ import { html, useState } from './vendor/preact.js';
 import { del, get, post } from './api.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { agentWord, ago, hourOpts } from './format.js';
+import { agentWord, ago, hourOpts, modelWord, modeWord } from './format.js';
 import * as keys from './keys.js';
 import {
     closeOtherPanels, paintPanels, projectColor, rememberView, syncBoardWatch,
@@ -155,30 +155,25 @@ export function renderDrafts() {
     // two it becomes the task board's shape.
     const cols = groups.size >= 2;
 
-    dom.drSub.textContent = !rows.length
-        ? 'Sessions you have set up but not started.'
-        : cols
-            ? `${rows.length} drafts across ${groups.size} projects, newest edit first.`
-            : `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}, newest edit first.`;
+    dom.drSub.textContent = !rows.length ? ''
+        : `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}`
+            + (cols ? ` · ${groups.size} projects` : '');
 
     // The container is web/index.html's, not Preact's, so its class is still set
     // by hand — the task board's arrangement.
     dom.drBody.classList.toggle('cols', !state.drafts.error && rows.length > 0 && cols);
 
     if (state.drafts.error) {
-        paint(dom.drBody, html`<div key="error" class="dr-note">
-            <p>${`Could not read the drafts. ${state.drafts.error}`}</p></div>`);
+        paint(dom.drBody, html`<div key="error" class="dash-note error">
+            <p>${`Could not load the drafts: ${state.drafts.error}`}</p>
+            <button class="btn small" type="button" onClick=${() => loadDrafts()}>Try again</button></div>`);
         return;
     }
 
     if (!rows.length) {
-        paint(dom.drBody, html`<div key="empty" class="dr-note">
-            <p>Nothing set up yet.</p>
-            <p class="dim">${'A draft is a session with its directory, first '
-                + 'message, model and permissions already chosen — for work that is '
-                + 'ready to go but blocked on something else.'}</p>
-            <button class="tb-btn primary" type="button" onClick=${() => openNew()}>New draft</button>
-        </div>`);
+        // Before the first answer there is nothing to say "no drafts" about.
+        paint(dom.drBody, html`<div key="empty" class="dash-note"><p>${
+            state.drafts.at ? 'No drafts.' : 'Loading…'}</p></div>`);
         return;
     }
 
@@ -303,10 +298,10 @@ function DraftCard({ d }) {
                 ${d.runtime && d.runtime !== 'claude'
                     ? html`<span class="dot">·</span><span title="The agent it starts on">${agentWord(d.runtime)}</span>` : null}
                 <span class="dot">·</span>
-                <span>${d.model || 'inherit'}</span>
+                <span>${modelWord(d.model)}</span>
                 ${d.effort ? html`<span class="dot">·</span><span>${d.effort} effort</span>` : null}
                 <span class="dot">·</span>
-                <span>${d.permissionMode}</span>
+                <span>${modeWord(d.permissionMode)}</span>
                 <span class="dot">·</span>
                 <span title=${new Date(d.updatedAt).toLocaleString(undefined, hourOpts())}>${
                     ago(new Date(d.updatedAt).toISOString())}</span>
@@ -314,7 +309,7 @@ function DraftCard({ d }) {
             <p class="dr-prompt">${clipLines(d.prompt, 600)}</p>
             <div class="tb-acts">
                 <button class="tb-btn primary" type="button" title="Start this session now"
-                    disabled=${starting} onClick=${start}>${starting ? 'Starting' : 'Start'}</button>
+                    disabled=${starting} onClick=${start}>${starting ? 'Starting…' : 'Start'}</button>
                 <button class="tb-btn" type="button" onClick=${() => drEdit(d)}>Edit</button>
                 <button class="tb-btn quiet" type="button"
                     title="Hand this to an orchestrator as a task — it decides how to start it"

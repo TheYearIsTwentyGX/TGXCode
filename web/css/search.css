@@ -12,21 +12,6 @@
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
 .sx[hidden] { display: none; }
 
-.sx-head {
-    flex: none;
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 22px 28px 10px;
-}
-.sx-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
-.sx-sub {
-    margin: 5px 0 0;
-    max-width: 640px;
-    font-size: 13px;
-    line-height: 1.6;
-    color: var(--text-3);
-}
 
 .sx-bar {
     flex: none;
@@ -58,7 +43,7 @@
     border: 0;
     outline: 0;
     color: var(--text);
-    font: 400 14px/1 var(--sans);
+    font: 400 var(--fs-base)/1 var(--sans);
 }
 
 .sx-toggle {
@@ -68,7 +53,7 @@
     border-radius: var(--pill);
     background: var(--s2);
     color: var(--text-3);
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .sx-toggle:hover { background: var(--s3); color: var(--text-2); }
@@ -84,14 +69,14 @@
 .sx-list { display: flex; flex-direction: column; gap: 10px; }
 
 .sx-note { padding: 18px 4px; }
-.sx-note p { margin: 0; max-width: 520px; font-size: 13.5px; line-height: 1.65; color: var(--text-2); }
+.sx-note p { margin: 0; max-width: 520px; font-size: var(--fs-md); line-height: 1.65; color: var(--text-2); }
 
 .sx-pending {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 8px 4px 4px;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
 }
 .sx-pending .dash-btn { margin-left: 0; height: 28px; }
@@ -120,13 +105,13 @@
     background: none;
     padding: 0;
     color: var(--text);
-    font: 500 14px/1.4 var(--sans);
+    font: 500 var(--fs-base)/1.4 var(--sans);
 }
 .sx-session-title:hover { color: var(--blue); }
 .sx-session-meta {
     flex: none;
     margin-left: auto;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     color: var(--text-4);
     white-space: nowrap;
 }
@@ -148,15 +133,13 @@
 .sx-hit:hover { background: var(--s2); }
 .sx-hit:focus-visible { outline: 1px solid var(--outline); outline-offset: -1px; }
 .sx-hit-kind {
-    font: 500 11px/1.6 var(--sans);
+    font: 500 var(--fs-xs)/1.6 var(--sans);
     color: var(--text-4);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
 }
 .sx-hit[data-kind="user"] .sx-hit-kind { color: var(--blue); }
-.sx-hit[data-kind="tool"] .sx-hit-text { font: 400 12px/1.55 var(--mono); }
+.sx-hit[data-kind="tool"] .sx-hit-text { font: 400 var(--fs-sm)/1.55 var(--mono); }
 .sx-hit-text {
-    font-size: 13px;
+    font-size: var(--fs-md);
     line-height: 1.55;
     overflow: hidden;
     display: -webkit-box;
@@ -171,5 +154,5 @@
     color: var(--yellow);
     border-radius: 2px;
 }
-.sx-hit-when { font-size: 11.5px; color: var(--text-4); white-space: nowrap; }
-.sx-more { margin: 2px 0 2px 66px; font-size: 12px; color: var(--text-4); }
+.sx-hit-when { font-size: var(--fs-xs); color: var(--text-4); white-space: nowrap; }
+.sx-more { margin: 2px 0 2px 66px; font-size: var(--fs-sm); color: var(--text-4); }

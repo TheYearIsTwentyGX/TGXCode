@@ -146,7 +146,6 @@ export function ImportView() {
             <div class="cmd-card-spacer"></div>
             <button class="btn small quiet" type="button" onClick=${closeImport}>Close</button>
         </div>
-        <p class="skp-desc">Nothing is written until you press Install, and Install writes exactly the files shown here.</p>
 
         <section class="skp-step">
             <h3 class="skp-step-h">Find one</h3>
@@ -199,7 +198,7 @@ function preview(i) {
     const chosen = st.skills.filter(k => i.ticked[k.folder]);
     return html`<section class="skp-step">
         <h3 class="skp-step-h">Preview — ${st.fullName || st.source}${st.ref ? html` <code>@${st.ref}</code>` : null}${st.sub ? html` <code>/${st.sub}</code>` : null}</h3>
-        <p class="cmd-field-note">${st.skills.length} skill${st.skills.length === 1 ? '' : 's'} found. Open any file to read it before you tick it.</p>
+        <p class="cmd-field-note">${st.skills.length} skill${st.skills.length === 1 ? '' : 's'}</p>
         <div class="skp-cards">
             ${st.skills.map(k => card(i, k))}
         </div>
@@ -212,7 +211,6 @@ function preview(i) {
         </label>
         ${chosen.length ? html`<div class="skp-will">
             <div class="cmd-field-label">Will create</div>
-            ${chosen.some(needsConfirm) ? html`<div class="dash-note error">${chosen.filter(needsConfirm).map(k => k.name).join(', ')} ${chosen.filter(needsConfirm).length === 1 ? 'is' : 'are'} rated red. Install will ask you to confirm first.</div>` : null}
             ${chosen.map(k => html`<code key=${k.folder}>${targetDir(i.target, k.installAs)}/ — ${k.files.length} file${k.files.length === 1 ? '' : 's'}, ${bytes(k.bytes)}</code>`)}
         </div>` : null}
         <div class="skp-save">
@@ -231,7 +229,7 @@ function card(i, k) {
             <input type="checkbox" checked=${ticked} disabled=${Boolean(k.problem)}
                 onChange=${(e) => { i.ticked[k.folder] = e.target.checked; renderSkills(); }} />
             <span class="skp-card-name">${k.name}</span>
-            ${k.match ? html`<span class="skp-chip">the one you searched for</span>` : null}
+            ${k.match ? html`<span class="skp-chip">searched for</span>` : null}
             <span class="skp-card-path skp-mono">${k.path}</span>
         </label>
         ${k.description ? html`<p class="skp-card-desc">${k.description}</p>` : null}
@@ -250,7 +248,7 @@ function card(i, k) {
 // Safety
 // ---------------------------------------------------------------------------
 
-const LEVEL_LABEL = { green: 'Low', yellow: 'Look before you install', red: 'High — asks you to confirm' };
+const LEVEL_LABEL = { green: 'Low', yellow: 'Medium', red: 'High' };
 
 /**
  * A point on the green→yellow→red scale as a CSS colour, from the theme's own
@@ -276,11 +274,10 @@ function safetySection(k) {
     const sf = k.safety;
     const rows = sf.factors.filter(f => f.factor !== 'hooks');
     const live = rows.filter(f => f.contribution > 0);
-    const quiet = rows.filter(f => f.contribution === 0);
     return html`<div class=${`skp-safety ${sf.level}`}>
         <div class="skp-safety-head">
             <span class="skp-safety-h">Safety</span>
-            <span class="skp-safety-level" style=${`color: ${scoreColour(sf.score)}`}>${sf.score} / 100 · ${LEVEL_LABEL[sf.level]}</span>
+            <span class="skp-safety-level" style=${`color: ${scoreColour(sf.score)}`}>${LEVEL_LABEL[sf.level]} <span class="skp-safety-score">${sf.score}</span></span>
         </div>
         <div class="skp-meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${sf.score}
             aria-label=${`Safety score ${sf.score} of 100, ${sf.level}`}>
@@ -293,7 +290,6 @@ function safetySection(k) {
         <div class="skp-factors">
             ${live.map(f => factorRow(f))}
         </div>
-        ${quiet.length ? html`<div class="skp-factors-quiet">Nothing from: ${quiet.map(f => f.label.toLowerCase()).join(', ')}.</div>` : null}
     </div>`;
 }
 
@@ -334,20 +330,30 @@ function RiskScreen({ i }) {
     const back = useRef(null);
     useEffect(() => { if (back.current) back.current.focus(); }, []);
     const red = tickedRows(i).filter(needsConfirm);
-    const others = tickedRows(i).length - red.length;
+    const runtime = i.target.runtime === 'codex' ? 'Codex' : 'Claude Code';
     const cancel = () => { i.confirming = false; renderSkills(); };
+    // Tab stays inside: the page behind is still in the DOM, and a focus that
+    // wandered onto it could press something the screen is there to stop.
+    const keep = (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); cancel(); return; }
+        if (e.key !== 'Tab') return;
+        const all = [...e.currentTarget.querySelectorAll('button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')];
+        if (!all.length) return;
+        const first = all[0];
+        const last = all[all.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
     return html`<div class="skp-risk" role="alertdialog" aria-modal="true" aria-labelledby="skp-risk-h"
-        onKeyDown=${(e) => { if (e.key === 'Escape') { e.stopPropagation(); cancel(); } }}>
+        aria-describedby="skp-risk-lede" onKeyDown=${keep}>
         <div class="skp-risk-inner">
-            <div class="skp-risk-badge">High risk</div>
-            <h2 id="skp-risk-h" class="skp-risk-h">${red.length === 1 ? `${red[0].name} is rated red` : `${red.length} skills are rated red`}</h2>
-            <p class="skp-risk-lede">Installing puts these files where every ${i.target.runtime === 'codex' ? 'Codex' : 'Claude Code'} session reads them.
-                Read what each one will run before you go on.${others ? ` ${others} other ticked skill${others === 1 ? ' is' : 's are'} not red and will install with ${others === 1 ? 'it' : 'them'}.` : ''}</p>
+            <h2 id="skp-risk-h" class="skp-risk-h">${red.length === 1 ? `Install ${red[0].name}?` : `Install ${red.length} high-risk skills?`}</h2>
+            <p id="skp-risk-lede" class="skp-risk-lede">${red.length === 1 ? 'Installed, it loads' : 'Installed, they load'} in every ${runtime} session.</p>
             ${red.map(k => html`<section key=${k.folder} class="skp-risk-skill">
                 <div class="skp-risk-skill-head">
                     <span class="skp-card-name">${k.name}</span>
                     <span class="skp-card-path skp-mono">${targetDir(i.target, k.installAs)}/</span>
-                    <span class="skp-safety-level" style=${`color: ${scoreColour(k.safety.score)}`}>${k.safety.score} / 100</span>
+                    <span class="skp-safety-level" style=${`color: ${scoreColour(k.safety.score)}`}>${LEVEL_LABEL[k.safety.level]} <span class="skp-safety-score">${k.safety.score}</span></span>
                 </div>
                 <ul class="skp-risk-list">
                     ${k.safety.hooks.map((h, n) => html`<li key=${`h${n}`} class="skp-risk-hook">
@@ -362,7 +368,7 @@ function RiskScreen({ i }) {
             <div class="skp-risk-acts">
                 <button class="btn tonal" type="button" ref=${back} onClick=${cancel}>Go back</button>
                 <button class="btn destructive" type="button" disabled=${i.installing} onClick=${() => install(true)}>
-                    I have read this — install ${red.length === 1 ? red[0].name : `${red.length} red skills`}</button>
+                    Install ${red.length === 1 ? red[0].name : `${red.length} skills`}</button>
             </div>
         </div>
     </div>`;
