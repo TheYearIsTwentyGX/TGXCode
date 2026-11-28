@@ -872,7 +872,7 @@ strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text` string — the message with its bookkeeping tags removed, **including a slash command's `<command-*>` tags**: a turn that is only a command has `text: ""` and is drawn from `command` (before October 2026 the tags were left in `text`, so an older bridge sends them; strip `<command-[a-z-]+>…</…>` yourself if you must support one) · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
+| `user` | `text` string — the message with its bookkeeping tags removed, **including a slash command's `<command-*>` tags**: a turn that is only a command has `text: ""` and is drawn from `command` (before October 2026 the tags were left in `text`, so an older bridge sends them; strip `<command-[a-z-]+>…</…>` yourself if you must support one) · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A Codex review's opening message (the instructions of `review/start`, which the PR gate sends) is `"review"`. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
 | `assistant` | `text` string (markdown) · `model` string or null |
 | `thinking` | `text` string |
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
@@ -1288,6 +1288,11 @@ status had to leave out, for a tooltip — and `review`.
 
 `review` is the nightly review's verdict on that PR — an object or `null`:
 `{verdict, count, counts: {critical, warning, note}, sha, at, sessionId, source, stale}`.
+A Codex gate's review (`runtime: "codex"`, see `POST /api/schedules`) has findings
+tagged `[P0]`–`[P3]`. They are parsed by priority: P0 and P1 `critical`, P2 `warning`,
+P3 `note`. Read back from the rollout after its process is gone, its `verdict` comes
+from the structured priorities Codex kept beside the text.
+
 `verdict` is `"BLOCK"`, `"CONCERNS"`, `"CLEAN"` or `null` (the review had no VERDICT
 line); `count` is how many findings parsed out of it (all three severities); `sha`
 the commit it reviewed (a full SHA from the bridge's own record, a 12-character prefix
@@ -5340,7 +5345,23 @@ records (`lastSessionId`, `sessionIds`) is the id Codex minted, and a start that
 before Codex names it (signed out, say) is recorded as a skip — `lastSkipReason:
 "error"`, `lastError` the reason — with the marker left where it was. Its `VERDICT:` line is read from the turn's last
 `agentMessage`. A Claude skill named at the head of the prompt (`/adversarial-reviewer …`)
-is plain text to Codex, so a Codex gate wants a prompt written out in full.
+is plain text to Codex, so a Codex prompt wants to be written out in full.
+
+**A `runtime: "codex"` schedule with an `open-prs` gate reviews with Codex's own
+reviewer** instead of sending the prompt as a turn. Each pull request's run is
+`review/start` with a `custom` target, whose instructions name the range the gate
+resolved (`<mergeBase>..<head>`, the same range `{{range}}` is), say how to read a file
+at the head without a checkout, and end with the schedule's own prompt, filled, as
+further guidance. Its queue chip, before anything is on disk, reads
+`Review #N — <title> with Codex's reviewer`. Codex's reviewer writes findings tagged
+`[P0]`–`[P3]` and no verdict, so the bridge appends one to the turn's result:
+`VERDICT: BLOCK` for any P0 or P1, `CONCERNS` for any P2, `CLEAN` otherwise. The
+appended line says it was mapped from Codex's priorities, with the counts. From there
+the run is any gate run: `lastOutcome`, `reviewed[…].outcome`, the posted comment
+(Codex's text plus that line, under the usual header) and the label all read that
+verdict. A `test` schedule still posts nothing. A Codex schedule with any other gate, or
+none, is an ordinary turn as above. In the session's transcript the review's
+instructions are its opening `user` event, with **`origin: "review"`**, and its title.
 
 **A run is named after its schedule** without a flag being set: a session a schedule
 started lists as `"<schedule title> - <M/D/YY>"` with `titleSource: "schedule"` (see

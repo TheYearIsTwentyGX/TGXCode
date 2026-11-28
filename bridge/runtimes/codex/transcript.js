@@ -23,6 +23,9 @@
 //                                (bridge/codex/plan.js: on 0.172.0 it is only the
 //                                code-mode script that called it)
 //   SubAgentActivity items       a spawned agent, drawn as Claude's `Agent` row
+//   EnteredReviewMode            a review's instructions, as the turn's `user`
+//                                message (`origin: "review"`); ExitedReviewMode is
+//                                not drawn, since the message after it repeats it
 //   compacted                    `compact`
 //   our own envelopes            `handoff`, `orchestrator-inbox` and
 //                                `orchestrator-message`, as the Claude reader
@@ -230,6 +233,21 @@ function envelopeOf(text) {
     return null;
 }
 
+/**
+ * What a review was asked to do, from its `EnteredReviewMode` item: the wire's
+ * `review` text, or on disk its `target` — a `custom` target's instructions, or
+ * a sentence for the other three kinds. Null when it says nothing usable.
+ */
+function reviewAsked(item) {
+    if (typeof item.review === 'string' && item.review.trim()) return item.review;
+    const t = item.target || {};
+    if (t.type === 'custom' && typeof t.instructions === 'string' && t.instructions.trim()) return t.instructions;
+    if (t.type === 'baseBranch' && t.branch) return `Review the changes against the base branch ${t.branch}.`;
+    if (t.type === 'commit' && t.sha) return `Review commit ${String(t.sha).slice(0, 12)}${t.title ? ` (${t.title})` : ''}.`;
+    if (t.type === 'uncommittedChanges') return 'Review the uncommitted changes.';
+    return null;
+}
+
 /** A real person's message, by the rules above: `{text, images}` or null. */
 function personMessage(payload) {
     if (!payload || payload.type !== 'message' || payload.role !== 'user') return null;
@@ -369,6 +387,17 @@ function scanMeta(file) {
         if (o.type === 'event_msg' && p.type === 'item_completed') {
             if (ts) meta.lastTs = ts;
             const item = items.fromRollout(p.item);
+            // What a review was asked is its opening message, and its title.
+            const asked = item && item.type === 'enteredReviewMode' ? reviewAsked(item) : null;
+            if (asked) {
+                meta.userMessages++;
+                if (ts) meta.lastUserTs = ts;
+                const said = asked.slice(0, 400);
+                if (!meta.firstPrompt) meta.firstPrompt = said;
+                meta.lastPrompt = said;
+                continue;
+            }
+            if (item && (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode')) continue;
             if (item && items.toolEvent(item)) meta.toolCalls++;
             // A suggest_session call is a task on the board, as a Claude one is.
             const card = item && item.type === 'mcpToolCall'
@@ -724,6 +753,17 @@ function buildEvents(entries, ctx = {}) {
                 }
                 continue;
             }
+            // A review (`review/start`, the PR gate's path on Codex) has no user
+            // message of its own on disk: what it was asked is this item's
+            // `review`, so that is the turn's opening message. Its findings are the
+            // assistant message that follows, so the exit item is not drawn twice.
+            const asked = item.type === 'enteredReviewMode' ? reviewAsked(item) : null;
+            if (asked) {
+                events.push({ id: `${item.id || `review:${e.ordinal}`}:review`, kind: 'user', ts,
+                    text: asked, images: [], files: [], command: null, origin: 'review', parent: null });
+                continue;
+            }
+            if (item.type === 'exitedReviewMode') continue;
             // A question asked without waiting exists only as an item.
             if (item.type === 'agentMessage' && item.delivery === 'async' && item.text) {
                 events.push({ id: `${item.id}:text`, kind: 'assistant', ts, text: item.text, model });

@@ -334,9 +334,13 @@ export function paintGateFields() {
     const kind = dom.newGateKind.value;
     dom.newGateRefRow.hidden = kind !== 'git-commits';
     dom.newPrRow.hidden = kind !== 'open-prs';
+    // A Codex schedule reviews with Codex's own reviewer (`review/start`), so the
+    // prompt is not the whole of what is sent: say what it becomes.
+    const codex = dom.newRuntime && dom.newRuntime.value === 'codex';
     dom.newGateNote.textContent = kind === 'open-prs'
         ? 'One review session per open pull request that has not been reviewed at '
-            + 'its current commit.'
+            + 'its current commit.' + (codex ? ' Codex reviews each one with its own reviewer, '
+            + 'and your prompt is added to its instructions; the verdict comes from its priorities.' : '')
         : (kind === 'git-commits'
             ? 'One session per run, and only when the ref below has moved.'
             : 'A gated run that finds nothing new starts no session at all.');
